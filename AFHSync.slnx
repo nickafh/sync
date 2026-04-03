@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/api/">
+    <Project Path="api/AFHSync.Api.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="shared/AFHSync.Shared.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AFHSync.Tests.Integration/AFHSync.Tests.Integration.csproj" />
+    <Project Path="tests/AFHSync.Tests.Unit/AFHSync.Tests.Unit.csproj" />
+  </Folder>
+  <Folder Name="/worker/">
+    <Project Path="worker/AFHSync.Worker.csproj" />
+  </Folder>
+</Solution>
