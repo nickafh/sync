@@ -1,81 +1,277 @@
 'use client';
 
-import { useAuth } from '@/lib/auth';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import { Loader2, Cable, ClipboardList, Play, FlaskConical } from 'lucide-react';
+import { useDashboard, useTriggerSync, useSyncRunPolling } from '@/hooks/use-dashboard';
+import { useTunnels } from '@/hooks/use-tunnels';
+import { PageHeader } from '@/components/PageHeader';
+import { KPICard } from '@/components/KPICard';
+import { StatusBadge } from '@/components/StatusBadge';
+import { EmptyState } from '@/components/EmptyState';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+
+function formatTimeAgo(dateStr: string | null): string {
+  if (!dateStr) return 'N/A';
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatRunType(runType: string): string {
+  return runType
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export default function DashboardPage() {
-  const { isLoading } = useAuth();
+  const router = useRouter();
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
 
-  if (isLoading) {
+  const { data: dashboard, isLoading: dashLoading } = useDashboard();
+  const { data: tunnels, isLoading: tunnelsLoading } = useTunnels();
+  const triggerSync = useTriggerSync();
+  const { data: pollingRun } = useSyncRunPolling(activeRunId);
+
+  // Clear activeRunId when polling run transitions to a terminal status
+  useEffect(() => {
+    if (activeRunId !== null && pollingRun && pollingRun.status !== 'running') {
+      setActiveRunId(null);
+    }
+  }, [activeRunId, pollingRun]);
+
+  const isSyncing = triggerSync.isPending || (activeRunId !== null && pollingRun?.status === 'running');
+
+  function handleRunSync() {
+    triggerSync.mutate(
+      { runType: 'manual', isDryRun: false, tunnelIds: null },
+      {
+        onSuccess: (data) => {
+          toast.success('Sync run started successfully.');
+          setActiveRunId(data.runId);
+        },
+        onError: (error) => {
+          if (error.message.includes('409')) {
+            toast.warning('A sync run is already in progress.');
+          } else {
+            toast.error('Something went wrong. Please try again.');
+          }
+        },
+      },
+    );
+  }
+
+  function handleDryRun() {
+    triggerSync.mutate(
+      { runType: 'dry_run', isDryRun: true, tunnelIds: null },
+      {
+        onSuccess: (data) => {
+          toast.success('Dry run started. No changes will be written.');
+          setActiveRunId(data.runId);
+        },
+        onError: (error) => {
+          if (error.message.includes('409')) {
+            toast.warning('A sync run is already in progress.');
+          } else {
+            toast.error('Something went wrong. Please try again.');
+          }
+        },
+      },
+    );
+  }
+
+  // Loading state
+  if (dashLoading) {
     return (
-      <div className="animate-pulse">
-        <div className="h-10 bg-gray-200 rounded w-40 mb-2" />
-        <div className="h-4 bg-gray-200 rounded w-80" />
+      <div>
+        <div className="flex items-start justify-between mb-8">
+          <div>
+            <Skeleton className="h-10 w-40" />
+            <Skeleton className="h-4 w-80 mt-2" />
+          </div>
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-8 w-24" />
+          </div>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-              <div className="h-3 bg-gray-200 rounded w-24 mb-2" />
-              <div className="h-8 bg-gray-200 rounded w-12 mt-1" />
-            </div>
+            <Skeleton key={i} className="h-20 rounded-lg" />
           ))}
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          <div className="h-32 bg-gray-200 rounded-lg" />
-          <div className="h-32 bg-gray-200 rounded-lg" />
+          <Skeleton className="h-48 rounded-lg" />
+          <Skeleton className="h-48 rounded-lg" />
         </div>
       </div>
     );
   }
 
+  const activeTunnels = tunnels?.filter((t) => t.status === 'active') ?? [];
+
   return (
     <div>
-      {/* Header */}
-      <h1 className="font-heading text-[2rem] font-bold text-navy">Dashboard</h1>
-      <p className="text-sm text-text-muted mt-1">
-        Monitor tunnels, phone-visible lists, and sync activity from one place.
-      </p>
+      <PageHeader
+        title="Dashboard"
+        description="Monitor tunnels, phone-visible lists, and sync activity."
+      >
+        <Button
+          className="bg-gold text-white hover:bg-gold/90"
+          onClick={handleRunSync}
+          disabled={isSyncing}
+        >
+          {isSyncing ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Syncing...
+            </>
+          ) : (
+            <>
+              <Play className="mr-2 h-4 w-4" />
+              Run Sync Now
+            </>
+          )}
+        </Button>
+        <Button
+          variant="outline"
+          className="border-gold text-gold hover:bg-gold/10"
+          onClick={handleDryRun}
+          disabled={isSyncing}
+        >
+          <FlaskConical className="mr-2 h-4 w-4" />
+          Dry Run
+        </Button>
+      </PageHeader>
 
-      {/* KPI cards — Phase 4 (DASH-01) will replace placeholders with live data */}
+      {/* KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">
-            Active Tunnels
-          </span>
-          <div className="text-2xl font-semibold text-navy mt-1">--</div>
-        </div>
-
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">
-            Phone Lists
-          </span>
-          <div className="text-2xl font-semibold text-navy mt-1">--</div>
-        </div>
-
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">
-            Target Users
-          </span>
-          <div className="text-2xl font-semibold text-navy mt-1">--</div>
-        </div>
-
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wide">
-            Last Sync
-          </span>
-          <div className="text-2xl font-semibold text-navy mt-1">--</div>
-        </div>
+        <KPICard label="Active Tunnels" value={dashboard?.activeTunnels ?? 0} />
+        <KPICard label="Phone Lists" value={dashboard?.totalPhoneLists ?? 0} />
+        <KPICard label="Target Users" value={dashboard?.totalTargetUsers ?? 0} />
+        <KPICard
+          label="Last Sync"
+          value={dashboard?.lastSync ? '' : 'No runs yet'}
+          className={dashboard?.lastSync ? 'relative' : undefined}
+        >
+          {dashboard?.lastSync && (
+            <StatusBadge status={dashboard.lastSync.status} />
+          )}
+        </KPICard>
       </div>
 
-      {/* Two-column section — Phase 4 (DASH-02, DASH-03) will populate with live data */}
+      {/* Two-column grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-navy">Active Tunnels</h2>
-          <p className="text-sm text-text-muted mt-2">No tunnels configured yet.</p>
-        </div>
+        {/* Active Tunnels section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-bold font-heading text-navy">
+              Active Tunnels
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {tunnelsLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : activeTunnels.length === 0 ? (
+              <EmptyState
+                icon={Cable}
+                heading="No tunnels configured"
+                body="Create your first tunnel to start syncing contacts to phone lists."
+                ctaLabel="Go to Tunnels"
+                ctaHref="/tunnels"
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border-default text-left text-xs font-normal uppercase tracking-wide text-text-muted">
+                      <th className="pb-2 pr-4">Name</th>
+                      <th className="pb-2 pr-4">Source</th>
+                      <th className="pb-2 pr-4">Contacts</th>
+                      <th className="pb-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeTunnels.map((tunnel) => (
+                      <tr
+                        key={tunnel.id}
+                        className="border-b border-border-default last:border-0 hover:bg-muted/50 cursor-pointer"
+                        onClick={() => router.push(`/tunnels/${tunnel.id}`)}
+                      >
+                        <td className="py-2.5 pr-4 font-medium text-navy">
+                          {tunnel.name}
+                        </td>
+                        <td className="py-2.5 pr-4 text-text-muted">
+                          {tunnel.sourceDisplayName ?? tunnel.sourceIdentifier}
+                        </td>
+                        <td className="py-2.5 pr-4 text-text-muted">
+                          {tunnel.estimatedContacts}
+                        </td>
+                        <td className="py-2.5">
+                          <StatusBadge status={tunnel.status} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        <div className="bg-white rounded-lg border border-border-default p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-navy">Recent Runs</h2>
-          <p className="text-sm text-text-muted mt-2">No sync runs yet.</p>
-        </div>
+        {/* Recent Runs section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg font-bold font-heading text-navy">
+              Recent Runs
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {!dashboard?.recentRuns || dashboard.recentRuns.length === 0 ? (
+              <EmptyState
+                icon={ClipboardList}
+                heading="No sync runs yet"
+                body="Run your first sync after configuring a tunnel."
+              />
+            ) : (
+              <div className="space-y-1">
+                {dashboard.recentRuns.slice(0, 5).map((run) => (
+                  <div
+                    key={run.id}
+                    className="flex items-center gap-3 py-2.5 border-b border-border-default last:border-0 hover:bg-muted/50 cursor-pointer rounded-sm px-1"
+                    onClick={() => router.push(`/runs/${run.id}`)}
+                  >
+                    <StatusBadge status={run.status} />
+                    <span className="text-sm text-navy font-medium">
+                      {formatRunType(run.runType)}
+                    </span>
+                    <span className="text-xs text-text-muted ml-auto">
+                      {formatTimeAgo(run.startedAt)}
+                    </span>
+                    <span className="text-xs text-text-muted">
+                      {run.contactsUpdated} updated
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
