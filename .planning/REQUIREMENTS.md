@@ -102,10 +102,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Runs & Logs UI
 
-- [ ] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
-- [ ] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
-- [ ] **RLOG-03**: Run detail shows failure list and warning list
-- [ ] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
+- [x] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
+- [x] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
+- [x] **RLOG-03**: Run detail shows failure list and warning list
+- [x] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
 
 ### Settings
 
@@ -215,10 +215,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DASH-02 | Phase 4 | Pending |
 | DASH-03 | Phase 4 | Pending |
 | DASH-04 | Phase 4 | Pending |
-| RLOG-01 | Phase 4 | Pending |
-| RLOG-02 | Phase 4 | Pending |
-| RLOG-03 | Phase 4 | Pending |
-| RLOG-04 | Phase 4 | Pending |
+| RLOG-01 | Phase 4 | Complete |
+| RLOG-02 | Phase 4 | Complete |
+| RLOG-03 | Phase 4 | Complete |
+| RLOG-04 | Phase 4 | Complete |
 | SETT-01 | Phase 4 | Pending |
 | SETT-02 | Phase 4 | Pending |
 | SETT-03 | Phase 4 | Pending |
