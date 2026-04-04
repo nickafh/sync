@@ -68,6 +68,7 @@ public class TunnelsController : ControllerBase
                 EnumHelpers.ToPgName(t.SourceType),
                 t.SourceIdentifier,
                 t.SourceDisplayName,
+                t.SourceSmtpAddress,
                 EnumHelpers.ToPgName(t.TargetScope),
                 EnumHelpers.ToPgName(t.Status),
                 EnumHelpers.ToPgName(t.StalePolicy),
@@ -106,6 +107,7 @@ public class TunnelsController : ControllerBase
             EnumHelpers.ToPgName(tunnel.SourceType),
             tunnel.SourceIdentifier,
             tunnel.SourceDisplayName,
+            tunnel.SourceSmtpAddress,
             EnumHelpers.ToPgName(tunnel.TargetScope),
             tunnel.TargetUserFilter,
             EnumHelpers.ToPgName(tunnel.Status),
@@ -144,6 +146,7 @@ public class TunnelsController : ControllerBase
             SourceType = sourceType,
             SourceIdentifier = request.SourceIdentifier,    // Graph $filter per DDG-04
             SourceDisplayName = request.SourceDisplayName,  // DDG display name per DDG-04
+            SourceSmtpAddress = request.SourceSmtpAddress,  // DDG SMTP address per DDG-04
             TargetScope = targetScope,
             FieldProfileId = request.FieldProfileId,
             StalePolicy = stalePolicy,
@@ -194,6 +197,7 @@ public class TunnelsController : ControllerBase
         tunnel.SourceType = sourceType;
         tunnel.SourceIdentifier = request.SourceIdentifier;
         tunnel.SourceDisplayName = request.SourceDisplayName;
+        tunnel.SourceSmtpAddress = request.SourceSmtpAddress;
         tunnel.TargetScope = targetScope;
         tunnel.FieldProfileId = request.FieldProfileId;
         tunnel.StalePolicy = stalePolicy;

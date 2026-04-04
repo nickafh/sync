@@ -6,6 +6,7 @@ public record TunnelDto(
     string SourceType,
     string SourceIdentifier,
     string? SourceDisplayName,
+    string? SourceSmtpAddress,
     string TargetScope,
     string Status,
     string StalePolicy,
