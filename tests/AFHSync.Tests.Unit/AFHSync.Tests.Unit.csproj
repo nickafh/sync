@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\shared\AFHSync.Shared.csproj" />
     <ProjectReference Include="..\..\api\AFHSync.Api.csproj" />
+    <ProjectReference Include="..\..\worker\AFHSync.Worker.csproj" />
     <ProjectReference Include="..\AFHSync.Tests.Integration\AFHSync.Tests.Integration.csproj" />
   </ItemGroup>
 
