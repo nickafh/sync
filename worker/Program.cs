@@ -2,6 +2,8 @@ using AFHSync.Api.Data;
 using AFHSync.Shared.Enums;
 using AFHSync.Worker.Graph;
 using AFHSync.Worker.Services;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
@@ -68,9 +70,43 @@ try
         services.AddScoped<IStaleContactHandler, StaleContactHandler>();
         services.AddScoped<IRunLogger, RunLogger>();
         services.AddScoped<ISyncEngine, SyncEngine>();
+
+        // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17)
+        services.AddHangfire(config => config
+            .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+            .UseSimpleAssemblyNameTypeSerializer()
+            .UseRecommendedSerializerSettings()
+            .UsePostgreSqlStorage(c =>
+                c.UseNpgsqlConnection(
+                    context.Configuration.GetConnectionString("Default")!)));
+
+        services.AddHangfireServer(options =>
+        {
+            options.WorkerCount = 2; // Low count: sync runs are heavy, bounded by semaphore
+            options.Queues = new[] { "sync", "default" };
+        });
     });
 
     var host = builder.Build();
+
+    // Register recurring sync job from app_settings (per D-08, SCHD-01)
+    using (var scope = host.Services.CreateScope())
+    {
+        var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AFHSyncDbContext>>();
+        await using var db = await dbFactory.CreateDbContextAsync();
+        var cronSetting = await db.AppSettings
+            .FirstOrDefaultAsync(s => s.Key == "sync_schedule_cron");
+        var cronExpression = cronSetting?.Value ?? "0 */4 * * *";
+
+        var recurringJobManager = scope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+        recurringJobManager.AddOrUpdate<ISyncEngine>(
+            "sync-all",
+            engine => engine.RunAsync(null, RunType.Scheduled, false, CancellationToken.None),
+            cronExpression);
+
+        Log.Information("Registered recurring sync job with cron: {Cron}", cronExpression);
+    }
+
     await host.RunAsync();
 }
 catch (Exception ex)

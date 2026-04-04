@@ -1,7 +1,10 @@
 using System.Text;
 using AFHSync.Api.Data;
+using AFHSync.Api.Filters;
 using AFHSync.Api.Services;
 using AFHSync.Shared.Enums;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Authorization;
@@ -74,6 +77,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// Hangfire client-only registration (per D-07, D-17)
+// API enqueues jobs; worker executes them. No AddHangfireServer() here.
+builder.Services.AddHangfire(config => config
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UsePostgreSqlStorage(c =>
+        c.UseNpgsqlConnection(
+            builder.Configuration.GetConnectionString("Default")!)));
+
 // Graph health check service (D-11)
 builder.Services.AddSingleton<GraphHealthService>();
 
@@ -83,6 +96,14 @@ app.UseSerilogRequestLogging();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Hangfire dashboard at /hangfire (per D-16)
+// Internal-only monitoring — nginx does NOT route /hangfire to public.
+// Dashboard requires JWT authentication via HangfireDashboardAuthFilter.
+app.UseHangfireDashboard("/hangfire", new DashboardOptions
+{
+    Authorization = new[] { new HangfireDashboardAuthFilter() }
+});
 
 app.MapControllers();
 
