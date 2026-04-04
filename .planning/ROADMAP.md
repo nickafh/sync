@@ -69,7 +69,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 03-01-PLAN.md -- Hangfire infrastructure (client in API, server in worker), recurring job registration, SyncRunsController with fire-and-forget trigger + concurrent guard, SettingsController with cron reschedule
+- [x] 03-01-PLAN.md -- Hangfire infrastructure (client in API, server in worker), recurring job registration, SyncRunsController with fire-and-forget trigger + concurrent guard, SettingsController with cron reschedule
 - [x] 03-02-PLAN.md -- Entity CRUD controllers (TunnelsController, PhoneListsController, FieldProfilesController, DashboardController) with all DTOs matching spec response shapes
 - [ ] 03-03-PLAN.md -- DDG proxy: Exchange PowerShell DDGResolver via System.Management.Automation, OPATH-to-OData FilterConverter, GraphController endpoints
 
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation & Infrastructure | 4/4 | Complete   | 2026-04-04 |
 | 2. Sync Engine Core | 4/4 | Complete   | 2026-04-04 |
-| 3. API Layer & Scheduling | 1/3 | In Progress|  |
+| 3. API Layer & Scheduling | 2/3 | In Progress|  |
 | 4. Admin Frontend | 0/4 | Not started | - |
 | 5. Differentiator Features | 0/3 | Not started | - |
 | 6. Photo Sync | 0/2 | Not started | - |

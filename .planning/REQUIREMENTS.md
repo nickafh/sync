@@ -80,11 +80,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Scheduling & Triggers
 
-- [ ] **SCHD-01**: Sync engine runs automatically on cron schedule (configurable, default every 4 hours)
-- [ ] **SCHD-02**: Admin can trigger manual sync from dashboard ("Run Sync Now" button)
-- [ ] **SCHD-03**: Admin can trigger dry-run sync that simulates without writing to Graph
-- [ ] **SCHD-04**: Admin can run sync for specific tunnel(s) or all active tunnels
-- [ ] **SCHD-05**: Concurrent sync runs are prevented (new run blocked while one is in progress)
+- [x] **SCHD-01**: Sync engine runs automatically on cron schedule (configurable, default every 4 hours)
+- [x] **SCHD-02**: Admin can trigger manual sync from dashboard ("Run Sync Now" button)
+- [x] **SCHD-03**: Admin can trigger dry-run sync that simulates without writing to Graph
+- [x] **SCHD-04**: Admin can run sync for specific tunnel(s) or all active tunnels
+- [x] **SCHD-05**: Concurrent sync runs are prevented (new run blocked while one is in progress)
 
 ### Sync Run Logging
 
@@ -195,11 +195,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DDG-02 | Phase 3 | Pending |
 | DDG-03 | Phase 3 | Pending |
 | DDG-04 | Phase 3 | Pending |
-| SCHD-01 | Phase 3 | Pending |
-| SCHD-02 | Phase 3 | Pending |
-| SCHD-03 | Phase 3 | Pending |
-| SCHD-04 | Phase 3 | Pending |
-| SCHD-05 | Phase 3 | Pending |
+| SCHD-01 | Phase 3 | Complete |
+| SCHD-02 | Phase 3 | Complete |
+| SCHD-03 | Phase 3 | Complete |
+| SCHD-04 | Phase 3 | Complete |
+| SCHD-05 | Phase 3 | Complete |
 | TUNL-02 | Phase 4 | Pending |
 | TUNL-03 | Phase 4 | Pending |
 | TUNL-04 | Phase 4 | Pending |
