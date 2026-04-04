@@ -36,11 +36,19 @@ try
                     o.MapEnum<RunType>("run_type");
                 }));
 
+        // Thread-safe throttle event counter — singleton shared between the singleton
+        // GraphResilienceHandler and scoped SyncEngine instances. SyncEngine resets it
+        // at the start of each run and reads Count at finalize (Plan 04).
+        services.AddSingleton<ThrottleCounter>();
+
         // Resilience handler — singleton so the Polly pipeline state is shared across all
         // Graph calls. Wraps 429/503 responses with exponential backoff + jitter and honours
-        // the Retry-After header. The onThrottle callback will be wired to SyncRun tracking
-        // in the SyncEngine (Plan 03).
-        services.AddSingleton<GraphResilienceHandler>();
+        // the Retry-After header. The onThrottle callback is wired to ThrottleCounter.Increment
+        // so SyncRun.ThrottleEvents reflects actual Graph retry counts (Plan 04).
+        services.AddSingleton<GraphResilienceHandler>(sp =>
+            new GraphResilienceHandler(
+                sp.GetRequiredService<ILogger<GraphResilienceHandler>>(),
+                onThrottle: _ => sp.GetRequiredService<ThrottleCounter>().Increment()));
 
         // Graph client factory — singleton so the GraphServiceClient is reused across requests.
         // Inject the resilience handler into the Graph HTTP pipeline so every SDK call
