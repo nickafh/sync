@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-04-04T02:39:20.420Z"
+status: executing
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-04-04T03:09:48.445Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 5
+  total_plans: 5
+  completed_plans: 6
   percent: 25
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-03)
 ## Current Position
 
 Phase: 02 (sync-engine-core) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-04-04
 
 Progress: [███░░░░░░░] 25%
@@ -59,6 +59,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 02 P01 | 7 | 2 tasks | 10 files |
 | Phase 02 P02 | 12 | 2 tasks | 10 files |
 | Phase 02 P03 | 12 | 3 tasks | 10 files |
+| Phase 02 P04 | 3 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Recent decisions affecting current work:
 - [Phase 02]: FinalizeRunAsync accepts individual count parameters (not a RunCounts record) for direct accumulation from SyncEngine local variables
 - [Phase 02]: FlushItemsAsync uses db.Database.IsInMemory() to split between EF Core AddRange (tests) and raw SQL batch insert (production)
 - [Phase 02]: SpecificUsers TargetScope deferred with warning log in SyncEngine — AllUsers handles Phase 2 scope, SpecificUsers is Phase 3+ concern
+- [Phase 02]: ThrottleCounter is a concrete singleton class (no interface) — simple value holder, tests construct it directly, no mocking needed
+- [Phase 02]: Factory delegate for GraphResilienceHandler DI registration replaces bare AddSingleton to inject ThrottleCounter.Increment as onThrottle callback, closing the ThrottleEvents always-0 gap
 
 ### Pending Todos
 
@@ -100,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-04T02:39:20.417Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-04-04T03:09:48.443Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None

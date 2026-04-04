@@ -49,12 +49,13 @@ Plans:
   3. Stale contacts (removed from source DDG) are handled according to tunnel policy: auto-removed, flagged with hold timer, or left in place
   4. Graph 429 throttle responses trigger automatic retry with exponential backoff and jitter, respecting the Retry-After header
   5. Every sync run produces a complete audit trail: run-level summary (counts, timing, status) and per-item results (action taken, field-level changes for updates, error messages for failures)
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 02-01-PLAN.md -- Worker DI bootstrap, GraphClientFactory, source member resolution with Graph $filter + PageIterator, contact payload builder with SHA-256 hashing
 - [x] 02-02-PLAN.md -- Graph contact write pipeline (ContactWriter CRUD, ContactFolderManager lazy creation), Polly 8 GraphResilienceHandler for 429 throttling
 - [x] 02-03-PLAN.md -- StaleContactHandler (set-difference + policy execution), RunLogger (batch SyncRunItem insert), SyncEngine orchestrator with bounded parallelism
+- [x] 02-04-PLAN.md -- Gap closure: Wire ThrottleCounter from GraphResilienceHandler to SyncEngine for accurate SyncRun.ThrottleEvents tracking
 
 ### Phase 3: API Layer & Scheduling
 **Goal**: The API exposes all CRUD endpoints the frontend needs, the DDG proxy resolves Exchange DDGs for the picker, and sync runs execute automatically on schedule or on demand
@@ -131,7 +132,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Infrastructure | 4/4 | Complete   | 2026-04-04 |
-| 2. Sync Engine Core | 3/3 | Complete   | 2026-04-04 |
+| 2. Sync Engine Core | 4/4 | Complete   | 2026-04-04 |
 | 3. API Layer & Scheduling | 0/3 | Not started | - |
 | 4. Admin Frontend | 0/4 | Not started | - |
 | 5. Differentiator Features | 0/3 | Not started | - |
