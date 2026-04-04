@@ -30,6 +30,7 @@ public sealed class SyncEngine(
     IContactFolderManager contactFolderManager,
     IStaleContactHandler staleContactHandler,
     IRunLogger runLogger,
+    ThrottleCounter throttleCounter,
     IConfiguration configuration,
     ILogger<SyncEngine> logger) : ISyncEngine
 {
@@ -50,13 +51,17 @@ public sealed class SyncEngine(
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
 
+        // Reset throttle counter for this run (singleton counter, safe because concurrent
+        // runs are blocked per SCHD-05 — only one sync run executes at a time).
+        throttleCounter.Reset();
+
         // Step 3: Load tunnels.
         var tunnels = await LoadTunnelsAsync(tunnelId, ct);
         logger.LogInformation("Loaded {Count} tunnel(s) to process", tunnels.Count);
 
         // Step 4: Run-level aggregate counters.
         int totalCreated = 0, totalUpdated = 0, totalSkipped = 0;
-        int totalFailed = 0, totalRemoved = 0, totalThrottleEvents = 0;
+        int totalFailed = 0, totalRemoved = 0;
         int tunnelsProcessed = 0, tunnelsWarned = 0, tunnelsFailed = 0;
 
         // Step 5: Process each tunnel sequentially (D-13).
@@ -105,7 +110,7 @@ public sealed class SyncEngine(
             tunnelsProcessed: tunnelsProcessed + tunnelsWarned, // both processed (warned = partial success)
             tunnelsWarned: tunnelsWarned,
             tunnelsFailed: tunnelsFailed,
-            throttleEvents: totalThrottleEvents,
+            throttleEvents: throttleCounter.Count,
             ct: ct);
 
         logger.LogInformation(
