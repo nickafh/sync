@@ -1,5 +1,6 @@
 using AFHSync.Api.Data;
 using AFHSync.Shared.Enums;
+using AFHSync.Shared.Services;
 using AFHSync.Worker.Graph;
 using AFHSync.Worker.Services;
 using Hangfire;

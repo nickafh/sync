@@ -1,4 +1,7 @@
 using AFHSync.Api.Data;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +13,7 @@ namespace AFHSync.Tests.Integration;
 /// Custom WebApplicationFactory that replaces PostgreSQL with InMemory database for testing.
 /// Auth tests don't require real Postgres -- InMemory is sufficient for validating
 /// JWT middleware, cookie handling, and route protection.
+/// Also stubs Hangfire services so tests don't require a real PostgreSQL Hangfire storage.
 /// </summary>
 public class TestWebApplicationFactory : WebApplicationFactory<Program>
 {
@@ -48,8 +52,62 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>
                 options
                     .UseInMemoryDatabase(testDbName)
                     .UseInternalServiceProvider(inMemoryServiceProvider));
+
+            // Replace Hangfire services with no-op stubs for testing.
+            // Hangfire's AddHangfire() registers IBackgroundJobClient and IRecurringJobManager
+            // which try to connect to PostgreSQL. Override with stubs.
+            var hangfireJobClient = services.SingleOrDefault(
+                d => d.ServiceType == typeof(IBackgroundJobClient));
+            if (hangfireJobClient != null) services.Remove(hangfireJobClient);
+
+            var hangfireRecurringManager = services.SingleOrDefault(
+                d => d.ServiceType == typeof(IRecurringJobManager));
+            if (hangfireRecurringManager != null) services.Remove(hangfireRecurringManager);
+
+            services.AddSingleton<IBackgroundJobClient>(new NoOpBackgroundJobClient());
+            services.AddSingleton<IRecurringJobManager>(new NoOpRecurringJobManager());
         });
 
         builder.UseEnvironment("Development");
+    }
+}
+
+/// <summary>
+/// No-op IBackgroundJobClient for integration tests.
+/// All Enqueue/Schedule calls succeed silently without connecting to Hangfire storage.
+/// </summary>
+internal class NoOpBackgroundJobClient : IBackgroundJobClient
+{
+    public string Create(Hangfire.Common.Job job, IState state)
+    {
+        // Return a fake job ID
+        return Guid.NewGuid().ToString("N");
+    }
+
+    public bool ChangeState(string jobId, IState state, string? expectedState)
+    {
+        return true;
+    }
+}
+
+/// <summary>
+/// No-op IRecurringJobManager for integration tests.
+/// AddOrUpdate/RemoveIfExists calls succeed silently.
+/// </summary>
+internal class NoOpRecurringJobManager : IRecurringJobManager
+{
+    public void AddOrUpdate(string recurringJobId, Hangfire.Common.Job job, string cronExpression, RecurringJobOptions options)
+    {
+        // No-op
+    }
+
+    public void Trigger(string recurringJobId)
+    {
+        // No-op
+    }
+
+    public void RemoveIfExists(string recurringJobId)
+    {
+        // No-op
     }
 }

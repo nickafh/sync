@@ -1,12 +1,14 @@
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 
-namespace AFHSync.Worker.Services;
+namespace AFHSync.Shared.Services;
 
 /// <summary>
 /// Top-level orchestrator for the sync pipeline.
 /// Resolves source members, builds payloads, delta-compares via hash,
 /// writes to Graph, handles stale contacts, and produces a full audit trail.
+/// Interface in shared project so API can reference it for Hangfire job enqueue
+/// without a circular project dependency (Worker references API for DbContext).
 /// </summary>
 public interface ISyncEngine
 {
