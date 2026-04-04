@@ -87,10 +87,11 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
-- [ ] 04-03: TBD
-- [ ] 04-04: TBD
+- [x] 04-01-PLAN.md -- Shared infrastructure: npm installs (TanStack Query/Table, sonner), 14 shadcn components, TypeScript types mirroring all DTOs, typed API client, QueryClientProvider, 7 reusable components (StatusBadge, KPICard, PageHeader, DataTable, ConfirmDialog, EmptyState, SettingsCard)
+- [ ] 04-02-PLAN.md -- Dashboard page: live KPI cards, active tunnel summary with clickable rows, recent runs, Run Sync Now / Dry Run buttons with polling and toast notifications
+- [ ] 04-03-PLAN.md -- Tunnel pages: tunnel list with DataTable and row actions, tunnel detail with inline edit, DDG picker, activate/deactivate/delete with confirmation dialogs
+- [ ] 04-04-PLAN.md -- Runs & Logs pages: run history with paginated DataTable, run detail with KPI cards, summary, action filter tabs, paginated items table
+- [ ] 04-05-PLAN.md -- Phone Lists, Field Profiles, Settings pages: expandable contact browsing, auto-save field behavior dropdowns, grouped settings cards with per-card save
 
 ### Phase 5: Differentiator Features
 **Goal**: The admin experience goes beyond CiraSync parity with a guided tunnel creation wizard, impact previews before destructive changes, an iPhone frame contact preview, and live contact card previews during field profile editing
@@ -134,6 +135,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Foundation & Infrastructure | 4/4 | Complete   | 2026-04-04 |
 | 2. Sync Engine Core | 4/4 | Complete   | 2026-04-04 |
 | 3. API Layer & Scheduling | 0/3 | Not started | - |
-| 4. Admin Frontend | 0/4 | Not started | - |
+| 4. Admin Frontend | 1/5 | In progress | - |
 | 5. Differentiator Features | 0/3 | Not started | - |
 | 6. Photo Sync | 0/2 | Not started | - |
