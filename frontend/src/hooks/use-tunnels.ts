@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { UpdateTunnelRequest } from '@/types/tunnel';
+import type { UpdateTunnelRequest, CreateTunnelRequest } from '@/types/tunnel';
 
 export function useTunnels() {
   return useQuery({
@@ -57,6 +57,35 @@ export function useDeleteTunnel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tunnels'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function useCreateTunnel() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: CreateTunnelRequest) => api.tunnels.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tunnels'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+}
+
+export function usePreviewTunnelImpact() {
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: UpdateTunnelRequest }) =>
+      api.tunnels.preview(id, data),
+  });
+}
+
+export function useRefreshDdg() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.tunnels.refreshDdg(id),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['tunnel', id] });
+      queryClient.invalidateQueries({ queryKey: ['tunnels'] });
     },
   });
 }

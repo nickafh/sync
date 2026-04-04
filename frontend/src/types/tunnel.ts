@@ -65,3 +65,29 @@ export interface UpdateTunnelRequest {
 export interface StatusUpdateRequest {
   status: string;
 }
+
+export interface CreateTunnelRequest {
+  name: string;
+  sourceType: string;
+  sourceIdentifier: string;
+  sourceDisplayName: string | null;
+  sourceSmtpAddress: string | null;
+  sourceFilterPlain: string | null;
+  targetScope: string;
+  targetListIds: number[];
+  fieldProfileId: number | null;
+  stalePolicy: string;
+  staleDays: number;
+}
+
+export interface ImpactPreviewResponse {
+  estimatedCreates: number;
+  estimatedUpdates: number;
+  estimatedRemovals: number;
+}
+
+export interface RefreshDdgResponse {
+  message: string;
+  graphFilter: string | null;
+  filterPlain: string | null;
+}

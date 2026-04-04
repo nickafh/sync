@@ -32,4 +32,11 @@ export interface ContactDto {
   department: string | null;
   office: string | null;
   phone: string | null;
+  mobilePhone: string | null;
+  companyName: string | null;
+  streetAddress: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string | null;
 }

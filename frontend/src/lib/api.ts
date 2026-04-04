@@ -1,5 +1,5 @@
 import type { DashboardDto } from '@/types/dashboard';
-import type { TunnelDto, TunnelDetailDto, UpdateTunnelRequest } from '@/types/tunnel';
+import type { TunnelDto, TunnelDetailDto, UpdateTunnelRequest, CreateTunnelRequest, ImpactPreviewResponse, RefreshDdgResponse } from '@/types/tunnel';
 import type { SyncRunDto, SyncRunDetailDto, SyncRunItemDto, TriggerSyncRequest } from '@/types/sync-run';
 import type { PhoneListDto, PhoneListDetailDto, ContactDto } from '@/types/phone-list';
 import type { FieldProfileDto, FieldProfileDetailDto, UpdateFieldProfileRequest } from '@/types/field-profile';
@@ -63,6 +63,12 @@ export const api = {
       fetchApi<{ message: string }>(`/tunnels/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
     delete: (id: number) =>
       fetchApi<void>(`/tunnels/${id}`, { method: 'DELETE' }),
+    create: (data: CreateTunnelRequest) =>
+      fetchApi<{ id: number }>('/tunnels', { method: 'POST', body: JSON.stringify(data) }),
+    preview: (id: number, data: UpdateTunnelRequest) =>
+      fetchApi<ImpactPreviewResponse>(`/tunnels/${id}/preview`, { method: 'POST', body: JSON.stringify(data) }),
+    refreshDdg: (id: number) =>
+      fetchApi<RefreshDdgResponse>(`/tunnels/${id}/refresh-ddg`, { method: 'POST' }),
   },
 
   syncRuns: {
