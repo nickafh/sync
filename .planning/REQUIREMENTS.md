@@ -24,10 +24,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### DDG Resolution & Filter Conversion
 
-- [x] **DDG-01**: API can list all Dynamic Distribution Groups from Exchange Online PowerShell (one-time call during tunnel setup)
-- [x] **DDG-02**: API reads the RecipientFilter from a selected DDG
-- [x] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
-- [x] **DDG-04**: Both original DDG reference (name, address, filter) and converted Graph filter are stored on the tunnel
+- [ ] **DDG-01**: API can list all Dynamic Distribution Groups from Exchange Online PowerShell (one-time call during tunnel setup)
+- [ ] **DDG-02**: API reads the RecipientFilter from a selected DDG
+- [ ] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
+- [ ] **DDG-04**: Both original DDG reference (name, address, filter) and converted Graph filter are stored on the tunnel
 - [ ] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
 - [ ] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
 - [ ] **DDG-07**: "Refresh from DDG" button re-reads Exchange filter and updates stored Graph filter
@@ -45,15 +45,15 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Phone List Management
 
-- [ ] **LIST-01**: Admin can view all phone lists with contact counts, user counts, and source tunnels
-- [ ] **LIST-02**: Admin can view contacts in a phone list with pagination
+- [x] **LIST-01**: Admin can view all phone lists with contact counts, user counts, and source tunnels
+- [x] **LIST-02**: Admin can view contacts in a phone list with pagination
 - [ ] **LIST-03**: Lists on Phones page shows list selector (left) and iPhone frame preview (right)
 - [ ] **LIST-04**: Clicking a contact in phone preview shows full contact card detail
 
 ### Field Profiles
 
-- [ ] **FILD-01**: Admin can view field profiles with all field settings grouped by section
-- [ ] **FILD-02**: Admin can edit field behavior for each field (always, add_missing, nosync, remove_blank)
+- [x] **FILD-01**: Admin can view field profiles with all field settings grouped by section
+- [x] **FILD-02**: Admin can edit field behavior for each field (always, add_missing, nosync, remove_blank)
 - [ ] **FILD-03**: Field mapping page shows grouped field rows (left) and live contact card preview (right)
 - [ ] **FILD-04**: Contact card preview updates in real-time as field behaviors change
 
@@ -80,11 +80,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Scheduling & Triggers
 
-- [x] **SCHD-01**: Sync engine runs automatically on cron schedule (configurable, default every 4 hours)
-- [x] **SCHD-02**: Admin can trigger manual sync from dashboard ("Run Sync Now" button)
-- [x] **SCHD-03**: Admin can trigger dry-run sync that simulates without writing to Graph
-- [x] **SCHD-04**: Admin can run sync for specific tunnel(s) or all active tunnels
-- [x] **SCHD-05**: Concurrent sync runs are prevented (new run blocked while one is in progress)
+- [ ] **SCHD-01**: Sync engine runs automatically on cron schedule (configurable, default every 4 hours)
+- [ ] **SCHD-02**: Admin can trigger manual sync from dashboard ("Run Sync Now" button)
+- [ ] **SCHD-03**: Admin can trigger dry-run sync that simulates without writing to Graph
+- [ ] **SCHD-04**: Admin can run sync for specific tunnel(s) or all active tunnels
+- [ ] **SCHD-05**: Concurrent sync runs are prevented (new run blocked while one is in progress)
 
 ### Sync Run Logging
 
@@ -102,23 +102,23 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Runs & Logs UI
 
-- [x] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
-- [x] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
-- [x] **RLOG-03**: Run detail shows failure list and warning list
-- [x] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
+- [ ] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
+- [ ] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
+- [ ] **RLOG-03**: Run detail shows failure list and warning list
+- [ ] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
 
 ### Settings
 
-- [ ] **SETT-01**: Admin can configure sync schedule (cron expression or dropdown)
-- [ ] **SETT-02**: Admin can configure photo sync mode
-- [ ] **SETT-03**: Admin can configure batch size and parallelism
-- [ ] **SETT-04**: Admin can configure default stale contact policy and hold days
+- [x] **SETT-01**: Admin can configure sync schedule (cron expression or dropdown)
+- [x] **SETT-02**: Admin can configure photo sync mode
+- [x] **SETT-03**: Admin can configure batch size and parallelism
+- [x] **SETT-04**: Admin can configure default stale contact policy and hold days
 
 ### Design System
 
-- [x] **DSGN-01**: Sotheby's-aligned color palette (navy #1B2A4A, gold #C9A84C, warm neutrals)
-- [x] **DSGN-02**: Typography: Cormorant Garamond headings, DM Sans body
-- [x] **DSGN-03**: Consistent UI patterns: status badges, confirmation dialogs, impact previews
+- [ ] **DSGN-01**: Sotheby's-aligned color palette (navy #1B2A4A, gold #C9A84C, warm neutrals)
+- [ ] **DSGN-02**: Typography: Cormorant Garamond headings, DM Sans body
+- [ ] **DSGN-03**: Consistent UI patterns: status badges, confirmation dialogs, impact previews
 
 ## v2 Requirements
 
@@ -191,15 +191,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOGS-02 | Phase 2 | Complete |
 | LOGS-03 | Phase 2 | Complete |
 | LOGS-04 | Phase 2 | Complete |
-| DDG-01 | Phase 3 | Complete |
-| DDG-02 | Phase 3 | Complete |
-| DDG-03 | Phase 3 | Complete |
-| DDG-04 | Phase 3 | Complete |
-| SCHD-01 | Phase 3 | Complete |
-| SCHD-02 | Phase 3 | Complete |
-| SCHD-03 | Phase 3 | Complete |
-| SCHD-04 | Phase 3 | Complete |
-| SCHD-05 | Phase 3 | Complete |
+| DDG-01 | Phase 3 | Pending |
+| DDG-02 | Phase 3 | Pending |
+| DDG-03 | Phase 3 | Pending |
+| DDG-04 | Phase 3 | Pending |
+| SCHD-01 | Phase 3 | Pending |
+| SCHD-02 | Phase 3 | Pending |
+| SCHD-03 | Phase 3 | Pending |
+| SCHD-04 | Phase 3 | Pending |
+| SCHD-05 | Phase 3 | Pending |
 | TUNL-02 | Phase 4 | Pending |
 | TUNL-03 | Phase 4 | Pending |
 | TUNL-04 | Phase 4 | Pending |
@@ -207,25 +207,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TUNL-06 | Phase 4 | Pending |
 | DDG-05 | Phase 4 | Pending |
 | DDG-06 | Phase 4 | Pending |
-| LIST-01 | Phase 4 | Pending |
-| LIST-02 | Phase 4 | Pending |
-| FILD-01 | Phase 4 | Pending |
-| FILD-02 | Phase 4 | Pending |
+| LIST-01 | Phase 4 | Complete |
+| LIST-02 | Phase 4 | Complete |
+| FILD-01 | Phase 4 | Complete |
+| FILD-02 | Phase 4 | Complete |
 | DASH-01 | Phase 4 | Pending |
 | DASH-02 | Phase 4 | Pending |
 | DASH-03 | Phase 4 | Pending |
 | DASH-04 | Phase 4 | Pending |
-| RLOG-01 | Phase 4 | Complete |
-| RLOG-02 | Phase 4 | Complete |
-| RLOG-03 | Phase 4 | Complete |
-| RLOG-04 | Phase 4 | Complete |
-| SETT-01 | Phase 4 | Pending |
-| SETT-02 | Phase 4 | Pending |
-| SETT-03 | Phase 4 | Pending |
-| SETT-04 | Phase 4 | Pending |
-| DSGN-01 | Phase 4 | Complete |
-| DSGN-02 | Phase 4 | Complete |
-| DSGN-03 | Phase 4 | Complete |
+| RLOG-01 | Phase 4 | Pending |
+| RLOG-02 | Phase 4 | Pending |
+| RLOG-03 | Phase 4 | Pending |
+| RLOG-04 | Phase 4 | Pending |
+| SETT-01 | Phase 4 | Complete |
+| SETT-02 | Phase 4 | Complete |
+| SETT-03 | Phase 4 | Complete |
+| SETT-04 | Phase 4 | Complete |
+| DSGN-01 | Phase 4 | Pending |
+| DSGN-02 | Phase 4 | Pending |
+| DSGN-03 | Phase 4 | Pending |
 | TUNL-01 | Phase 5 | Pending |
 | TUNL-07 | Phase 5 | Pending |
 | TUNL-08 | Phase 5 | Pending |
