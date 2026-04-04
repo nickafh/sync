@@ -28,18 +28,18 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **DDG-02**: API reads the RecipientFilter from a selected DDG
 - [x] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
 - [x] **DDG-04**: Both original DDG reference (name, address, filter) and converted Graph filter are stored on the tunnel
-- [ ] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
-- [ ] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
+- [x] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
+- [x] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
 - [ ] **DDG-07**: "Refresh from DDG" button re-reads Exchange filter and updates stored Graph filter
 
 ### Tunnel Management
 
 - [ ] **TUNL-01**: Admin can create a tunnel via 4-step wizard (Name -> Source DDG -> Target Lists -> Review)
-- [ ] **TUNL-02**: Admin can view tunnel detail with KPI cards (source contacts, target lists, target users)
-- [ ] **TUNL-03**: Admin can edit tunnel (name, source DDG, target lists, field profile, stale policy)
-- [ ] **TUNL-04**: Admin can activate/deactivate a tunnel
-- [ ] **TUNL-05**: Admin can delete a tunnel (with confirmation, blocked if active sync state exists)
-- [ ] **TUNL-06**: Tunnel list page shows table with name, source, contacts, target lists, users, last run, status
+- [x] **TUNL-02**: Admin can view tunnel detail with KPI cards (source contacts, target lists, target users)
+- [x] **TUNL-03**: Admin can edit tunnel (name, source DDG, target lists, field profile, stale policy)
+- [x] **TUNL-04**: Admin can activate/deactivate a tunnel
+- [x] **TUNL-05**: Admin can delete a tunnel (with confirmation, blocked if active sync state exists)
+- [x] **TUNL-06**: Tunnel list page shows table with name, source, contacts, target lists, users, last run, status
 - [ ] **TUNL-07**: Impact preview shows estimated creates/updates/removals before saving tunnel changes
 - [ ] **TUNL-08**: High-impact changes (source swap, target removal, disable, delete) require confirmation dialog
 
@@ -200,13 +200,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCHD-03 | Phase 3 | Complete |
 | SCHD-04 | Phase 3 | Complete |
 | SCHD-05 | Phase 3 | Complete |
-| TUNL-02 | Phase 4 | Pending |
-| TUNL-03 | Phase 4 | Pending |
-| TUNL-04 | Phase 4 | Pending |
-| TUNL-05 | Phase 4 | Pending |
-| TUNL-06 | Phase 4 | Pending |
-| DDG-05 | Phase 4 | Pending |
-| DDG-06 | Phase 4 | Pending |
+| TUNL-02 | Phase 4 | Complete |
+| TUNL-03 | Phase 4 | Complete |
+| TUNL-04 | Phase 4 | Complete |
+| TUNL-05 | Phase 4 | Complete |
+| TUNL-06 | Phase 4 | Complete |
+| DDG-05 | Phase 4 | Complete |
+| DDG-06 | Phase 4 | Complete |
 | LIST-01 | Phase 4 | Pending |
 | LIST-02 | Phase 4 | Pending |
 | FILD-01 | Phase 4 | Pending |

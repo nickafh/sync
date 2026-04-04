@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-04-04T15:15:30.496Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-04-04T15:18:31.441Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 6
@@ -61,7 +61,7 @@ Progress: [████░░░░░░] 40%
 | Phase 02 P03 | 12 | 3 tasks | 10 files |
 | Phase 02 P04 | 3 | 2 tasks | 5 files |
 | Phase 04 P01 | 5min | 2 tasks | 43 files |
-| Phase 04 P02 | 3min | 1 tasks | 2 files |
+| Phase 04 P03 | 5 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -95,7 +95,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Factory delegate for GraphResilienceHandler DI registration replaces bare AddSingleton to inject ThrottleCounter.Increment as onThrottle callback, closing the ThrottleEvents always-0 gap
 - [Phase 04]: base-nova shadcn Button does not support asChild (uses @base-ui/react) -- use Link wrapping Button for navigation CTAs
 - [Phase 04]: Added 204 No Content handling to fetchApi for DELETE endpoints returning no body
-- [Phase 04]: KPICard extended with optional children prop to render StatusBadge in Last Sync KPI
+- [Phase 04]: Used base-ui render prop for DropdownMenuTrigger instead of asChild (shadcn base-nova uses @base-ui not @radix-ui)
+- [Phase 04]: DDGPicker uses shouldFilter=false for manual search/type filtering in Command component
 
 ### Pending Todos
 
@@ -108,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-04T15:15:30.493Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-04-04T15:18:31.439Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None
