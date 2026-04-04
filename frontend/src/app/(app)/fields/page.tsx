@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Check } from 'lucide-react';
+import { ContactCardPreview } from '@/components/ContactCardPreview';
 import type { FieldProfileDetailDto } from '@/types/field-profile';
 
 const behaviorOptions = [
@@ -146,69 +147,82 @@ export default function FieldProfilesPage() {
 
       {/* Loading state */}
       {isLoading && (
-        <div className="space-y-6">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-40 w-full rounded-xl" />
-          ))}
+        <div className="flex flex-col lg:flex-row gap-8">
+          <div className="flex-1 lg:w-3/5 space-y-6">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-40 w-full rounded-xl" />
+            ))}
+          </div>
+          <div className="w-full lg:w-2/5">
+            <Skeleton className="w-full h-[500px] rounded-xl" />
+          </div>
         </div>
       )}
 
-      {/* Field sections */}
-      {!isLoading && profile && (
-        <div className="space-y-6">
-          {profile.sections.map((section) => (
-            <Card key={section.name}>
-              <CardHeader>
-                <CardTitle className="text-lg font-bold font-heading text-navy">
-                  {section.name}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="divide-y divide-border">
-                  {section.fields.map((field) => (
-                    <div
-                      key={field.fieldName}
-                      className="flex items-center justify-between py-3"
-                    >
-                      <span className="text-sm font-body">
-                        {field.displayName}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Select
-                          value={field.behavior}
-                          onValueChange={(val) =>
-                            handleBehaviorChange(
-                              field.fieldName,
-                              val as string,
-                            )
-                          }
-                        >
-                          <SelectTrigger size="sm" className="w-[160px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {behaviorOptions.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {savedField === field.fieldName && (
-                          <div className="flex items-center gap-1">
-                            <Check className="w-4 h-4 text-emerald-500" />
-                            <span className="text-xs text-emerald-600">
-                              Saved
-                            </span>
-                          </div>
-                        )}
+      {/* Field sections + live preview split layout */}
+      {!isLoading && profile && profile.sections.length > 0 && (
+        <div className="flex flex-col lg:flex-row gap-8">
+          {/* Left panel: field sections (~60%) */}
+          <div className="flex-1 lg:w-3/5 space-y-6">
+            {profile.sections.map((section) => (
+              <Card key={section.name}>
+                <CardHeader>
+                  <CardTitle className="text-lg font-bold font-heading text-navy">
+                    {section.name}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="divide-y divide-border">
+                    {section.fields.map((field) => (
+                      <div
+                        key={field.fieldName}
+                        className="flex items-center justify-between py-3"
+                      >
+                        <span className="text-sm font-body">
+                          {field.displayName}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={field.behavior}
+                            onValueChange={(val) =>
+                              handleBehaviorChange(
+                                field.fieldName,
+                                val as string,
+                              )
+                            }
+                          >
+                            <SelectTrigger size="sm" className="w-[160px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {behaviorOptions.map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {savedField === field.fieldName && (
+                            <div className="flex items-center gap-1">
+                              <Check className="w-4 h-4 text-emerald-500" />
+                              <span className="text-xs text-emerald-600">
+                                Saved
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Right panel: live preview (~40%) */}
+          <div className="w-full lg:w-2/5">
+            <ContactCardPreview profile={profile ?? null} />
+          </div>
         </div>
       )}
 
