@@ -18,6 +18,7 @@ public class TunnelConfiguration : IEntityTypeConfiguration<Tunnel>
         builder.Property(e => e.SourceIdentifier).HasColumnName("source_identifier").HasMaxLength(500).IsRequired();
         builder.Property(e => e.SourceDisplayName).HasColumnName("source_display_name").HasMaxLength(200);
         builder.Property(e => e.SourceSmtpAddress).HasColumnName("source_smtp_address").HasMaxLength(320);
+        builder.Property(e => e.SourceFilterPlain).HasColumnName("source_filter_plain").HasMaxLength(500);
         builder.Property(e => e.TargetScope).HasColumnName("target_scope").IsRequired();
         builder.Property(e => e.TargetUserFilter).HasColumnName("target_user_filter").HasColumnType("jsonb");
         builder.Property(e => e.FieldProfileId).HasColumnName("field_profile_id");

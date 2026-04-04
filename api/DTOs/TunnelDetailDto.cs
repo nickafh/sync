@@ -7,6 +7,7 @@ public record TunnelDetailDto(
     string SourceIdentifier,
     string? SourceDisplayName,
     string? SourceSmtpAddress,
+    string? SourceFilterPlain,
     string TargetScope,
     string? TargetUserFilter,
     string Status,

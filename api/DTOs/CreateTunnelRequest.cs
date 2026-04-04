@@ -8,6 +8,7 @@ public record CreateTunnelRequest(
     [Required][StringLength(500)] string SourceIdentifier,
     string? SourceDisplayName,
     string? SourceSmtpAddress,
+    string? SourceFilterPlain,
     string TargetScope,
     int[] TargetListIds,
     int? FieldProfileId,

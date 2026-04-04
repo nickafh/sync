@@ -79,6 +79,7 @@ export default function TunnelDetailPage() {
     sourceIdentifier: '',
     sourceDisplayName: null,
     sourceSmtpAddress: null,
+    sourceFilterPlain: null,
     targetScope: '',
     targetListIds: [],
     fieldProfileId: null,
@@ -94,6 +95,7 @@ export default function TunnelDetailPage() {
         sourceIdentifier: tunnel.sourceIdentifier,
         sourceDisplayName: tunnel.sourceDisplayName,
         sourceSmtpAddress: tunnel.sourceSmtpAddress,
+        sourceFilterPlain: tunnel.sourceFilterPlain,
         targetScope: tunnel.targetScope,
         targetListIds: tunnel.targetLists.map((l) => l.id),
         fieldProfileId: tunnel.fieldProfileId,
@@ -111,6 +113,7 @@ export default function TunnelDetailPage() {
       sourceIdentifier: tunnel.sourceIdentifier,
       sourceDisplayName: tunnel.sourceDisplayName,
       sourceSmtpAddress: tunnel.sourceSmtpAddress,
+      sourceFilterPlain: tunnel.sourceFilterPlain,
       targetScope: tunnel.targetScope,
       targetListIds: tunnel.targetLists.map((l) => l.id),
       fieldProfileId: tunnel.fieldProfileId,
@@ -128,6 +131,7 @@ export default function TunnelDetailPage() {
       sourceIdentifier: tunnel.sourceIdentifier,
       sourceDisplayName: tunnel.sourceDisplayName,
       sourceSmtpAddress: tunnel.sourceSmtpAddress,
+      sourceFilterPlain: tunnel.sourceFilterPlain,
       targetScope: tunnel.targetScope,
       targetListIds: tunnel.targetLists.map((l) => l.id),
       fieldProfileId: tunnel.fieldProfileId,
@@ -158,6 +162,7 @@ export default function TunnelDetailPage() {
       sourceIdentifier: ddg.graphFilter ?? ddg.recipientFilter,
       sourceDisplayName: ddg.displayName,
       sourceSmtpAddress: ddg.primarySmtpAddress,
+      sourceFilterPlain: ddg.recipientFilterPlain,
     }));
   };
 
@@ -354,6 +359,16 @@ export default function TunnelDetailPage() {
                     </Button>
                   </div>
                 </div>
+                {editForm.sourceFilterPlain && (
+                  <div>
+                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                      Filter Description
+                    </label>
+                    <p className="text-sm text-text-muted mt-1">
+                      {editForm.sourceFilterPlain}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
                     Graph Filter
@@ -379,6 +394,16 @@ export default function TunnelDetailPage() {
                       SMTP Address
                     </label>
                     <p className="mt-1 text-sm">{tunnel.sourceSmtpAddress}</p>
+                  </div>
+                )}
+                {tunnel.sourceFilterPlain && (
+                  <div>
+                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                      Filter Description
+                    </label>
+                    <p className="mt-1 text-sm">
+                      {tunnel.sourceFilterPlain}
+                    </p>
                   </div>
                 )}
                 <div>

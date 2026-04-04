@@ -10,6 +10,7 @@ public class Tunnel
     public string SourceIdentifier { get; set; } = string.Empty;
     public string? SourceDisplayName { get; set; }
     public string? SourceSmtpAddress { get; set; }
+    public string? SourceFilterPlain { get; set; }
     public TargetScope TargetScope { get; set; } = TargetScope.AllUsers;
     public string? TargetUserFilter { get; set; }
     public int? FieldProfileId { get; set; }

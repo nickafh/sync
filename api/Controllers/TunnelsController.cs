@@ -1,5 +1,6 @@
 using AFHSync.Api.Data;
 using AFHSync.Api.DTOs;
+using AFHSync.Api.Services;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -12,10 +13,12 @@ namespace AFHSync.Api.Controllers;
 public class TunnelsController : ControllerBase
 {
     private readonly AFHSyncDbContext _db;
+    private readonly IFilterConverter _filterConverter;
 
-    public TunnelsController(AFHSyncDbContext db)
+    public TunnelsController(AFHSyncDbContext db, IFilterConverter filterConverter)
     {
         _db = db;
+        _filterConverter = filterConverter;
     }
 
     /// <summary>
@@ -108,6 +111,7 @@ public class TunnelsController : ControllerBase
             tunnel.SourceIdentifier,
             tunnel.SourceDisplayName,
             tunnel.SourceSmtpAddress,
+            tunnel.SourceFilterPlain,
             EnumHelpers.ToPgName(tunnel.TargetScope),
             tunnel.TargetUserFilter,
             EnumHelpers.ToPgName(tunnel.Status),
@@ -147,6 +151,7 @@ public class TunnelsController : ControllerBase
             SourceIdentifier = request.SourceIdentifier,    // Graph $filter per DDG-04
             SourceDisplayName = request.SourceDisplayName,  // DDG display name per DDG-04
             SourceSmtpAddress = request.SourceSmtpAddress,  // DDG SMTP address per DDG-04
+            SourceFilterPlain = request.SourceFilterPlain,  // Plain-language filter per DDG-06
             TargetScope = targetScope,
             FieldProfileId = request.FieldProfileId,
             StalePolicy = stalePolicy,
@@ -198,6 +203,7 @@ public class TunnelsController : ControllerBase
         tunnel.SourceIdentifier = request.SourceIdentifier;
         tunnel.SourceDisplayName = request.SourceDisplayName;
         tunnel.SourceSmtpAddress = request.SourceSmtpAddress;
+        tunnel.SourceFilterPlain = request.SourceFilterPlain;
         tunnel.TargetScope = targetScope;
         tunnel.FieldProfileId = request.FieldProfileId;
         tunnel.StalePolicy = stalePolicy;

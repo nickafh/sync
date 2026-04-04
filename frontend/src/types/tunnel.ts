@@ -24,6 +24,7 @@ export interface TunnelDetailDto {
   sourceIdentifier: string;
   sourceDisplayName: string | null;
   sourceSmtpAddress: string | null;
+  sourceFilterPlain: string | null;
   targetScope: string;
   targetUserFilter: string | null;
   status: string;
@@ -53,6 +54,7 @@ export interface UpdateTunnelRequest {
   sourceIdentifier: string;
   sourceDisplayName: string | null;
   sourceSmtpAddress: string | null;
+  sourceFilterPlain: string | null;
   targetScope: string;
   targetListIds: number[];
   fieldProfileId: number | null;
