@@ -92,6 +92,7 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
                 SourceType = SourceType.Ddg,
                 SourceIdentifier = $"startsWith(displayName, 'Office{i}')",
                 SourceDisplayName = $"Office {i} DDG",
+                SourceSmtpAddress = $"office{i}-ddg@atlantafinehomes.com",
                 TargetScope = TargetScope.AllUsers,
                 StalePolicy = StalePolicy.FlagHold,
                 StaleHoldDays = 14,
@@ -146,6 +147,7 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
             sourceType = "Ddg",
             sourceIdentifier = "startsWith(displayName, 'Buckhead')",
             sourceDisplayName = "Buckhead DDG",
+            sourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
             targetScope = "AllUsers",
             targetListIds = new[] { phoneList.Id },
             fieldProfileId = (int?)null,
@@ -172,6 +174,7 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
             sourceType = "Ddg",
             sourceIdentifier = "startsWith(displayName, 'Intown')",
             sourceDisplayName = "Intown DDG Display Name",
+            sourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
             targetScope = "AllUsers",
             targetListIds = Array.Empty<int>(),
             fieldProfileId = (int?)null,
@@ -192,6 +195,7 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var tunnel = await getResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         Assert.Equal("startsWith(displayName, 'Intown')", tunnel.GetProperty("sourceIdentifier").GetString());
         Assert.Equal("Intown DDG Display Name", tunnel.GetProperty("sourceDisplayName").GetString());
+        Assert.Equal("intown-ddg@atlantafinehomes.com", tunnel.GetProperty("sourceSmtpAddress").GetString());
     }
 
     [Fact]
