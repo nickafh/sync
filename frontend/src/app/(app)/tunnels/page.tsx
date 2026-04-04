@@ -3,8 +3,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Cable, MoreHorizontal, Pencil, Power, Trash2 } from 'lucide-react';
+import { Cable, MoreHorizontal, Pencil, Plus, Power, Trash2 } from 'lucide-react';
 import { useTunnels, useUpdateTunnelStatus, useDeleteTunnel } from '@/hooks/use-tunnels';
+import { TunnelWizard } from '@/components/TunnelWizard';
 import { PageHeader } from '@/components/PageHeader';
 import { DataTable } from '@/components/DataTable';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -45,6 +46,7 @@ export default function TunnelsPage() {
   const updateStatus = useUpdateTunnelStatus();
   const deleteT = useDeleteTunnel();
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const handleActivateDeactivate = (tunnel: TunnelDto) => {
     const newStatus = tunnel.status === 'active' ? 'inactive' : 'active';
@@ -184,7 +186,15 @@ export default function TunnelsPage() {
       <PageHeader
         title="Tunnels"
         description="Manage contact sync tunnels between DDGs and phone lists."
-      />
+      >
+        <Button
+          className="bg-gold text-white hover:bg-gold/90"
+          onClick={() => setWizardOpen(true)}
+        >
+          <Plus className="size-4 mr-2" />
+          Create Tunnel
+        </Button>
+      </PageHeader>
 
       <DataTable
         columns={columns}
@@ -220,6 +230,8 @@ export default function TunnelsPage() {
         onConfirm={handleDelete}
         isLoading={deleteT.isPending}
       />
+
+      <TunnelWizard open={wizardOpen} onOpenChange={setWizardOpen} />
     </div>
   );
 }
