@@ -3,188 +3,138 @@
 import { useState, useEffect } from 'react';
 import { usePhoneLists, usePhoneListContacts } from '@/hooks/use-phone-lists';
 import { PageHeader } from '@/components/PageHeader';
-import { DataTable } from '@/components/DataTable';
-import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { IPhoneFrame } from '@/components/IPhoneFrame';
+import { ContactList } from '@/components/ContactList';
+import { ContactCard } from '@/components/ContactCard';
+import type { ContactCardData } from '@/components/ContactCard';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Phone, ChevronDown, ChevronRight } from 'lucide-react';
-import type { ColumnDef } from '@tanstack/react-table';
-import type { PhoneListDto, ContactDto } from '@/types/phone-list';
+import { Phone } from 'lucide-react';
+import type { ContactDto, PhoneListDto } from '@/types/phone-list';
 
-const contactPageSize = 25;
-
-const contactColumns: ColumnDef<ContactDto, unknown>[] = [
-  {
-    accessorKey: 'displayName',
-    header: 'Name',
-  },
-  {
-    accessorKey: 'email',
-    header: 'Email',
-  },
-  {
-    accessorKey: 'phone',
-    header: 'Phone',
-  },
-  {
-    accessorKey: 'jobTitle',
-    header: 'Title',
-  },
-  {
-    accessorKey: 'department',
-    header: 'Department',
-  },
-];
+function mapContactDtoToCardData(dto: ContactDto): ContactCardData {
+  return {
+    displayName: dto.displayName,
+    email: dto.email,
+    jobTitle: dto.jobTitle,
+    department: dto.department,
+    office: dto.office,
+    phone: dto.phone,
+    mobilePhone: dto.mobilePhone,
+    companyName: dto.companyName,
+    streetAddress: dto.streetAddress,
+    city: dto.city,
+    state: dto.state,
+    postalCode: dto.postalCode,
+    country: dto.country,
+  };
+}
 
 export default function PhoneListsPage() {
-  const [expandedListId, setExpandedListId] = useState<number | null>(null);
+  const [selectedListId, setSelectedListId] = useState<number | null>(null);
+  const [selectedContact, setSelectedContact] = useState<ContactDto | null>(null);
   const [contactPage, setContactPage] = useState(0);
 
   const { data: phoneLists, isLoading } = usePhoneLists();
 
-  // API is 1-indexed; request pageSize + 1 for N+1 detection (hook already does +1)
-  const { data: rawContacts, isLoading: contactsLoading } =
-    usePhoneListContacts(expandedListId ?? 0, contactPage + 1, contactPageSize);
+  // Load contacts for the selected list (large page size for phone frame scrolling)
+  const { data: contacts, isLoading: contactsLoading } =
+    usePhoneListContacts(selectedListId ?? 0, contactPage + 1, 200);
 
-  // N+1 pagination: if we got more than pageSize, there's a next page
-  const hasNextContactPage = (rawContacts?.length ?? 0) > contactPageSize;
-  const contacts = rawContacts?.slice(0, contactPageSize) ?? [];
-
-  // Reset contact page when switching lists
+  // Auto-select first list when data loads
   useEffect(() => {
+    if (phoneLists && phoneLists.length > 0 && selectedListId === null) {
+      setSelectedListId(phoneLists[0].id);
+    }
+  }, [phoneLists, selectedListId]);
+
+  // Reset contact selection and page when list changes
+  useEffect(() => {
+    setSelectedContact(null);
     setContactPage(0);
-  }, [expandedListId]);
+  }, [selectedListId]);
 
-  const expandedList = phoneLists?.find((l) => l.id === expandedListId);
-
-  const phoneListColumns: ColumnDef<PhoneListDto, unknown>[] = [
-    {
-      id: 'expand',
-      header: '',
-      cell: ({ row }) => {
-        const isExpanded = row.original.id === expandedListId;
-        return isExpanded ? (
-          <ChevronDown className="size-4 text-text-muted" />
-        ) : (
-          <ChevronRight className="size-4 text-text-muted" />
-        );
-      },
-      size: 40,
-    },
-    {
-      accessorKey: 'name',
-      header: 'Name',
-      cell: ({ getValue }) => (
-        <span className="font-medium text-navy">{getValue<string>()}</span>
-      ),
-    },
-    {
-      accessorKey: 'contactCount',
-      header: () => <span className="text-right w-full block">Contacts</span>,
-      cell: ({ getValue }) => (
-        <span className="text-right w-full block">{getValue<number>()}</span>
-      ),
-    },
-    {
-      accessorKey: 'userCount',
-      header: () => <span className="text-right w-full block">Users</span>,
-      cell: ({ getValue }) => (
-        <span className="text-right w-full block">{getValue<number>()}</span>
-      ),
-    },
-    {
-      id: 'sourceTunnels',
-      header: 'Source Tunnels',
-      accessorFn: (row) =>
-        row.sourceTunnels.map((t) => t.name).join(', '),
-      cell: ({ getValue }) => (
-        <span className="truncate max-w-[200px] block">
-          {getValue<string>() || '--'}
-        </span>
-      ),
-    },
-    {
-      accessorKey: 'lastSyncStatus',
-      header: 'Last Sync',
-      cell: ({ getValue }) => {
-        const status = getValue<string | null>();
-        return status ? <StatusBadge status={status} /> : <span className="text-text-muted">--</span>;
-      },
-    },
-  ];
+  const selectedList = phoneLists?.find((l) => l.id === selectedListId);
 
   return (
     <div>
       <PageHeader
-        title="Phone Lists"
-        description="Browse contact lists delivered to user mailboxes."
+        title="Lists on Phones"
+        description="Preview how contacts appear on employee phones."
       />
 
       {isLoading ? (
         <div className="space-y-3">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-12 w-full rounded-lg" />
+            <Skeleton key={i} className="h-16 w-full rounded-lg" />
           ))}
         </div>
       ) : !phoneLists || phoneLists.length === 0 ? (
         <EmptyState
           icon={Phone}
           heading="No phone lists"
-          body="Phone lists will appear here after tunnels are configured and a sync run completes."
+          body="Phone lists will appear after tunnels are configured."
         />
       ) : (
-        <>
-          <DataTable<PhoneListDto>
-            columns={phoneListColumns}
-            data={phoneLists}
-            isLoading={false}
-            pageIndex={0}
-            pageSize={phoneLists.length}
-            hasNextPage={false}
-            onPageChange={() => {}}
-            onRowClick={(row) => {
-              setExpandedListId((prev) =>
-                prev === row.id ? null : row.id,
-              );
-            }}
-          />
+        <div className="flex flex-col lg:flex-row gap-8">
+          {/* Left panel: Phone list selector */}
+          <div className="min-w-[320px] lg:w-[45%] space-y-2">
+            {phoneLists.map((list: PhoneListDto) => (
+              <div
+                key={list.id}
+                className={
+                  list.id === selectedListId
+                    ? 'border-l-2 border-gold bg-gold/5 rounded-lg p-4 cursor-pointer transition-colors'
+                    : 'border border-border-default hover:border-gray-400 rounded-lg p-4 cursor-pointer transition-colors'
+                }
+                onClick={() => setSelectedListId(list.id)}
+              >
+                <div className="text-sm font-bold text-navy">{list.name}</div>
+                <div className="text-xs text-text-muted mt-1">
+                  {list.contactCount} contacts &middot; {list.userCount} users
+                </div>
+              </div>
+            ))}
+          </div>
 
-          {expandedListId !== null && expandedList && (
-            <Card className="mt-6">
-              <CardHeader>
-                <CardTitle className="text-lg font-bold font-heading text-navy">
-                  {expandedList.name}
-                </CardTitle>
-                <p className="text-sm text-text-muted">Contacts</p>
-              </CardHeader>
-              <CardContent>
-                {contacts.length === 0 && !contactsLoading ? (
-                  <EmptyState
-                    icon={Phone}
-                    heading="No contacts synced"
-                    body="Contacts will appear here after the next sync run."
-                  />
-                ) : (
-                  <DataTable<ContactDto>
-                    columns={contactColumns}
-                    data={contacts}
+          {/* Right panel: iPhone frame preview */}
+          <div className="lg:w-[55%] flex justify-center lg:justify-start">
+            <IPhoneFrame title={selectedList?.name ?? ''}>
+              <div className="relative h-full">
+                {/* Contact list layer */}
+                <div
+                  className={
+                    selectedContact !== null
+                      ? 'absolute inset-0 transition-transform duration-200 ease-out -translate-x-full'
+                      : 'absolute inset-0 transition-transform duration-200 ease-out translate-x-0'
+                  }
+                >
+                  <ContactList
+                    contacts={contacts ?? []}
+                    onSelectContact={(c) => setSelectedContact(c)}
                     isLoading={contactsLoading}
-                    pageIndex={contactPage}
-                    pageSize={contactPageSize}
-                    hasNextPage={hasNextContactPage}
-                    onPageChange={setContactPage}
                   />
-                )}
-              </CardContent>
-            </Card>
-          )}
-        </>
+                </div>
+
+                {/* Contact card layer (slide-over) */}
+                <div
+                  className={
+                    selectedContact !== null
+                      ? 'absolute inset-0 transition-transform duration-200 ease-out translate-x-0 bg-white'
+                      : 'absolute inset-0 transition-transform duration-200 ease-out translate-x-full bg-white'
+                  }
+                >
+                  {selectedContact && (
+                    <ContactCard
+                      contact={mapContactDtoToCardData(selectedContact)}
+                      onBack={() => setSelectedContact(null)}
+                    />
+                  )}
+                </div>
+              </div>
+            </IPhoneFrame>
+          </div>
+        </div>
       )}
     </div>
   );
