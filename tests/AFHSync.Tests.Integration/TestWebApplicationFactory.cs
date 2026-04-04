@@ -36,9 +36,18 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>
                 services.Remove(dbContextService);
             }
 
-            // Add InMemory database for tests (unique per factory instance)
+            // Add InMemory database for tests (unique per factory instance).
+            // Use a dedicated service provider to avoid "multiple providers" conflicts
+            // that occur when Npgsql's extension registration is still cached globally.
+            var testDbName = "TestDb_" + Guid.NewGuid().ToString("N");
+            var inMemoryServiceProvider = new ServiceCollection()
+                .AddEntityFrameworkInMemoryDatabase()
+                .BuildServiceProvider();
+
             services.AddDbContext<AFHSyncDbContext>(options =>
-                options.UseInMemoryDatabase("TestDb_" + Guid.NewGuid().ToString("N")));
+                options
+                    .UseInMemoryDatabase(testDbName)
+                    .UseInternalServiceProvider(inMemoryServiceProvider));
         });
 
         builder.UseEnvironment("Development");
