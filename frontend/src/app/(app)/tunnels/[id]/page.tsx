@@ -10,12 +10,15 @@ import {
   useUpdateTunnel,
   useUpdateTunnelStatus,
   useDeleteTunnel,
+  usePreviewTunnelImpact,
 } from '@/hooks/use-tunnels';
 import { api } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
 import { KPICard } from '@/components/KPICard';
 import { StatusBadge } from '@/components/StatusBadge';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { ImpactPreviewDialog } from '@/components/ImpactPreviewDialog';
+import { DDGRefreshButton } from '@/components/DDGRefreshButton';
 import { DDGPicker } from '@/components/DDGPicker';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,7 +33,11 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import type { DdgDto } from '@/types/ddg';
-import type { UpdateTunnelRequest } from '@/types/tunnel';
+import type {
+  UpdateTunnelRequest,
+  TunnelDetailDto,
+  ImpactPreviewResponse,
+} from '@/types/tunnel';
 
 const stalePolicyOptions = [
   { value: 'auto_remove', label: 'Auto Remove' },
@@ -41,6 +48,20 @@ const stalePolicyOptions = [
 function formatStalePolicy(policy: string): string {
   const found = stalePolicyOptions.find((o) => o.value === policy);
   return found?.label ?? policy;
+}
+
+function isHighImpactChange(
+  original: TunnelDetailDto,
+  edited: UpdateTunnelRequest,
+): boolean {
+  // Source DDG swap
+  if (original.sourceIdentifier !== edited.sourceIdentifier) return true;
+  // Target list removal (any original target not in new targets)
+  const originalIds = new Set(original.targetLists.map((l) => l.id));
+  for (const id of originalIds) {
+    if (!edited.targetListIds.includes(id)) return true;
+  }
+  return false;
 }
 
 export default function TunnelDetailPage() {
@@ -55,6 +76,7 @@ export default function TunnelDetailPage() {
   const updateTunnel = useUpdateTunnel();
   const updateStatus = useUpdateTunnelStatus();
   const deleteTunnel = useDeleteTunnel();
+  const previewImpact = usePreviewTunnelImpact();
 
   const { data: phoneLists } = useQuery({
     queryKey: ['phone-lists'],
@@ -72,6 +94,11 @@ export default function TunnelDetailPage() {
   const [ddgPickerOpen, setDdgPickerOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [impactDialogOpen, setImpactDialogOpen] = useState(false);
+  const [impactData, setImpactData] = useState<ImpactPreviewResponse | null>(
+    null,
+  );
+  const [fallbackConfirmOpen, setFallbackConfirmOpen] = useState(false);
 
   const [editForm, setEditForm] = useState<UpdateTunnelRequest>({
     name: '',
@@ -141,19 +168,44 @@ export default function TunnelDetailPage() {
     setIsEditing(false);
   };
 
-  const handleSave = () => {
+  const doSave = () => {
     updateTunnel.mutate(
       { id: tunnelId, data: editForm },
       {
         onSuccess: () => {
           toast.success('Tunnel updated successfully.');
           setIsEditing(false);
+          setImpactDialogOpen(false);
+          setFallbackConfirmOpen(false);
         },
         onError: () => {
           toast.error('Something went wrong. Please try again.');
         },
       },
     );
+  };
+
+  const handleSave = () => {
+    if (!tunnel) return;
+    if (isHighImpactChange(tunnel, editForm)) {
+      // High-impact: fetch preview first
+      previewImpact.mutate(
+        { id: tunnelId, data: editForm },
+        {
+          onSuccess: (data) => {
+            setImpactData(data);
+            setImpactDialogOpen(true);
+          },
+          onError: () => {
+            // Preview failed, show fallback confirm
+            setFallbackConfirmOpen(true);
+          },
+        },
+      );
+    } else {
+      // Low-impact: save directly (existing behavior)
+      doSave();
+    }
   };
 
   const handleDdgSelect = (ddg: DdgDto) => {
@@ -262,9 +314,13 @@ export default function TunnelDetailPage() {
             <Button
               className="bg-gold text-white hover:bg-gold/90"
               onClick={handleSave}
-              disabled={updateTunnel.isPending}
+              disabled={previewImpact.isPending || updateTunnel.isPending}
             >
-              {updateTunnel.isPending ? 'Saving...' : 'Save Changes'}
+              {previewImpact.isPending
+                ? 'Checking impact...'
+                : updateTunnel.isPending
+                  ? 'Saving...'
+                  : 'Save Changes'}
             </Button>
             <Button variant="outline" onClick={discardChanges}>
               Discard Changes
@@ -380,13 +436,16 @@ export default function TunnelDetailPage() {
               </div>
             ) : (
               <div className="space-y-3">
-                <div>
-                  <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                    DDG Name
-                  </label>
-                  <p className="mt-1 font-medium">
-                    {tunnel.sourceDisplayName || tunnel.sourceIdentifier}
-                  </p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                      DDG Name
+                    </label>
+                    <p className="mt-1 font-medium">
+                      {tunnel.sourceDisplayName || tunnel.sourceIdentifier}
+                    </p>
+                  </div>
+                  <DDGRefreshButton tunnelId={tunnelId} />
                 </div>
                 {tunnel.sourceSmtpAddress && (
                   <div>
@@ -626,6 +685,28 @@ export default function TunnelDetailPage() {
         variant="destructive"
         onConfirm={handleDelete}
         isLoading={deleteTunnel.isPending}
+      />
+
+      {/* Impact Preview Dialog */}
+      <ImpactPreviewDialog
+        open={impactDialogOpen}
+        onOpenChange={setImpactDialogOpen}
+        impact={impactData}
+        onConfirm={doSave}
+        isLoading={updateTunnel.isPending}
+      />
+
+      {/* Fallback Confirmation Dialog (when preview API fails) */}
+      <ConfirmDialog
+        open={fallbackConfirmOpen}
+        onOpenChange={setFallbackConfirmOpen}
+        title="Save changes"
+        description="Unable to estimate impact. Save changes anyway?"
+        confirmLabel="Save Anyway"
+        dismissLabel="Cancel"
+        variant="default"
+        onConfirm={doSave}
+        isLoading={updateTunnel.isPending}
       />
     </div>
   );
