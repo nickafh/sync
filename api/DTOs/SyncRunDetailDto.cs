@@ -17,5 +17,6 @@ public record SyncRunDetailDto(
     int ContactsFailed,
     int PhotosUpdated,
     int ThrottleEvents,
-    string? ErrorSummary
+    string? ErrorSummary,
+    TunnelRunSummaryDto[] TunnelSummaries
 );

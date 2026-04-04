@@ -15,6 +15,18 @@ export interface SyncRunDto {
   throttleEvents: number;
 }
 
+export interface TunnelRunSummaryDto {
+  tunnelId: number | null;
+  tunnelName: string;
+  contactsCreated: number;
+  contactsUpdated: number;
+  contactsRemoved: number;
+  contactsSkipped: number;
+  contactsFailed: number;
+  photosUpdated: number;
+  errors: string[];
+}
+
 export interface SyncRunDetailDto {
   id: number;
   runType: string;
@@ -33,6 +45,7 @@ export interface SyncRunDetailDto {
   photosUpdated: number;
   throttleEvents: number;
   errorSummary: string | null;
+  tunnelSummaries: TunnelRunSummaryDto[];
 }
 
 export interface SyncRunItemDto {

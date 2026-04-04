@@ -242,6 +242,77 @@ export default function RunDetailPage() {
         </CardContent>
       </Card>
 
+      {/* Per-Tunnel Breakdown */}
+      {run.tunnelSummaries && run.tunnelSummaries.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Per-Tunnel Breakdown</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {run.tunnelSummaries.map((ts, idx) => (
+                <div key={ts.tunnelId ?? idx}>
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-medium text-sm">{ts.tunnelName}</h4>
+                    {ts.contactsFailed > 0 && (
+                      <span className="text-xs text-red-600 font-medium">
+                        {ts.contactsFailed} failed
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mt-2">
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Created</p>
+                      <p className="text-sm font-medium">{ts.contactsCreated}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Updated</p>
+                      <p className="text-sm font-medium">{ts.contactsUpdated}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Removed</p>
+                      <p className="text-sm font-medium">{ts.contactsRemoved}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Skipped</p>
+                      <p className="text-sm font-medium">{ts.contactsSkipped}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Failed</p>
+                      <p className={`text-sm font-medium ${ts.contactsFailed > 0 ? 'text-red-600' : ''}`}>
+                        {ts.contactsFailed}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-text-muted">Photos</p>
+                      <p className="text-sm font-medium">{ts.photosUpdated}</p>
+                    </div>
+                  </div>
+                  {ts.errors.length > 0 && (
+                    <div className="mt-2 bg-red-50 border border-red-200 rounded-lg p-3">
+                      <p className="text-xs font-medium text-red-700 mb-1">Errors:</p>
+                      <ul className="text-xs text-red-600 space-y-1">
+                        {ts.errors.slice(0, 5).map((err, errIdx) => (
+                          <li key={errIdx}>{err}</li>
+                        ))}
+                        {ts.errors.length > 5 && (
+                          <li className="text-red-400">
+                            ...and {ts.errors.length - 5} more
+                          </li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+                  {idx < run.tunnelSummaries.length - 1 && (
+                    <Separator className="mt-4" />
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Action Filter Tabs */}
       <div className="mt-6">
         <Tabs

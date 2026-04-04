@@ -97,7 +97,7 @@ public class SyncRunsController : ControllerBase
     }
 
     /// <summary>
-    /// GET /api/sync-runs/{id} — Run detail or 404.
+    /// GET /api/sync-runs/{id} — Run detail with per-tunnel summaries (RLOG-02, RLOG-03).
     /// </summary>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetRun(
@@ -107,6 +107,49 @@ public class SyncRunsController : ControllerBase
         var run = await db.SyncRuns.FindAsync(id);
         if (run is null)
             return NotFound(new { message = $"Sync run {id} not found" });
+
+        // Compute per-tunnel summaries from SyncRunItems grouped by TunnelId
+        var tunnelSummaries = await db.SyncRunItems
+            .Where(i => i.SyncRunId == id)
+            .GroupBy(i => i.TunnelId)
+            .Select(g => new
+            {
+                TunnelId = g.Key,
+                Created = g.Count(i => i.Action == "created"),
+                Updated = g.Count(i => i.Action == "updated"),
+                Removed = g.Count(i => i.Action == "removed"),
+                Skipped = g.Count(i => i.Action == "skipped"),
+                Failed = g.Count(i => i.Action == "failed"),
+                Photos = g.Count(i => i.Action == "photo_updated"),
+                Errors = g.Where(i => i.ErrorMessage != null)
+                          .Select(i => i.ErrorMessage!)
+                          .ToArray()
+            })
+            .ToListAsync();
+
+        // Resolve tunnel names
+        var tunnelIds = tunnelSummaries
+            .Where(s => s.TunnelId.HasValue)
+            .Select(s => s.TunnelId!.Value)
+            .Distinct()
+            .ToList();
+
+        var tunnelNames = await db.Tunnels
+            .Where(t => tunnelIds.Contains(t.Id))
+            .ToDictionaryAsync(t => t.Id, t => t.Name);
+
+        var summaryDtos = tunnelSummaries.Select(s => new TunnelRunSummaryDto(
+            s.TunnelId,
+            s.TunnelId.HasValue && tunnelNames.TryGetValue(s.TunnelId.Value, out var name)
+                ? name : "Unknown",
+            s.Created,
+            s.Updated,
+            s.Removed,
+            s.Skipped,
+            s.Failed,
+            s.Photos,
+            s.Errors
+        )).ToArray();
 
         return Ok(new SyncRunDetailDto(
             run.Id,
@@ -125,7 +168,8 @@ public class SyncRunsController : ControllerBase
             run.ContactsFailed,
             run.PhotosUpdated,
             run.ThrottleEvents,
-            run.ErrorSummary));
+            run.ErrorSummary,
+            summaryDtos));
     }
 
     /// <summary>
