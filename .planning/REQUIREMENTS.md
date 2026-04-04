@@ -24,9 +24,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### DDG Resolution & Filter Conversion
 
-- [ ] **DDG-01**: API can list all Dynamic Distribution Groups from Exchange Online PowerShell (one-time call during tunnel setup)
-- [ ] **DDG-02**: API reads the RecipientFilter from a selected DDG
-- [ ] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
+- [x] **DDG-01**: API can list all Dynamic Distribution Groups from Exchange Online PowerShell (one-time call during tunnel setup)
+- [x] **DDG-02**: API reads the RecipientFilter from a selected DDG
+- [x] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
 - [ ] **DDG-04**: Both original DDG reference (name, address, filter) and converted Graph filter are stored on the tunnel
 - [ ] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
 - [ ] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
@@ -191,9 +191,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LOGS-02 | Phase 2 | Complete |
 | LOGS-03 | Phase 2 | Complete |
 | LOGS-04 | Phase 2 | Complete |
-| DDG-01 | Phase 3 | Pending |
-| DDG-02 | Phase 3 | Pending |
-| DDG-03 | Phase 3 | Pending |
+| DDG-01 | Phase 3 | Complete |
+| DDG-02 | Phase 3 | Complete |
+| DDG-03 | Phase 3 | Complete |
 | DDG-04 | Phase 3 | Pending |
 | SCHD-01 | Phase 3 | Complete |
 | SCHD-02 | Phase 3 | Complete |

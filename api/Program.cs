@@ -3,12 +3,14 @@ using AFHSync.Api.Data;
 using AFHSync.Api.Filters;
 using AFHSync.Api.Services;
 using AFHSync.Shared.Enums;
+using Azure.Identity;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Graph;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 
@@ -89,6 +91,22 @@ builder.Services.AddHangfire(config => config
 
 // Graph health check service (D-11)
 builder.Services.AddSingleton<GraphHealthService>();
+
+// GraphServiceClient for DDG member lookups and future Graph API calls
+// Uses same Entra app credentials as GraphHealthService (Graph:TenantId/ClientId/ClientSecret)
+builder.Services.AddSingleton(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+    var credential = new ClientSecretCredential(
+        config["Graph:TenantId"],
+        config["Graph:ClientId"],
+        config["Graph:ClientSecret"]);
+    return new GraphServiceClient(credential);
+});
+
+// DDG resolution services (per D-01, D-02)
+builder.Services.AddScoped<IDDGResolver, DDGResolver>();
+builder.Services.AddSingleton<IFilterConverter, FilterConverter>();
 
 var app = builder.Build();
 
