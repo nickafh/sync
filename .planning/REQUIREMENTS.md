@@ -28,18 +28,18 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **DDG-02**: API reads the RecipientFilter from a selected DDG
 - [x] **DDG-03**: RecipientFilter is parsed and converted to a Microsoft Graph-compatible $filter query
 - [x] **DDG-04**: Both original DDG reference (name, address, filter) and converted Graph filter are stored on the tunnel
-- [x] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
-- [x] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
+- [ ] **DDG-05**: DDG picker in UI shows DDG list with search, type filters (Office/Role/Brand), and live member counts (via Graph filter)
+- [ ] **DDG-06**: Tunnel detail displays source DDG name and plain-language filter translation
 - [ ] **DDG-07**: "Refresh from DDG" button re-reads Exchange filter and updates stored Graph filter
 
 ### Tunnel Management
 
 - [ ] **TUNL-01**: Admin can create a tunnel via 4-step wizard (Name -> Source DDG -> Target Lists -> Review)
-- [x] **TUNL-02**: Admin can view tunnel detail with KPI cards (source contacts, target lists, target users)
-- [x] **TUNL-03**: Admin can edit tunnel (name, source DDG, target lists, field profile, stale policy)
-- [x] **TUNL-04**: Admin can activate/deactivate a tunnel
-- [x] **TUNL-05**: Admin can delete a tunnel (with confirmation, blocked if active sync state exists)
-- [x] **TUNL-06**: Tunnel list page shows table with name, source, contacts, target lists, users, last run, status
+- [ ] **TUNL-02**: Admin can view tunnel detail with KPI cards (source contacts, target lists, target users)
+- [ ] **TUNL-03**: Admin can edit tunnel (name, source DDG, target lists, field profile, stale policy)
+- [ ] **TUNL-04**: Admin can activate/deactivate a tunnel
+- [ ] **TUNL-05**: Admin can delete a tunnel (with confirmation, blocked if active sync state exists)
+- [ ] **TUNL-06**: Tunnel list page shows table with name, source, contacts, target lists, users, last run, status
 - [ ] **TUNL-07**: Impact preview shows estimated creates/updates/removals before saving tunnel changes
 - [ ] **TUNL-08**: High-impact changes (source swap, target removal, disable, delete) require confirmation dialog
 
@@ -95,17 +95,17 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Dashboard
 
-- [x] **DASH-01**: Dashboard shows 4 KPI cards: active tunnels, phone lists, target users, last sync status
-- [x] **DASH-02**: Active tunnel summary with clickable rows to tunnel detail
-- [x] **DASH-03**: Recent runs list (last 5) with status, timing, and counts
-- [x] **DASH-04**: "Run Sync Now" and "Dry Run" buttons in topbar
+- [ ] **DASH-01**: Dashboard shows 4 KPI cards: active tunnels, phone lists, target users, last sync status
+- [ ] **DASH-02**: Active tunnel summary with clickable rows to tunnel detail
+- [ ] **DASH-03**: Recent runs list (last 5) with status, timing, and counts
+- [ ] **DASH-04**: "Run Sync Now" and "Dry Run" buttons in topbar
 
 ### Runs & Logs UI
 
-- [ ] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
-- [ ] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
-- [ ] **RLOG-03**: Run detail shows failure list and warning list
-- [ ] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
+- [x] **RLOG-01**: Run history table with timestamp, type, duration, creates/updates/removals/photos/skipped, status
+- [x] **RLOG-02**: Clickable rows open run detail with per-tunnel summaries
+- [x] **RLOG-03**: Run detail shows failure list and warning list
+- [x] **RLOG-04**: Run items filterable by action type (created, updated, failed, etc.)
 
 ### Settings
 
@@ -200,25 +200,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SCHD-03 | Phase 3 | Complete |
 | SCHD-04 | Phase 3 | Complete |
 | SCHD-05 | Phase 3 | Complete |
-| TUNL-02 | Phase 4 | Complete |
-| TUNL-03 | Phase 4 | Complete |
-| TUNL-04 | Phase 4 | Complete |
-| TUNL-05 | Phase 4 | Complete |
-| TUNL-06 | Phase 4 | Complete |
-| DDG-05 | Phase 4 | Complete |
-| DDG-06 | Phase 4 | Complete |
+| TUNL-02 | Phase 4 | Pending |
+| TUNL-03 | Phase 4 | Pending |
+| TUNL-04 | Phase 4 | Pending |
+| TUNL-05 | Phase 4 | Pending |
+| TUNL-06 | Phase 4 | Pending |
+| DDG-05 | Phase 4 | Pending |
+| DDG-06 | Phase 4 | Pending |
 | LIST-01 | Phase 4 | Pending |
 | LIST-02 | Phase 4 | Pending |
 | FILD-01 | Phase 4 | Pending |
 | FILD-02 | Phase 4 | Pending |
-| DASH-01 | Phase 4 | Complete |
-| DASH-02 | Phase 4 | Complete |
-| DASH-03 | Phase 4 | Complete |
-| DASH-04 | Phase 4 | Complete |
-| RLOG-01 | Phase 4 | Pending |
-| RLOG-02 | Phase 4 | Pending |
-| RLOG-03 | Phase 4 | Pending |
-| RLOG-04 | Phase 4 | Pending |
+| DASH-01 | Phase 4 | Pending |
+| DASH-02 | Phase 4 | Pending |
+| DASH-03 | Phase 4 | Pending |
+| DASH-04 | Phase 4 | Pending |
+| RLOG-01 | Phase 4 | Complete |
+| RLOG-02 | Phase 4 | Complete |
+| RLOG-03 | Phase 4 | Complete |
+| RLOG-04 | Phase 4 | Complete |
 | SETT-01 | Phase 4 | Pending |
 | SETT-02 | Phase 4 | Pending |
 | SETT-03 | Phase 4 | Pending |
