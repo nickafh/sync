@@ -5,6 +5,7 @@ using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Graph;
 
 namespace AFHSync.Api.Controllers;
 
@@ -14,11 +15,19 @@ public class TunnelsController : ControllerBase
 {
     private readonly AFHSyncDbContext _db;
     private readonly IFilterConverter _filterConverter;
+    private readonly GraphServiceClient _graphClient;
+    private readonly IDDGResolver _ddgResolver;
 
-    public TunnelsController(AFHSyncDbContext db, IFilterConverter filterConverter)
+    public TunnelsController(
+        AFHSyncDbContext db,
+        IFilterConverter filterConverter,
+        GraphServiceClient graphClient,
+        IDDGResolver ddgResolver)
     {
         _db = db;
         _filterConverter = filterConverter;
+        _graphClient = graphClient;
+        _ddgResolver = ddgResolver;
     }
 
     /// <summary>
@@ -267,6 +276,112 @@ public class TunnelsController : ControllerBase
         _db.Tunnels.Remove(tunnel);
         await _db.SaveChangesAsync();
         return NoContent();
+    }
+
+    /// <summary>
+    /// POST /api/tunnels/{id}/preview — Estimate creates/updates/removals before saving changes (TUNL-07).
+    /// </summary>
+    [HttpPost("{id:int}/preview")]
+    public async Task<IActionResult> Preview(int id, [FromBody] UpdateTunnelRequest request)
+    {
+        var tunnel = await _db.Tunnels
+            .Include(t => t.TunnelPhoneLists)
+            .FirstOrDefaultAsync(t => t.Id == id);
+
+        if (tunnel is null)
+            return NotFound(new { message = $"Tunnel {id} not found." });
+
+        var currentCount = await _db.ContactSyncStates
+            .Where(c => c.TunnelId == id)
+            .Select(c => c.SourceUserId)
+            .Distinct()
+            .CountAsync();
+
+        var estimatedCreates = 0;
+        var estimatedUpdates = 0;
+        var estimatedRemovals = 0;
+
+        // If source changed, estimate new source count via Graph
+        if (tunnel.SourceIdentifier != request.SourceIdentifier)
+        {
+            try
+            {
+                var usersPage = await _graphClient.Users.GetAsync(cfg =>
+                {
+                    cfg.QueryParameters.Filter = request.SourceIdentifier;
+                    cfg.QueryParameters.Select = new[] { "id" };
+                    cfg.QueryParameters.Top = 999;
+                    cfg.QueryParameters.Count = true;
+                    cfg.Headers.Add("ConsistencyLevel", "eventual");
+                });
+
+                var newCount = usersPage?.Value?.Count ?? 0;
+                estimatedCreates = Math.Max(0, newCount - currentCount);
+                estimatedRemovals = Math.Max(0, currentCount - newCount);
+                estimatedUpdates = Math.Min(currentCount, newCount);
+            }
+            catch
+            {
+                return StatusCode(503, new { message = "Unable to estimate impact." });
+            }
+        }
+        else
+        {
+            estimatedCreates = 0;
+            estimatedUpdates = currentCount;
+            estimatedRemovals = 0;
+        }
+
+        // Check for removed target lists
+        var removedListIds = tunnel.TunnelPhoneLists
+            .Select(tp => tp.PhoneListId)
+            .Except(request.TargetListIds)
+            .ToList();
+
+        if (removedListIds.Count > 0)
+        {
+            var removedContacts = await _db.ContactSyncStates
+                .Where(c => c.TunnelId == id && removedListIds.Contains(c.PhoneListId))
+                .Select(c => c.SourceUserId)
+                .Distinct()
+                .CountAsync();
+
+            estimatedRemovals += removedContacts;
+        }
+
+        return Ok(new ImpactPreviewResponse(estimatedCreates, estimatedUpdates, estimatedRemovals));
+    }
+
+    /// <summary>
+    /// POST /api/tunnels/{id}/refresh-ddg — Re-read DDG filter from Exchange and update tunnel (DDG-07).
+    /// </summary>
+    [HttpPost("{id:int}/refresh-ddg")]
+    public async Task<IActionResult> RefreshDdg(int id, CancellationToken ct)
+    {
+        var tunnel = await _db.Tunnels.FindAsync(id);
+        if (tunnel is null)
+            return NotFound(new { message = $"Tunnel {id} not found." });
+
+        if (string.IsNullOrEmpty(tunnel.SourceSmtpAddress))
+            return BadRequest(new { message = "Tunnel has no source SMTP address." });
+
+        var ddgInfo = await _ddgResolver.GetDdgAsync(tunnel.SourceSmtpAddress, ct);
+        if (ddgInfo is null)
+            return NotFound(new { message = "DDG not found in Exchange." });
+
+        var conversionResult = _filterConverter.Convert(ddgInfo.RecipientFilter);
+
+        tunnel.SourceIdentifier = conversionResult.Filter ?? tunnel.SourceIdentifier;
+        tunnel.SourceFilterPlain = _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter);
+        tunnel.SourceDisplayName = ddgInfo.DisplayName;
+        tunnel.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+
+        return Ok(new RefreshDdgResponse(
+            "Filter refreshed.",
+            conversionResult.Filter,
+            _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter)));
     }
 }
 

@@ -104,7 +104,14 @@ public class PhoneListsController : ControllerBase
                 u.JobTitle,
                 u.Department,
                 u.OfficeLocation,
-                u.BusinessPhone ?? u.MobilePhone
+                u.BusinessPhone ?? u.MobilePhone,
+                u.MobilePhone,
+                u.CompanyName,
+                u.StreetAddress,
+                u.City,
+                u.State,
+                u.PostalCode,
+                u.Country
             ))
             .AsNoTracking()
             .ToListAsync();

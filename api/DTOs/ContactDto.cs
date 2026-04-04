@@ -7,5 +7,12 @@ public record ContactDto(
     string? JobTitle,
     string? Department,
     string? Office,
-    string? Phone
+    string? Phone,
+    string? MobilePhone,
+    string? CompanyName,
+    string? StreetAddress,
+    string? City,
+    string? State,
+    string? PostalCode,
+    string? Country
 );
