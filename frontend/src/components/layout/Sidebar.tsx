@@ -9,7 +9,9 @@ import {
   SlidersHorizontal,
   ClipboardList,
   Settings,
+  LogOut,
 } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 
 const navItems = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -22,6 +24,7 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { username, logout } = useAuth();
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-navy flex flex-col">
@@ -55,6 +58,19 @@ export function Sidebar() {
           );
         })}
       </nav>
+
+      <div className="mt-auto border-t border-white/10 px-4 py-3">
+        {username && (
+          <p className="text-white/60 text-xs truncate mb-2">{username}</p>
+        )}
+        <button
+          onClick={() => void logout()}
+          className="flex items-center gap-3 px-0 h-10 w-full text-[0.8125rem] text-white/90 hover:bg-sidebar-hover rounded transition-colors"
+        >
+          <LogOut size={18} strokeWidth={1.5} />
+          <span>Sign out</span>
+        </button>
+      </div>
     </aside>
   );
 }
