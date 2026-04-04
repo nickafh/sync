@@ -116,9 +116,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Design System
 
-- [ ] **DSGN-01**: Sotheby's-aligned color palette (navy #1B2A4A, gold #C9A84C, warm neutrals)
-- [ ] **DSGN-02**: Typography: Cormorant Garamond headings, DM Sans body
-- [ ] **DSGN-03**: Consistent UI patterns: status badges, confirmation dialogs, impact previews
+- [x] **DSGN-01**: Sotheby's-aligned color palette (navy #1B2A4A, gold #C9A84C, warm neutrals)
+- [x] **DSGN-02**: Typography: Cormorant Garamond headings, DM Sans body
+- [x] **DSGN-03**: Consistent UI patterns: status badges, confirmation dialogs, impact previews
 
 ## v2 Requirements
 
@@ -223,9 +223,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SETT-02 | Phase 4 | Pending |
 | SETT-03 | Phase 4 | Pending |
 | SETT-04 | Phase 4 | Pending |
-| DSGN-01 | Phase 4 | Pending |
-| DSGN-02 | Phase 4 | Pending |
-| DSGN-03 | Phase 4 | Pending |
+| DSGN-01 | Phase 4 | Complete |
+| DSGN-02 | Phase 4 | Complete |
+| DSGN-03 | Phase 4 | Complete |
 | TUNL-01 | Phase 5 | Pending |
 | TUNL-07 | Phase 5 | Pending |
 | TUNL-08 | Phase 5 | Pending |
