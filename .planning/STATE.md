@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-04-04T03:24:00.278Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-04-04T04:49:41.434Z"
 last_activity: 2026-04-04
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 5
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
   percent: 25
 ---
 
@@ -21,12 +21,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-03)
 
 **Core value:** Every AFH employee sees up-to-date office contact lists on their phone without manual effort
-**Current focus:** Phase 02 — sync-engine-core
+**Current focus:** Phase 03 — api-layer-scheduling
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
+Phase: 03 (api-layer-scheduling) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
 Last activity: 2026-04-04
 
@@ -60,6 +60,7 @@ Progress: [███░░░░░░░] 25%
 | Phase 02 P02 | 12 | 2 tasks | 10 files |
 | Phase 02 P03 | 12 | 3 tasks | 10 files |
 | Phase 02 P04 | 3 | 2 tasks | 5 files |
+| Phase 03-api-layer-scheduling P02 | 35 | 2 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,9 @@ Recent decisions affecting current work:
 - [Phase 02]: SpecificUsers TargetScope deferred with warning log in SyncEngine — AllUsers handles Phase 2 scope, SpecificUsers is Phase 3+ concern
 - [Phase 02]: ThrottleCounter is a concrete singleton class (no interface) — simple value holder, tests construct it directly, no mocking needed
 - [Phase 02]: Factory delegate for GraphResilienceHandler DI registration replaces bare AddSingleton to inject ThrottleCounter.Increment as onThrottle callback, closing the ThrottleEvents always-0 gap
+- [Phase 03-02]: EnumHelpers.ToPgName<T> uses reflection on PgNameAttribute to serialize enums as PostgreSQL native type strings — consistent with database representation and frontend expectations
+- [Phase 03-02]: TestWebApplicationFactory uses UseInternalServiceProvider with dedicated inMemoryServiceProvider to eliminate EF Core Npgsql/InMemory dual-provider conflict when seeding test data through factory scope
+- [Phase 03-02]: PhoneListsController contacts endpoint uses two-query approach (distinct IDs then SourceUsers Contains) instead of GroupBy+Include to avoid EF Core InMemory GroupBy limitations
 
 ### Pending Todos
 
@@ -103,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-04T03:09:48.443Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-04-04T04:49:41.432Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None

@@ -66,12 +66,12 @@ Plans:
   2. Sync runs execute automatically on a configurable cron schedule (default every 4 hours) without manual intervention
   3. Admin can trigger a manual sync (real or dry-run) for specific tunnels or all active tunnels via API, and concurrent runs are blocked
   4. Dry-run mode executes the full sync pipeline but writes nothing to Graph, producing the same audit trail as a real run
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
-- [ ] 03-03: TBD
+- [ ] 03-01-PLAN.md -- Hangfire infrastructure (client in API, server in worker), recurring job registration, SyncRunsController with fire-and-forget trigger + concurrent guard, SettingsController with cron reschedule
+- [x] 03-02-PLAN.md -- Entity CRUD controllers (TunnelsController, PhoneListsController, FieldProfilesController, DashboardController) with all DTOs matching spec response shapes
+- [ ] 03-03-PLAN.md -- DDG proxy: Exchange PowerShell DDGResolver via System.Management.Automation, OPATH-to-OData FilterConverter, GraphController endpoints
 
 ### Phase 4: Admin Frontend
 **Goal**: Admins can manage the entire sync platform through a polished web UI -- viewing dashboard KPIs, browsing and editing tunnels, managing phone lists, configuring field profiles, reviewing run history, and adjusting settings
@@ -133,7 +133,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation & Infrastructure | 4/4 | Complete   | 2026-04-04 |
 | 2. Sync Engine Core | 4/4 | Complete   | 2026-04-04 |
-| 3. API Layer & Scheduling | 0/3 | Not started | - |
+| 3. API Layer & Scheduling | 1/3 | In Progress|  |
 | 4. Admin Frontend | 0/4 | Not started | - |
 | 5. Differentiator Features | 0/3 | Not started | - |
 | 6. Photo Sync | 0/2 | Not started | - |
