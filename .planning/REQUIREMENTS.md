@@ -95,10 +95,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Dashboard
 
-- [ ] **DASH-01**: Dashboard shows 4 KPI cards: active tunnels, phone lists, target users, last sync status
-- [ ] **DASH-02**: Active tunnel summary with clickable rows to tunnel detail
-- [ ] **DASH-03**: Recent runs list (last 5) with status, timing, and counts
-- [ ] **DASH-04**: "Run Sync Now" and "Dry Run" buttons in topbar
+- [x] **DASH-01**: Dashboard shows 4 KPI cards: active tunnels, phone lists, target users, last sync status
+- [x] **DASH-02**: Active tunnel summary with clickable rows to tunnel detail
+- [x] **DASH-03**: Recent runs list (last 5) with status, timing, and counts
+- [x] **DASH-04**: "Run Sync Now" and "Dry Run" buttons in topbar
 
 ### Runs & Logs UI
 
@@ -211,10 +211,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIST-02 | Phase 4 | Pending |
 | FILD-01 | Phase 4 | Pending |
 | FILD-02 | Phase 4 | Pending |
-| DASH-01 | Phase 4 | Pending |
-| DASH-02 | Phase 4 | Pending |
-| DASH-03 | Phase 4 | Pending |
-| DASH-04 | Phase 4 | Pending |
+| DASH-01 | Phase 4 | Complete |
+| DASH-02 | Phase 4 | Complete |
+| DASH-03 | Phase 4 | Complete |
+| DASH-04 | Phase 4 | Complete |
 | RLOG-01 | Phase 4 | Pending |
 | RLOG-02 | Phase 4 | Pending |
 | RLOG-03 | Phase 4 | Pending |
