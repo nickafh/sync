@@ -45,15 +45,15 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Phone List Management
 
-- [ ] **LIST-01**: Admin can view all phone lists with contact counts, user counts, and source tunnels
-- [ ] **LIST-02**: Admin can view contacts in a phone list with pagination
+- [x] **LIST-01**: Admin can view all phone lists with contact counts, user counts, and source tunnels
+- [x] **LIST-02**: Admin can view contacts in a phone list with pagination
 - [ ] **LIST-03**: Lists on Phones page shows list selector (left) and iPhone frame preview (right)
 - [ ] **LIST-04**: Clicking a contact in phone preview shows full contact card detail
 
 ### Field Profiles
 
-- [ ] **FILD-01**: Admin can view field profiles with all field settings grouped by section
-- [ ] **FILD-02**: Admin can edit field behavior for each field (always, add_missing, nosync, remove_blank)
+- [x] **FILD-01**: Admin can view field profiles with all field settings grouped by section
+- [x] **FILD-02**: Admin can edit field behavior for each field (always, add_missing, nosync, remove_blank)
 - [ ] **FILD-03**: Field mapping page shows grouped field rows (left) and live contact card preview (right)
 - [ ] **FILD-04**: Contact card preview updates in real-time as field behaviors change
 
@@ -109,10 +109,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Settings
 
-- [ ] **SETT-01**: Admin can configure sync schedule (cron expression or dropdown)
-- [ ] **SETT-02**: Admin can configure photo sync mode
-- [ ] **SETT-03**: Admin can configure batch size and parallelism
-- [ ] **SETT-04**: Admin can configure default stale contact policy and hold days
+- [x] **SETT-01**: Admin can configure sync schedule (cron expression or dropdown)
+- [x] **SETT-02**: Admin can configure photo sync mode
+- [x] **SETT-03**: Admin can configure batch size and parallelism
+- [x] **SETT-04**: Admin can configure default stale contact policy and hold days
 
 ### Design System
 
@@ -207,10 +207,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TUNL-06 | Phase 4 | Pending |
 | DDG-05 | Phase 4 | Pending |
 | DDG-06 | Phase 4 | Pending |
-| LIST-01 | Phase 4 | Pending |
-| LIST-02 | Phase 4 | Pending |
-| FILD-01 | Phase 4 | Pending |
-| FILD-02 | Phase 4 | Pending |
+| LIST-01 | Phase 4 | Complete |
+| LIST-02 | Phase 4 | Complete |
+| FILD-01 | Phase 4 | Complete |
+| FILD-02 | Phase 4 | Complete |
 | DASH-01 | Phase 4 | Pending |
 | DASH-02 | Phase 4 | Pending |
 | DASH-03 | Phase 4 | Pending |
@@ -219,10 +219,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RLOG-02 | Phase 4 | Pending |
 | RLOG-03 | Phase 4 | Pending |
 | RLOG-04 | Phase 4 | Pending |
-| SETT-01 | Phase 4 | Pending |
-| SETT-02 | Phase 4 | Pending |
-| SETT-03 | Phase 4 | Pending |
-| SETT-04 | Phase 4 | Pending |
+| SETT-01 | Phase 4 | Complete |
+| SETT-02 | Phase 4 | Complete |
+| SETT-03 | Phase 4 | Complete |
+| SETT-04 | Phase 4 | Complete |
 | DSGN-01 | Phase 4 | Pending |
 | DSGN-02 | Phase 4 | Pending |
 | DSGN-03 | Phase 4 | Pending |
