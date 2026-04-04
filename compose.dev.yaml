@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: afh-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: afhsync
+      POSTGRES_USER: afhsync
+      POSTGRES_PASSWORD: devpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U afhsync"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: afh-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    profiles:
+      - tools
+
+volumes:
+  pgdata-dev:

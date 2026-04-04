@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: afh-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: afhsync
+      POSTGRES_USER: afhsync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U afhsync"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: afh-api
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__Default=Host=postgres;Database=afhsync;Username=afhsync;Password=${POSTGRES_PASSWORD}
+      - Graph__TenantId=${GRAPH_TENANT_ID}
+      - Graph__ClientId=${GRAPH_CLIENT_ID}
+      - Graph__ClientSecret=${GRAPH_CLIENT_SECRET}
+      - Auth__JwtSecret=${JWT_SECRET}
+      - Auth__AdminUsername=${ADMIN_USERNAME}
+      - Auth__AdminPassword=${ADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: afh-worker
+    restart: unless-stopped
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - ConnectionStrings__Default=Host=postgres;Database=afhsync;Username=afhsync;Password=${POSTGRES_PASSWORD}
+      - Graph__TenantId=${GRAPH_TENANT_ID}
+      - Graph__ClientId=${GRAPH_CLIENT_ID}
+      - Graph__ClientSecret=${GRAPH_CLIENT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: afh-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: afh-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+volumes:
+  pgdata:

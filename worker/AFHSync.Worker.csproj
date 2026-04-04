@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-AFHSync.Worker-812b1c5d-5190-40e7-b7fc-c8303fec3bc6</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\shared\AFHSync.Shared.csproj" />
+  </ItemGroup>
+</Project>
