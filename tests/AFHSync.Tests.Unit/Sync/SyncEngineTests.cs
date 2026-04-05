@@ -45,7 +45,8 @@ public class SyncEngineTests
         FakeContactFolderManager? folderManager = null,
         FakeStaleContactHandler? staleHandler = null,
         FakeRunLogger? runLogger = null,
-        ThrottleCounter? throttleCounter = null)
+        ThrottleCounter? throttleCounter = null,
+        FakePhotoSyncService? photoSyncService = null)
     {
         return new SyncEngine(
             CreateFactory(dbName),
@@ -56,6 +57,7 @@ public class SyncEngineTests
             staleHandler ?? new FakeStaleContactHandler(),
             runLogger ?? new FakeRunLogger(),
             throttleCounter ?? new ThrottleCounter(),
+            photoSyncService ?? new FakePhotoSyncService(),
             CreateEmptyConfig(),
             NullLogger<SyncEngine>.Instance);
     }
@@ -335,6 +337,98 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Test 9: RunAsync in included mode calls PhotoSync for each tunnel
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_IncludedMode_CallsPhotoSyncForEachTunnel()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using var seedCtx = MakeDbContext(dbName);
+        // Seed photo_sync_mode = included
+        seedCtx.AppSettings.Add(new AppSetting
+        {
+            Id = 100, Key = "photo_sync_mode", Value = "included",
+            Description = "Test", UpdatedAt = DateTime.UtcNow
+        });
+        seedCtx.Tunnels.AddRange(
+            new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, PhotoSyncEnabled = true, StalePolicy = StalePolicy.AutoRemove },
+            new Tunnel { Id = 2, Name = "T2", Status = TunnelStatus.Active, PhotoSyncEnabled = true, StalePolicy = StalePolicy.AutoRemove }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var sourceResolver = new FakeSourceResolver([]);
+        var photoSync = new FakePhotoSyncService();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, photoSyncService: photoSync);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        // Photo sync called once per active tunnel in included mode
+        Assert.Equal(2, photoSync.SyncPhotosCallCount);
+    }
+
+    // ==============================
+    // Test 10: RunAsync in disabled mode skips PhotoSync
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_DisabledMode_SkipsPhotoSync()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using var seedCtx = MakeDbContext(dbName);
+        // Seed photo_sync_mode = disabled
+        seedCtx.AppSettings.Add(new AppSetting
+        {
+            Id = 100, Key = "photo_sync_mode", Value = "disabled",
+            Description = "Test", UpdatedAt = DateTime.UtcNow
+        });
+        seedCtx.Tunnels.Add(
+            new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, PhotoSyncEnabled = true, StalePolicy = StalePolicy.AutoRemove }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var sourceResolver = new FakeSourceResolver([]);
+        var photoSync = new FakePhotoSyncService();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, photoSyncService: photoSync);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        // Photo sync never called in disabled mode
+        Assert.Equal(0, photoSync.SyncPhotosCallCount);
+        Assert.Equal(0, photoSync.RunAllCallCount);
+    }
+
+    // ==============================
+    // Test 11: RunAsync in separate_pass with auto_trigger calls RunAllAsync
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_SeparatePassWithAutoTrigger_CallsRunAllAsync()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using var seedCtx = MakeDbContext(dbName);
+        // Seed photo_sync_mode = separate_pass with auto_trigger = true
+        seedCtx.AppSettings.AddRange(
+            new AppSetting { Id = 100, Key = "photo_sync_mode", Value = "separate_pass", Description = "Test", UpdatedAt = DateTime.UtcNow },
+            new AppSetting { Id = 101, Key = "photo_sync_auto_trigger", Value = "true", Description = "Test", UpdatedAt = DateTime.UtcNow }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var photoSync = new FakePhotoSyncService();
+        var engine = CreateEngine(dbName, photoSyncService: photoSync);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        // In separate_pass mode with auto_trigger, RunAllAsync should be called
+        Assert.Equal(1, photoSync.RunAllCallCount);
+        // SyncPhotosForTunnelAsync should NOT be called (not included mode)
+        Assert.Equal(0, photoSync.SyncPhotosCallCount);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -405,6 +499,26 @@ public class SyncEngineTests
             Tunnel tunnel, int phoneListId, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
             => Task.FromResult(new StaleResult(0, 0));
+    }
+
+    private sealed class FakePhotoSyncService : IPhotoSyncService
+    {
+        public int SyncPhotosCallCount { get; private set; }
+        public int RunAllCallCount { get; private set; }
+
+        public Task<(int updated, int failed)> SyncPhotosForTunnelAsync(
+            Tunnel tunnel, SyncRun run, List<SourceUser> sourceUsers,
+            bool isDryRun, CancellationToken ct)
+        {
+            SyncPhotosCallCount++;
+            return Task.FromResult((0, 0));
+        }
+
+        public Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct)
+        {
+            RunAllCallCount++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeRunLogger : IRunLogger

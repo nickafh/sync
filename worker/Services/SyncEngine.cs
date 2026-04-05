@@ -19,6 +19,7 @@ namespace AFHSync.Worker.Services;
 ///   4. Write creates/updates to Graph via IContactWriter
 ///   5. Handle stale contacts per tunnel policy via IStaleContactHandler
 ///   6. Log all actions via IRunLogger
+///   7. Photo sync trailing pass (D-01, included mode only)
 ///
 /// Mailbox processing is bounded by SemaphoreSlim (D-14, D-15).
 /// Dry-run mode computes all actions without Graph writes.
@@ -32,6 +33,7 @@ public sealed class SyncEngine(
     IStaleContactHandler staleContactHandler,
     IRunLogger runLogger,
     ThrottleCounter throttleCounter,
+    IPhotoSyncService photoSyncService,
     IConfiguration configuration,
     ILogger<SyncEngine> logger) : ISyncEngine
 {
@@ -60,10 +62,14 @@ public sealed class SyncEngine(
         var tunnels = await LoadTunnelsAsync(tunnelId, ct);
         logger.LogInformation("Loaded {Count} tunnel(s) to process", tunnels.Count);
 
+        // Step 3b: Read photo_sync_mode once at run start (T-06-04: prevents mid-run mode switch).
+        var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", ct);
+
         // Step 4: Run-level aggregate counters.
         int totalCreated = 0, totalUpdated = 0, totalSkipped = 0;
         int totalFailed = 0, totalRemoved = 0;
         int tunnelsProcessed = 0, tunnelsWarned = 0, tunnelsFailed = 0;
+        int totalPhotosUpdated = 0, totalPhotosFailed = 0;
 
         // Step 5: Process each tunnel sequentially (D-13).
         foreach (var tunnel in tunnels)
@@ -83,6 +89,23 @@ public sealed class SyncEngine(
                     tunnelsWarned++;
                 else
                     tunnelsProcessed++;
+
+                // Photo sync trailing pass (D-01: runs AFTER all contact creates/updates for this tunnel)
+                if (photoSyncMode == "included" && tunnel.PhotoSyncEnabled)
+                {
+                    try
+                    {
+                        var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel, ct);
+                        var (photosUpdated, photosFailed) = await photoSyncService
+                            .SyncPhotosForTunnelAsync(tunnel, run, sourceUsers, isDryRun, ct);
+                        totalPhotosUpdated += photosUpdated;
+                        totalPhotosFailed += photosFailed;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Photo sync failed for tunnel {TunnelId}", tunnel.Id);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -92,8 +115,23 @@ public sealed class SyncEngine(
             }
         }
 
+        // Step 5b: Auto-trigger photo sync for separate_pass mode (D-02)
+        if (photoSyncMode == "separate_pass")
+        {
+            var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", ct);
+            if (autoTrigger == "true")
+            {
+                logger.LogInformation("Auto-triggering photo sync after contact sync (D-02)");
+                await photoSyncService.RunAllAsync(RunType.Scheduled, isDryRun, ct);
+            }
+        }
+
         // Step 6: Flush all buffered SyncRunItems.
         await runLogger.FlushItemsAsync(ct);
+
+        // Update run with photo counts before finalize.
+        run.PhotosUpdated = totalPhotosUpdated;
+        run.PhotosFailed = totalPhotosFailed;
 
         // Step 7: Determine final status.
         var finalStatus = DetermineStatus(tunnels.Count, tunnelsProcessed, tunnelsWarned, tunnelsFailed, totalFailed);
@@ -497,6 +535,41 @@ public sealed class SyncEngine(
             previousHash,
             fields = changes
         });
+    }
+
+    /// <summary>
+    /// Reads an app_setting value from the database with a fallback default.
+    /// </summary>
+    private async Task<string> ReadAppSettingAsync(string key, string defaultValue, CancellationToken ct)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+            var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == key, ct);
+            return setting?.Value ?? defaultValue;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to read {Key} from app_settings, using default: {Default}", key, defaultValue);
+            return defaultValue;
+        }
+    }
+
+    /// <summary>
+    /// Loads source users that have existing synced contacts for a given tunnel.
+    /// Photo sync needs existing contacts (D-01: trailing pass after contact creates).
+    /// </summary>
+    private async Task<List<SourceUser>> LoadSourceUsersForTunnelAsync(Tunnel tunnel, CancellationToken ct)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+        var sourceUserIds = await db.ContactSyncStates
+            .Where(s => s.TunnelId == tunnel.Id && s.GraphContactId != null)
+            .Select(s => s.SourceUserId)
+            .Distinct()
+            .ToListAsync(ct);
+        return await db.SourceUsers
+            .Where(u => sourceUserIds.Contains(u.Id))
+            .ToListAsync(ct);
     }
 
     private static SyncStatus DetermineStatus(

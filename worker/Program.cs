@@ -71,6 +71,7 @@ try
         services.AddScoped<IStaleContactHandler, StaleContactHandler>();
         services.AddScoped<IRunLogger, RunLogger>();
         services.AddScoped<ISyncEngine, SyncEngine>();
+        services.AddScoped<IPhotoSyncService, PhotoSyncService>();
 
         // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17)
         services.AddHangfire(config => config
@@ -106,6 +107,30 @@ try
             cronExpression);
 
         Log.Information("Registered recurring sync job with cron: {Cron}", cronExpression);
+
+        // Register photo sync recurring job for separate_pass mode (D-02, PHOT-03)
+        var photoModeSetting = await db.AppSettings
+            .FirstOrDefaultAsync(s => s.Key == "photo_sync_mode");
+        var photoSyncMode = photoModeSetting?.Value ?? "included";
+
+        if (photoSyncMode == "separate_pass")
+        {
+            var photoCronSetting = await db.AppSettings
+                .FirstOrDefaultAsync(s => s.Key == "photo_sync_cron");
+            var photoCronExpression = photoCronSetting?.Value ?? "0 */6 * * *";
+
+            recurringJobManager.AddOrUpdate<IPhotoSyncService>(
+                "photo-sync-all",
+                svc => svc.RunAllAsync(RunType.Scheduled, false, CancellationToken.None),
+                photoCronExpression);
+
+            Log.Information("Registered photo sync recurring job with cron: {Cron}", photoCronExpression);
+        }
+        else
+        {
+            // Remove the job if mode is not separate_pass (clean up if mode was changed)
+            recurringJobManager.RemoveIfExists("photo-sync-all");
+        }
     }
 
     await host.RunAsync();

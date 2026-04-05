@@ -28,7 +28,9 @@ public class AppSettingConfiguration : IEntityTypeConfiguration<AppSetting>
             new AppSetting { Id = 6, Key = "stale_hold_days_default", Value = "14", Description = "Default hold period before auto-remove" },
             new AppSetting { Id = 7, Key = "graph_tenant_id", Value = "", Description = "Azure AD Tenant ID" },
             new AppSetting { Id = 8, Key = "graph_client_id", Value = "", Description = "Entra App Registration Client ID" },
-            new AppSetting { Id = 9, Key = "graph_client_secret", Value = "", Description = "Entra App Registration Client Secret (use Key Vault in production)" }
+            new AppSetting { Id = 9, Key = "graph_client_secret", Value = "", Description = "Entra App Registration Client Secret (use Key Vault in production)" },
+            new AppSetting { Id = 10, Key = "photo_sync_cron", Value = "0 */6 * * *", Description = "Photo sync schedule for separate_pass mode (every 6 hours)" },
+            new AppSetting { Id = 11, Key = "photo_sync_auto_trigger", Value = "false", Description = "Auto-trigger photo sync after contact sync completes (separate_pass mode)" }
         );
     }
 }
