@@ -40,6 +40,7 @@ builder.Services.AddDbContext<AFHSyncDbContext>(options =>
         builder.Configuration.GetConnectionString("Default"),
         o =>
         {
+            o.MigrationsAssembly("AFHSync.Api");
             o.MapEnum<SourceType>("source_type");
             o.MapEnum<TargetScope>("target_scope");
             o.MapEnum<StalePolicy>("stale_policy");
