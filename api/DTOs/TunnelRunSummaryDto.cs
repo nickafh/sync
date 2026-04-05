@@ -9,5 +9,6 @@ public record TunnelRunSummaryDto(
     int ContactsSkipped,
     int ContactsFailed,
     int PhotosUpdated,
+    int PhotosFailed,
     string[] Errors
 );

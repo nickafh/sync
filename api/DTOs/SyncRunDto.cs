@@ -14,5 +14,6 @@ public record SyncRunDto(
     int ContactsSkipped,
     int ContactsFailed,
     int PhotosUpdated,
+    int PhotosFailed,
     int ThrottleEvents
 );

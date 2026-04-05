@@ -90,6 +90,7 @@ public class SyncRunsController : ControllerBase
                 r.ContactsSkipped,
                 r.ContactsFailed,
                 r.PhotosUpdated,
+                r.PhotosFailed,
                 r.ThrottleEvents))
             .ToListAsync();
 
@@ -121,6 +122,7 @@ public class SyncRunsController : ControllerBase
                 Skipped = g.Count(i => i.Action == "skipped"),
                 Failed = g.Count(i => i.Action == "failed"),
                 Photos = g.Count(i => i.Action == "photo_updated"),
+                PhotosFailed = g.Count(i => i.Action == "photo_failed"),
                 Errors = g.Where(i => i.ErrorMessage != null)
                           .Select(i => i.ErrorMessage!)
                           .ToArray()
@@ -148,6 +150,7 @@ public class SyncRunsController : ControllerBase
             s.Skipped,
             s.Failed,
             s.Photos,
+            s.PhotosFailed,
             s.Errors
         )).ToArray();
 
@@ -167,6 +170,7 @@ public class SyncRunsController : ControllerBase
             run.ContactsSkipped,
             run.ContactsFailed,
             run.PhotosUpdated,
+            run.PhotosFailed,
             run.ThrottleEvents,
             run.ErrorSummary,
             summaryDtos));

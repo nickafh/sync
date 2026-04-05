@@ -90,7 +90,8 @@ public class TunnelsController : ControllerBase
                 t.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
                 estimatedContacts,
                 estimatedTargetUsers,
-                lastSync
+                lastSync,
+                t.PhotoSyncEnabled
             ));
         }
 
@@ -130,7 +131,8 @@ public class TunnelsController : ControllerBase
             tunnel.FieldProfile?.Name,
             tunnel.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
             tunnel.CreatedAt,
-            tunnel.UpdatedAt
+            tunnel.UpdatedAt,
+            tunnel.PhotoSyncEnabled
         );
 
         return Ok(dto);
@@ -165,6 +167,7 @@ public class TunnelsController : ControllerBase
             FieldProfileId = request.FieldProfileId,
             StalePolicy = stalePolicy,
             StaleHoldDays = request.StaleDays,
+            PhotoSyncEnabled = request.PhotoSyncEnabled,
             Status = TunnelStatus.Active,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -217,6 +220,7 @@ public class TunnelsController : ControllerBase
         tunnel.FieldProfileId = request.FieldProfileId;
         tunnel.StalePolicy = stalePolicy;
         tunnel.StaleHoldDays = request.StaleDays;
+        tunnel.PhotoSyncEnabled = request.PhotoSyncEnabled;
         tunnel.UpdatedAt = DateTime.UtcNow;
 
         // Replace TunnelPhoneList join records

@@ -13,5 +13,6 @@ public record UpdateTunnelRequest(
     int[] TargetListIds,
     int? FieldProfileId,
     string StalePolicy,
-    int StaleDays = 14
+    int StaleDays = 14,
+    bool PhotoSyncEnabled = true
 );

@@ -17,5 +17,6 @@ public record TunnelDetailDto(
     string? FieldProfileName,
     TunnelTargetListDto[] TargetLists,
     DateTime CreatedAt,
-    DateTime UpdatedAt
+    DateTime UpdatedAt,
+    bool PhotoSyncEnabled
 );

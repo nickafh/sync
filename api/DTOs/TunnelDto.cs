@@ -16,7 +16,8 @@ public record TunnelDto(
     TunnelTargetListDto[] TargetLists,
     int EstimatedContacts,
     int EstimatedTargetUsers,
-    TunnelLastSyncDto? LastSync
+    TunnelLastSyncDto? LastSync,
+    bool PhotoSyncEnabled
 );
 
 public record TunnelTargetListDto(int Id, string Name);
