@@ -33,6 +33,11 @@ services:
       - Auth__JwtSecret=${JWT_SECRET}
       - Auth__AdminUsername=${ADMIN_USERNAME}
       - Auth__AdminPassword=${ADMIN_PASSWORD}
+      - Exchange__CertificatePath=/app/certs/exchange-cert.pfx
+      - Exchange__AppId=${GRAPH_CLIENT_ID}
+      - Exchange__Organization=atlantafinehomes.com
+    volumes:
+      - ./exchange-cert.pfx:/app/certs/exchange-cert.pfx:ro
     depends_on:
       postgres:
         condition: service_healthy
