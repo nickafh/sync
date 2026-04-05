@@ -32,6 +32,8 @@ import {
 } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import type { DdgDto } from '@/types/ddg';
 import type {
   UpdateTunnelRequest,
@@ -112,6 +114,7 @@ export default function TunnelDetailPage() {
     fieldProfileId: null,
     stalePolicy: '',
     staleDays: 14,
+    photoSyncEnabled: true,
   });
 
   useEffect(() => {
@@ -128,6 +131,7 @@ export default function TunnelDetailPage() {
         fieldProfileId: tunnel.fieldProfileId,
         stalePolicy: tunnel.stalePolicy,
         staleDays: tunnel.staleHoldDays,
+        photoSyncEnabled: tunnel.photoSyncEnabled,
       });
     }
   }, [tunnel, isEditing]);
@@ -146,6 +150,7 @@ export default function TunnelDetailPage() {
       fieldProfileId: tunnel.fieldProfileId,
       stalePolicy: tunnel.stalePolicy,
       staleDays: tunnel.staleHoldDays,
+      photoSyncEnabled: tunnel.photoSyncEnabled,
     });
     setIsEditing(true);
   };
@@ -164,6 +169,7 @@ export default function TunnelDetailPage() {
       fieldProfileId: tunnel.fieldProfileId,
       stalePolicy: tunnel.stalePolicy,
       staleDays: tunnel.staleHoldDays,
+      photoSyncEnabled: tunnel.photoSyncEnabled,
     });
     setIsEditing(false);
   };
@@ -639,6 +645,31 @@ export default function TunnelDetailPage() {
                 </div>
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Photo Sync Toggle (D-13) */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Photo Sync</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="photo-sync-toggle">Enable Photo Sync</Label>
+                <p className="text-sm text-text-muted">
+                  Sync contact photos for this tunnel. Disable to exclude this tunnel from photo sync.
+                </p>
+              </div>
+              <Switch
+                id="photo-sync-toggle"
+                checked={editForm.photoSyncEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  setEditForm((prev) => ({ ...prev, photoSyncEnabled: checked }))
+                }
+                disabled={!isEditing}
+              />
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -14,6 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 
 const cronPresets = [
@@ -52,6 +54,8 @@ export default function SettingsPage() {
 
   // Photo Sync (SETT-02)
   const [photoSyncMode, setPhotoSyncMode] = useState('');
+  const [photoCron, setPhotoCron] = useState('0 */6 * * *');
+  const [photoAutoTrigger, setPhotoAutoTrigger] = useState(false);
   const [savingPhoto, setSavingPhoto] = useState(false);
 
   // Performance (SETT-03)
@@ -69,6 +73,10 @@ export default function SettingsPage() {
     if (settings) {
       setCronExpression(getSetting('sync_schedule_cron'));
       setPhotoSyncMode(getSetting('photo_sync_mode'));
+      const photoCronSetting = settings.find(s => s.key === 'photo_sync_cron');
+      if (photoCronSetting) setPhotoCron(photoCronSetting.value);
+      const autoTriggerSetting = settings.find(s => s.key === 'photo_sync_auto_trigger');
+      if (autoTriggerSetting) setPhotoAutoTrigger(autoTriggerSetting.value === 'true');
       setBatchSize(getSetting('batch_size'));
       setParallelism(getSetting('parallelism'));
       setStalePolicy(getSetting('stale_policy_default'));
@@ -94,12 +102,19 @@ export default function SettingsPage() {
   async function savePhotoSync() {
     setSavingPhoto(true);
     try {
-      await updateSettings.mutateAsync({
-        settings: [{ key: 'photo_sync_mode', value: photoSyncMode }],
-      });
-      toast.success('Settings saved.');
+      const settingsToSave = [
+        { key: 'photo_sync_mode', value: photoSyncMode },
+      ];
+      if (photoSyncMode === 'separate_pass') {
+        settingsToSave.push(
+          { key: 'photo_sync_cron', value: photoCron },
+          { key: 'photo_sync_auto_trigger', value: String(photoAutoTrigger) },
+        );
+      }
+      await updateSettings.mutateAsync({ settings: settingsToSave });
+      toast.success('Photo sync settings saved.');
     } catch {
-      toast.error('Something went wrong. Please try again.');
+      toast.error('Failed to save photo sync settings.');
     } finally {
       setSavingPhoto(false);
     }
@@ -224,6 +239,35 @@ export default function SettingsPage() {
                 <SelectItem value="disabled">Disabled</SelectItem>
               </SelectContent>
             </Select>
+            {photoSyncMode === 'separate_pass' && (
+              <div className="space-y-4 mt-4">
+                <Separator />
+                <div className="space-y-2">
+                  <Label>Photo Sync Schedule (Cron)</Label>
+                  <Input
+                    value={photoCron}
+                    onChange={(e) => setPhotoCron(e.target.value)}
+                    placeholder="0 */6 * * *"
+                  />
+                  <p className="text-xs text-text-muted">
+                    Cron expression for photo sync schedule. Default: every 6 hours.
+                  </p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label htmlFor="photo-auto-trigger">Auto-trigger after contact sync</Label>
+                    <p className="text-xs text-text-muted">
+                      Automatically run photo sync after each contact sync completes.
+                    </p>
+                  </div>
+                  <Switch
+                    id="photo-auto-trigger"
+                    checked={photoAutoTrigger}
+                    onCheckedChange={setPhotoAutoTrigger}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </SettingsCard>
 

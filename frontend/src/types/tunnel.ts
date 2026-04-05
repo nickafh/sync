@@ -15,6 +15,7 @@ export interface TunnelDto {
   estimatedContacts: number;
   estimatedTargetUsers: number;
   lastSync: TunnelLastSyncDto | null;
+  photoSyncEnabled: boolean;
 }
 
 export interface TunnelDetailDto {
@@ -35,6 +36,7 @@ export interface TunnelDetailDto {
   targetLists: TunnelTargetListDto[];
   createdAt: string;
   updatedAt: string;
+  photoSyncEnabled: boolean;
 }
 
 export interface TunnelTargetListDto {
@@ -60,6 +62,7 @@ export interface UpdateTunnelRequest {
   fieldProfileId: number | null;
   stalePolicy: string;
   staleDays: number;
+  photoSyncEnabled?: boolean;
 }
 
 export interface StatusUpdateRequest {
@@ -78,6 +81,7 @@ export interface CreateTunnelRequest {
   fieldProfileId: number | null;
   stalePolicy: string;
   staleDays: number;
+  photoSyncEnabled?: boolean;
 }
 
 export interface ImpactPreviewResponse {

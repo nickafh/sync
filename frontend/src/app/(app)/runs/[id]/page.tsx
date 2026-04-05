@@ -32,6 +32,8 @@ const actionStatusMap: Record<string, string> = {
   failed: 'failed',
   removed: 'warning',
   skipped: 'inactive',
+  photo_updated: 'success',
+  photo_failed: 'failed',
 };
 
 const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
@@ -108,6 +110,8 @@ const ACTION_TABS = [
   { label: 'Failed', value: 'failed' },
   { label: 'Removed', value: 'removed' },
   { label: 'Skipped', value: 'skipped' },
+  { label: 'Photo Updated', value: 'photo_updated' },
+  { label: 'Photo Failed', value: 'photo_failed' },
 ] as const;
 
 export default function RunDetailPage() {
@@ -171,7 +175,7 @@ export default function RunDetailPage() {
       </PageHeader>
 
       {/* KPI Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mt-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mt-6">
         <KPICard label="Created" value={run.contactsCreated} />
         <KPICard label="Updated" value={run.contactsUpdated} />
         <KPICard label="Removed" value={run.contactsRemoved} />
@@ -182,6 +186,11 @@ export default function RunDetailPage() {
           className={run.contactsFailed > 0 ? 'text-red-700' : ''}
         />
         <KPICard label="Photos" value={run.photosUpdated} />
+        <KPICard
+          label="Photos Failed"
+          value={run.photosFailed}
+          className={run.photosFailed > 0 ? 'text-red-700' : ''}
+        />
       </div>
 
       {/* Summary Card */}
@@ -309,6 +318,51 @@ export default function RunDetailPage() {
                 </div>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Photo Sync Stats (D-10) */}
+      {(run.photosUpdated > 0 || run.photosFailed > 0) && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>Photo Sync</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <p className="text-xs text-text-muted">Photos Updated</p>
+                <p className="text-lg font-bold text-navy">{run.photosUpdated}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-text-muted">Photos Failed</p>
+                <p className={`text-lg font-bold ${run.photosFailed > 0 ? 'text-red-600' : 'text-navy'}`}>
+                  {run.photosFailed}
+                </p>
+              </div>
+            </div>
+            {/* Per-tunnel photo breakdown */}
+            {run.tunnelSummaries && run.tunnelSummaries.some(ts => ts.photosUpdated > 0 || ts.photosFailed > 0) && (
+              <>
+                <Separator className="my-4" />
+                <h4 className="text-sm font-medium mb-3">Per-Tunnel Photos</h4>
+                <div className="space-y-2">
+                  {run.tunnelSummaries
+                    .filter(ts => ts.photosUpdated > 0 || ts.photosFailed > 0)
+                    .map((ts, idx) => (
+                      <div key={ts.tunnelId ?? idx} className="flex items-center justify-between py-1">
+                        <span className="text-sm">{ts.tunnelName}</span>
+                        <div className="flex gap-4 text-sm">
+                          <span className="text-green-700">{ts.photosUpdated} updated</span>
+                          {ts.photosFailed > 0 && (
+                            <span className="text-red-600">{ts.photosFailed} failed</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}

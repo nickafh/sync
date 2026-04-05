@@ -12,6 +12,7 @@ export interface SyncRunDto {
   contactsSkipped: number;
   contactsFailed: number;
   photosUpdated: number;
+  photosFailed: number;
   throttleEvents: number;
 }
 
@@ -24,6 +25,7 @@ export interface TunnelRunSummaryDto {
   contactsSkipped: number;
   contactsFailed: number;
   photosUpdated: number;
+  photosFailed: number;
   errors: string[];
 }
 
@@ -43,6 +45,7 @@ export interface SyncRunDetailDto {
   contactsSkipped: number;
   contactsFailed: number;
   photosUpdated: number;
+  photosFailed: number;
   throttleEvents: number;
   errorSummary: string | null;
   tunnelSummaries: TunnelRunSummaryDto[];
