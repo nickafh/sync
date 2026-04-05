@@ -1,4 +1,4 @@
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;

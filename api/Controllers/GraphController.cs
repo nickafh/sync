@@ -40,16 +40,24 @@ public class GraphController : ControllerBase
     [HttpGet("ddgs")]
     public async Task<ActionResult<DdgDto[]>> ListDdgs(CancellationToken ct)
     {
-        var ddgs = await _ddgResolver.ListDdgsAsync(ct);
-        var results = new List<DdgDto>();
-
-        foreach (var ddg in ddgs)
+        try
         {
-            var dto = await EnrichDdgAsync(ddg, ct);
-            results.Add(dto);
-        }
+            var ddgs = await _ddgResolver.ListDdgsAsync(ct);
+            var results = new List<DdgDto>();
 
-        return Ok(results.ToArray());
+            foreach (var ddg in ddgs)
+            {
+                var dto = await EnrichDdgAsync(ddg, ct);
+                results.Add(dto);
+            }
+
+            return Ok(results.ToArray());
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("must be configured"))
+        {
+            _logger.LogWarning("Exchange Online not configured: {Message}", ex.Message);
+            return StatusCode(503, new { message = "Exchange Online is not configured. Set Exchange:CertificatePath and Exchange:AppId in environment." });
+        }
     }
 
     /// <summary>
@@ -60,12 +68,20 @@ public class GraphController : ControllerBase
     [HttpGet("ddgs/{id}")]
     public async Task<ActionResult<DdgDto>> GetDdg(string id, CancellationToken ct)
     {
-        var ddg = await _ddgResolver.GetDdgAsync(id, ct);
-        if (ddg == null)
-            return NotFound(new { message = $"DDG not found: {id}" });
+        try
+        {
+            var ddg = await _ddgResolver.GetDdgAsync(id, ct);
+            if (ddg == null)
+                return NotFound(new { message = $"DDG not found: {id}" });
 
-        var dto = await EnrichDdgAsync(ddg, ct);
-        return Ok(dto);
+            var dto = await EnrichDdgAsync(ddg, ct);
+            return Ok(dto);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("must be configured"))
+        {
+            _logger.LogWarning("Exchange Online not configured: {Message}", ex.Message);
+            return StatusCode(503, new { message = "Exchange Online is not configured. Set Exchange:CertificatePath and Exchange:AppId in environment." });
+        }
     }
 
     /// <summary>

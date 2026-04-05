@@ -3,7 +3,7 @@ using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
-namespace AFHSync.Api.Data.Configurations;
+namespace AFHSync.Shared.Data.Configurations;
 
 public class FieldProfileFieldConfiguration : IEntityTypeConfiguration<FieldProfileField>
 {

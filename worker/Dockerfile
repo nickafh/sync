@@ -10,4 +10,5 @@ RUN dotnet publish "worker/AFHSync.Worker.csproj" -c Release -o /app/publish
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
+EXPOSE 8081
 ENTRYPOINT ["dotnet", "AFHSync.Worker.dll"]

@@ -1,5 +1,5 @@
 using System.Security.Cryptography;
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Worker.Graph;

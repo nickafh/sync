@@ -1,4 +1,4 @@
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;

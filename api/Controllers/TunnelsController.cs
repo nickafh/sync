@@ -1,4 +1,4 @@
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
 using AFHSync.Api.Services;
 using AFHSync.Shared.Entities;

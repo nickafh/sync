@@ -107,7 +107,8 @@ public class DDGResolver : IDDGResolver, IDisposable
 
             var iss = InitialSessionState.CreateDefault();
             iss.ImportPSModule(["ExchangeOnlineManagement"]);
-            iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
+            if (OperatingSystem.IsWindows())
+                iss.ExecutionPolicy = Microsoft.PowerShell.ExecutionPolicy.RemoteSigned;
 
             _runspace = RunspaceFactory.CreateRunspace(iss);
             _runspace.Open();

@@ -29,6 +29,9 @@ Thumbs.db
 # Docker
 pgdata/
 
+# Misc
+cookies.txt
+
 # Planning (managed separately)
 .planning/
 .claude/

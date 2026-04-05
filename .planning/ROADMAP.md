@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Infrastructure** - Docker Compose, PostgreSQL schema, Entra registration, JWT auth (completed 2026-04-04)
 - [x] **Phase 2: Sync Engine Core** - DDG resolution via Graph filter, delta sync, stale handling, throttle retry, logging (completed 2026-04-04)
-- [ ] **Phase 3: API Layer & Scheduling** - REST endpoints, DDG proxy with Exchange PowerShell, Hangfire scheduling, sync triggers
+- [x] **Phase 3: API Layer & Scheduling** - REST endpoints, DDG proxy with Exchange PowerShell, Hangfire scheduling, sync triggers (completed 2026-04-04)
 - [ ] **Phase 4: Admin Frontend** - Dashboard, tunnel management, lists, field profiles, runs/logs, settings pages
 - [ ] **Phase 5: Differentiator Features** - Tunnel wizard, impact preview, iPhone frame preview, live contact card preview, confirmation dialogs
 - [ ] **Phase 6: Photo Sync** - Hash-based photo writes, separate pass, configurable mode
@@ -66,12 +66,13 @@ Plans:
   2. Sync runs execute automatically on a configurable cron schedule (default every 4 hours) without manual intervention
   3. Admin can trigger a manual sync (real or dry-run) for specific tunnels or all active tunnels via API, and concurrent runs are blocked
   4. Dry-run mode executes the full sync pipeline but writes nothing to Graph, producing the same audit trail as a real run
-**Plans**: TBD
+**Plans**: 4 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
-- [ ] 03-03: TBD
+- [x] 03-01-PLAN.md -- Hangfire infrastructure (API client + Worker server), SyncRunsController (trigger, polling, concurrent guard), SettingsController with dynamic cron reschedule
+- [x] 03-02-PLAN.md -- CRUD controllers and DTOs for tunnels, phone lists, field profiles, dashboard
+- [x] 03-03-PLAN.md -- DDG proxy layer: Exchange PowerShell DDG resolution, OPATH-to-OData filter conversion, GraphController endpoints
+- [x] 03-04-PLAN.md -- DDG-04 gap closure: SourceSmtpAddress on Tunnel entity, DTOs, controller, EF Core migration
 
 ### Phase 4: Admin Frontend
 **Goal**: Admins can manage the entire sync platform through a polished web UI -- viewing dashboard KPIs, browsing and editing tunnels, managing phone lists, configuring field profiles, reviewing run history, and adjusting settings
@@ -83,15 +84,16 @@ Plans:
   3. Admin can view all phone lists with contact counts and paginate through contacts in any list; field profiles display grouped field rows with editable behavior selectors (always, add_missing, nosync, remove_blank)
   4. Run history page shows a sortable table of past runs, clicking a row opens per-tunnel summaries with failure/warning lists and items filterable by action type
   5. All pages follow the Sotheby's design system: navy/gold palette, Cormorant Garamond headings, DM Sans body, consistent status badges and UI patterns
-**Plans**: TBD
+**Plans**: 6 plans
 **UI hint**: yes
 
 Plans:
 - [x] 04-01-PLAN.md -- Shared infrastructure: npm installs (TanStack Query/Table, sonner), 14 shadcn components, TypeScript types mirroring all DTOs, typed API client, QueryClientProvider, 7 reusable components (StatusBadge, KPICard, PageHeader, DataTable, ConfirmDialog, EmptyState, SettingsCard)
-- [ ] 04-02-PLAN.md -- Dashboard page: live KPI cards, active tunnel summary with clickable rows, recent runs, Run Sync Now / Dry Run buttons with polling and toast notifications
-- [ ] 04-03-PLAN.md -- Tunnel pages: tunnel list with DataTable and row actions, tunnel detail with inline edit, DDG picker, activate/deactivate/delete with confirmation dialogs
-- [ ] 04-04-PLAN.md -- Runs & Logs pages: run history with paginated DataTable, run detail with KPI cards, summary, action filter tabs, paginated items table
-- [ ] 04-05-PLAN.md -- Phone Lists, Field Profiles, Settings pages: expandable contact browsing, auto-save field behavior dropdowns, grouped settings cards with per-card save
+- [x] 04-02-PLAN.md -- Dashboard page: live KPI cards, active tunnel summary with clickable rows, recent runs, Run Sync Now / Dry Run buttons with polling and toast notifications
+- [x] 04-03-PLAN.md -- Tunnel pages: tunnel list with DataTable and row actions, tunnel detail with inline edit, DDG picker, activate/deactivate/delete with confirmation dialogs
+- [x] 04-04-PLAN.md -- Runs & Logs pages: run history with paginated DataTable, run detail with KPI cards, summary, action filter tabs, paginated items table
+- [x] 04-05-PLAN.md -- Phone Lists, Field Profiles, Settings pages: expandable contact browsing, auto-save field behavior dropdowns, grouped settings cards with per-card save
+- [x] 04-06-PLAN.md -- Gap closure: DDG-06 plain-language filter on tunnel detail, RLOG-02/RLOG-03 per-tunnel summaries on run detail
 
 ### Phase 5: Differentiator Features
 **Goal**: The admin experience goes beyond CiraSync parity with a guided tunnel creation wizard, impact previews before destructive changes, an iPhone frame contact preview, and live contact card previews during field profile editing
@@ -103,13 +105,15 @@ Plans:
   3. Lists on Phones page shows a list selector alongside an iPhone frame preview, and clicking a contact in the preview opens a full contact card detail view
   4. Field mapping page displays grouped field rows alongside a live contact card preview that updates in real-time as field behaviors are changed
   5. "Refresh from DDG" button on tunnel detail re-reads the Exchange filter and updates the stored Graph filter
-**Plans**: TBD
+**Plans**: 5 plans
 **UI hint**: yes
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
-- [ ] 05-03: TBD
+- [x] 05-01-PLAN.md -- Shared foundation: backend preview + refresh-ddg endpoints, enriched ContactDto, shared ContactCard component, frontend types/hooks/API, shadcn Checkbox + ScrollArea
+- [x] 05-02-PLAN.md -- Tunnel creation wizard: DDGSearchList extraction, WizardStepper, 4-step TunnelWizard dialog, "Create Tunnel" button on tunnel list
+- [x] 05-03-PLAN.md -- Impact preview + DDG refresh: ImpactPreviewDialog, DDGRefreshButton, high-impact change detection on tunnel detail save flow
+- [x] 05-04-PLAN.md -- iPhone frame phone preview: IPhoneFrame CSS component, ContactList with alphabetical grouping, Lists on Phones page rewrite with split layout and contact card slide-over
+- [x] 05-05-PLAN.md -- Live field profile preview: ContactCardPreview with sample data and field-to-nosync mapping, field profiles page split layout with sticky preview
 
 ### Phase 6: Photo Sync
 **Goal**: Contact photos sync to target mailboxes with hash-based conditional writes, isolated from the core sync pipeline to manage API load independently
@@ -119,11 +123,11 @@ Plans:
   1. Source user photos are fetched from Graph and only written to target contacts when the photo's SHA-256 hash has changed
   2. Photo sync runs as a separate pass with lower concurrency than contact sync to manage API load
   3. Admin can configure photo sync mode (included with contact sync, separate pass, or disabled) from the settings page
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [x] 06-01-PLAN.md -- PhotoSyncService engine (fetch-once write-many, ETag-first optimization, SHA-256 delta, lower concurrency), SyncEngine trailing pass integration, Hangfire separate_pass job, unit tests
+- [x] 06-02-PLAN.md -- Tunnel.PhotoSyncEnabled entity + migration, API DTO extensions (PhotosFailed), frontend photo stats on run detail, tunnel detail photo toggle, settings page cron + auto-trigger for separate_pass mode
 
 ## Progress
 
@@ -134,7 +138,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Foundation & Infrastructure | 4/4 | Complete   | 2026-04-04 |
 | 2. Sync Engine Core | 4/4 | Complete   | 2026-04-04 |
-| 3. API Layer & Scheduling | 0/3 | Not started | - |
-| 4. Admin Frontend | 1/5 | In progress | - |
-| 5. Differentiator Features | 0/3 | Not started | - |
+| 3. API Layer & Scheduling | 4/4 | Complete | 2026-04-04 |
+| 4. Admin Frontend | 6/6 | Complete | 2026-04-04 |
+| 5. Differentiator Features | 0/5 | Not started | - |
 | 6. Photo Sync | 0/2 | Not started | - |

@@ -1,7 +1,7 @@
 using AFHSync.Shared.Entities;
 using Microsoft.EntityFrameworkCore;
 
-namespace AFHSync.Api.Data;
+namespace AFHSync.Shared.Data;
 
 public class AFHSyncDbContext : DbContext
 {

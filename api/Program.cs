@@ -1,5 +1,5 @@
 using System.Text;
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using AFHSync.Api.Filters;
 using AFHSync.Api.Services;
 using AFHSync.Shared.Enums;
@@ -63,7 +63,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = "AFHSync",
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(builder.Configuration["Auth:JwtSecret"]
-                    ?? "fallback-dev-secret-at-least-32-chars!!"))
+                    ?? throw new InvalidOperationException("Auth:JwtSecret must be configured")))
         };
 
         // Read JWT from httpOnly cookie instead of Authorization header (D-07)

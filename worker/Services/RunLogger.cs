@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text;
-using AFHSync.Api.Data;
+using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
