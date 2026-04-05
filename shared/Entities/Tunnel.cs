@@ -16,6 +16,7 @@ public class Tunnel
     public int? FieldProfileId { get; set; }
     public StalePolicy StalePolicy { get; set; } = StalePolicy.FlagHold;
     public int StaleHoldDays { get; set; } = 14;
+    public bool PhotoSyncEnabled { get; set; } = true;
     public TunnelStatus Status { get; set; } = TunnelStatus.Active;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
