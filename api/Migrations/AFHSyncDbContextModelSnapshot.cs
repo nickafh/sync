@@ -1302,14 +1302,14 @@ namespace AFHSync.Api.Migrations
                         .HasColumnName("source_display_name");
 
                     b.Property<string>("SourceFilterPlain")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
                         .HasColumnName("source_filter_plain");
 
                     b.Property<string>("SourceIdentifier")
                         .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
                         .HasColumnName("source_identifier");
 
                     b.Property<string>("SourceSmtpAddress")

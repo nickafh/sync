@@ -73,10 +73,10 @@ namespace AFHSync.Api.Migrations
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     tunnel_id = table.Column<int>(type: "integer", nullable: false),
                     source_type = table.Column<SourceType>(type: "source_type", nullable: false),
-                    source_identifier = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                    source_identifier = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: false),
                     source_display_name = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
                     source_smtp_address = table.Column<string>(type: "character varying(320)", maxLength: 320, nullable: true),
-                    source_filter_plain = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
+                    source_filter_plain = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: true),
                     created_at = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "NOW()")
                 },
                 constraints: table =>

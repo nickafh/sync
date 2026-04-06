@@ -14,7 +14,7 @@ public record CreateTunnelRequest(
 
 public record SourceInput(
     string SourceType,
-    [Required][StringLength(500)] string SourceIdentifier,
+    [Required] string SourceIdentifier,
     string? SourceDisplayName,
     string? SourceSmtpAddress,
     string? SourceFilterPlain
