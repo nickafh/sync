@@ -61,7 +61,17 @@ public class SourceResolver : ISourceResolver
         _logger.LogDebug("Total {RawCount} users from all sources, {DedupedCount} after dedup",
             allGraphUsers.Count, deduped.Count);
 
-        var sourceUsers = deduped
+        // Exclude users hidden from address lists (e.g., forwarding-only mailboxes)
+        var visible = deduped
+            .Where(u => u.ShowInAddressList != false)
+            .ToList();
+
+        if (visible.Count < deduped.Count)
+            _logger.LogInformation(
+                "Tunnel {TunnelId}: Excluded {Count} users hidden from address lists",
+                tunnel.Id, deduped.Count - visible.Count);
+
+        var sourceUsers = visible
             .Select(MapGraphUserToSourceUser)
             .ToList();
 
@@ -106,7 +116,7 @@ public class SourceResolver : ISourceResolver
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
-                "onPremisesExtensionAttributes"
+                "showInAddressList", "onPremisesExtensionAttributes"
             ];
             // Required for advanced filters on extension attributes and $count
             config.Headers.Add("ConsistencyLevel", "eventual");
