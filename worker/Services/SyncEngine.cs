@@ -53,18 +53,31 @@ public sealed class SyncEngine(
             if (alreadyRunning)
             {
                 logger.LogWarning("Skipping sync — another run is already in progress");
-                // Return a dummy failed run so Hangfire doesn't retry
-                var skipped = await runLogger.CreateRunAsync(runType, isDryRun, ct);
-                await runLogger.FinalizeRunAsync(skipped, SyncStatus.Failed,
-                    errorSummary: "Skipped — another sync was already running",
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, ct);
-                skipped.Status = SyncStatus.Failed;
-                return skipped;
+                return new SyncRun { Status = SyncStatus.Failed };
             }
         }
 
-        // Step 1: Create the run record.
-        var run = await runLogger.CreateRunAsync(runType, isDryRun, ct);
+        // Step 1: Claim an existing pending run (created by API) or create a new one.
+        SyncRun run;
+        await using (var claimDb = await dbContextFactory.CreateDbContextAsync(ct))
+        {
+            var pending = await claimDb.SyncRuns
+                .Where(r => r.Status == SyncStatus.Pending)
+                .OrderBy(r => r.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (pending != null)
+            {
+                pending.Status = SyncStatus.Running;
+                pending.StartedAt = DateTime.UtcNow;
+                await claimDb.SaveChangesAsync(ct);
+                run = pending;
+            }
+            else
+            {
+                run = await runLogger.CreateRunAsync(runType, isDryRun, ct);
+            }
+        }
         logger.LogInformation(
             "SyncEngine starting RunId={RunId}, TunnelId={TunnelId}, IsDryRun={IsDryRun}",
             run.Id, tunnelId?.ToString() ?? "all", isDryRun);
