@@ -61,17 +61,7 @@ public class SourceResolver : ISourceResolver
         _logger.LogDebug("Total {RawCount} users from all sources, {DedupedCount} after dedup",
             allGraphUsers.Count, deduped.Count);
 
-        // Exclude users hidden from address lists (e.g., forwarding-only mailboxes)
-        var visible = deduped
-            .Where(u => u.ShowInAddressList != false)
-            .ToList();
-
-        if (visible.Count < deduped.Count)
-            _logger.LogInformation(
-                "Tunnel {TunnelId}: Excluded {Count} users hidden from address lists",
-                tunnel.Id, deduped.Count - visible.Count);
-
-        var sourceUsers = visible
+        var sourceUsers = deduped
             .Select(MapGraphUserToSourceUser)
             .ToList();
 
