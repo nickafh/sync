@@ -29,15 +29,15 @@ public class ContactFolderManagerTests
             _fakeBackend = fakeBackend ?? new Dictionary<string, string>();
         }
 
-        protected override Task<string> FetchOrCreateFolderFromGraphAsync(
+        protected override Task<(string folderId, bool wasCreated)> FetchOrCreateFolderFromGraphAsync(
             string mailboxEntraId, string folderName, CancellationToken ct)
         {
             GraphCallCount++;
             if (_fakeBackend.TryGetValue(mailboxEntraId, out var folderId))
-                return Task.FromResult(folderId);
+                return Task.FromResult((folderId, false));
             var newId = $"folder-{mailboxEntraId}-{folderName}";
             _fakeBackend[mailboxEntraId] = newId;
-            return Task.FromResult(newId);
+            return Task.FromResult((newId, true));
         }
     }
 
@@ -49,8 +49,8 @@ public class ContactFolderManagerTests
         var fake = new FakeContactFolderManager();
         const string mailboxId = "mailbox-1@test.com";
 
-        var id1 = await fake.GetOrCreateFolderAsync(mailboxId, "AFH Contacts", CancellationToken.None);
-        var id2 = await fake.GetOrCreateFolderAsync(mailboxId, "AFH Contacts", CancellationToken.None);
+        var (id1, _) = await fake.GetOrCreateFolderAsync(mailboxId, "AFH Contacts", CancellationToken.None);
+        var (id2, _) = await fake.GetOrCreateFolderAsync(mailboxId, "AFH Contacts", CancellationToken.None);
 
         Assert.Equal(id1, id2);
         Assert.Equal(1, fake.GraphCallCount); // Graph called only once — second hits cache
@@ -63,8 +63,8 @@ public class ContactFolderManagerTests
     {
         var fake = new FakeContactFolderManager();
 
-        var id1 = await fake.GetOrCreateFolderAsync("mailbox-a@test.com", "AFH Contacts", CancellationToken.None);
-        var id2 = await fake.GetOrCreateFolderAsync("mailbox-b@test.com", "AFH Contacts", CancellationToken.None);
+        var (id1, _) = await fake.GetOrCreateFolderAsync("mailbox-a@test.com", "AFH Contacts", CancellationToken.None);
+        var (id2, _) = await fake.GetOrCreateFolderAsync("mailbox-b@test.com", "AFH Contacts", CancellationToken.None);
 
         Assert.NotEqual(id1, id2);
         Assert.Equal(2, fake.GraphCallCount); // separate Graph calls for each mailbox

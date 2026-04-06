@@ -15,8 +15,8 @@ public interface IContactFolderManager
     /// <param name="mailboxEntraId">Entra ID (object ID or UPN) of the target mailbox.</param>
     /// <param name="folderName">Display name of the contact folder (e.g., "AFH Contacts").</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>The Graph contact folder ID.</returns>
-    Task<string> GetOrCreateFolderAsync(
+    /// <returns>A tuple of (folderId, wasCreated). wasCreated is true if the folder was newly created.</returns>
+    Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(
         string mailboxEntraId,
         string folderName,
         CancellationToken ct);

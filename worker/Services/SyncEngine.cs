@@ -353,15 +353,32 @@ public sealed class SyncEngine(
 
         // Get or create the contact folder.
         string folderId;
+        bool folderWasCreated;
         try
         {
-            folderId = await contactFolderManager.GetOrCreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
+            (folderId, folderWasCreated) = await contactFolderManager.GetOrCreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
             failed++;
             return (created, updated, skipped, failed, removed);
+        }
+
+        // If the folder was just created, any existing sync state is stale (contacts were deleted).
+        // Clear it so all contacts get re-created in the new folder.
+        if (folderWasCreated)
+        {
+            await using var cleanupDb = await dbContextFactory.CreateDbContextAsync(ct);
+            var staleCount = await cleanupDb.ContactSyncStates
+                .Where(s => s.TunnelId == tunnel.Id
+                            && s.PhoneListId == phoneList.Id
+                            && s.TargetMailboxId == mailbox.Id)
+                .ExecuteDeleteAsync(ct);
+            if (staleCount > 0)
+                logger.LogInformation(
+                    "Cleared {Count} stale sync states for tunnel {TunnelId} in mailbox {MailboxId} (folder was recreated)",
+                    staleCount, tunnel.Id, mailbox.Id);
         }
 
         // Load existing sync state for this tunnel+phoneList+mailbox (AsNoTracking per Pitfall 5).

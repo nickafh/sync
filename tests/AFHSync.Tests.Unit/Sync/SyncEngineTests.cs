@@ -486,8 +486,8 @@ public class SyncEngineTests
 
     private sealed class FakeContactFolderManager : IContactFolderManager
     {
-        public Task<string> GetOrCreateFolderAsync(string mailboxEntraId, string folderName, CancellationToken ct)
-            => Task.FromResult("fake-folder-id");
+        public Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(string mailboxEntraId, string folderName, CancellationToken ct)
+            => Task.FromResult(("fake-folder-id", false));
 
         public void ResetCache() { }
     }

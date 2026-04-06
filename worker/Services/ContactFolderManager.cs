@@ -32,27 +32,25 @@ public class ContactFolderManager : IContactFolderManager
     }
 
     /// <inheritdoc />
-    public async Task<string> GetOrCreateFolderAsync(
+    public async Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(
         string mailboxEntraId,
         string folderName,
         CancellationToken ct)
     {
         // Fast path: return cached folder ID without Graph call
         if (_folderCache.TryGetValue(mailboxEntraId, out var cachedId))
-            return cachedId;
+            return (cachedId, false);
 
         // Slow path: hit Graph to find or create the folder
-        var folderId = await FetchOrCreateFolderFromGraphAsync(mailboxEntraId, folderName, ct);
+        var (folderId, wasCreated) = await FetchOrCreateFolderFromGraphAsync(mailboxEntraId, folderName, ct);
 
-        // TryAdd is safe even if another thread beat us here — both threads get the same
-        // folder ID from Graph (idempotent folder names) so the value doesn't matter.
         _folderCache.TryAdd(mailboxEntraId, folderId);
 
         _logger.LogDebug(
-            "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId}",
-            folderName, folderId, mailboxEntraId);
+            "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId} (created={Created})",
+            folderName, folderId, mailboxEntraId, wasCreated);
 
-        return folderId;
+        return (folderId, wasCreated);
     }
 
     /// <inheritdoc />
@@ -66,7 +64,7 @@ public class ContactFolderManager : IContactFolderManager
     /// Queries Graph for an existing contact folder matching <paramref name="folderName"/>,
     /// creating it if not found. Extracted as a virtual method for unit test overriding.
     /// </summary>
-    protected virtual async Task<string> FetchOrCreateFolderFromGraphAsync(
+    protected virtual async Task<(string folderId, bool wasCreated)> FetchOrCreateFolderFromGraphAsync(
         string mailboxEntraId, string folderName, CancellationToken ct)
     {
         if (_graphClientFactory is null)
@@ -91,7 +89,7 @@ public class ContactFolderManager : IContactFolderManager
             _logger.LogDebug(
                 "Found existing contact folder '{FolderName}' ({FolderId}) in mailbox {MailboxId}",
                 folderName, existingFolder.Id, mailboxEntraId);
-            return existingFolder.Id;
+            return (existingFolder.Id, false);
         }
 
         // Folder not found — create it
@@ -108,6 +106,6 @@ public class ContactFolderManager : IContactFolderManager
             throw new InvalidOperationException(
                 $"Graph returned null folder ID after POST for mailbox {mailboxEntraId}");
 
-        return created.Id;
+        return (created.Id, true);
     }
 }
