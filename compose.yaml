@@ -35,7 +35,7 @@ services:
       - Auth__AdminPassword=${ADMIN_PASSWORD}
       - Exchange__CertificatePath=/app/certs/exchange-cert.pfx
       - Exchange__AppId=${GRAPH_CLIENT_ID}
-      - Exchange__Organization=atlantafinehomes.com
+      - Exchange__Organization=appriver3651000721.onmicrosoft.com
     volumes:
       - ./exchange-cert.pfx:/app/certs/exchange-cert.pfx:ro
     depends_on:
