@@ -378,6 +378,7 @@ public sealed class SyncEngine(
         var statesToUpdate = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
 
         // Process each source user.
+        int contactsProcessed = 0;
         foreach (var sourceUser in sourceUsers)
         {
             try
@@ -472,6 +473,14 @@ public sealed class SyncEngine(
                 });
                 failed++;
                 // Continue to next contact (D-17).
+            }
+
+            // Update live progress every 25 contacts
+            contactsProcessed++;
+            if (contactsProcessed % 25 == 0)
+            {
+                await UpdateRunProgressAsync(run.Id, created, updated, skipped,
+                    failed, removed, 0, 0, 0, 0, 0);
             }
         }
 
