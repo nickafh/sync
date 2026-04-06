@@ -144,6 +144,11 @@ public class PhotoSyncService : IPhotoSyncService
             }
         }
 
+        var photosFound = sourcePhotos.Count(p => p.Value.bytes != null);
+        _logger.LogInformation(
+            "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Found} with photos, {Missing} without",
+            tunnel.Id, sourcePhotos.Count, photosFound, sourcePhotos.Count - photosFound);
+
         // Step c: Load ContactSyncState records for this tunnel where GraphContactId is not null
         // (contact must exist before photo write per D-01)
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
@@ -343,15 +348,27 @@ public class PhotoSyncService : IPhotoSyncService
                 .Photo.Content
                 .GetAsync(cancellationToken: ct);
 
-            if (stream is null) return null;
+            if (stream is null)
+            {
+                _logger.LogDebug("Photo stream null for user {EntraId}", entraId);
+                return null;
+            }
 
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms, ct);
+            _logger.LogDebug("Fetched photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
             return ms.ToArray();
         }
         catch (ODataError ex) when (ex.ResponseStatusCode == 404)
         {
-            // User has no photo -- expected, not an error (Pitfall 1)
+            // User has no photo -- expected, not an error
+            return null;
+        }
+        catch (ODataError ex)
+        {
+            // Non-404 OData error (e.g., 403 Forbidden = missing permission)
+            _logger.LogWarning("Graph photo error for user {EntraId}: {StatusCode} {Message}",
+                entraId, ex.ResponseStatusCode, ex.Message);
             return null;
         }
     }

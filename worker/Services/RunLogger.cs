@@ -120,7 +120,9 @@ public sealed class RunLogger(
             var item = batch[i];
             if (i > 0) sql.AppendLine(",");
 
-            sql.Append($"({{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}})");
+            // field_changes (param index 6 per row) needs ::jsonb cast for PostgreSQL
+            sql.Append($"({{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx++}}}, {{{paramIdx}}}::jsonb, {{{paramIdx + 1}}}, {{{paramIdx + 2}}})");
+            paramIdx += 3;
 
             parameters.Add(item.SyncRunId);
             parameters.Add((object?)item.TunnelId);

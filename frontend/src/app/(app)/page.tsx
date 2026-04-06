@@ -107,7 +107,7 @@ export default function DashboardPage() {
   const { data: dashboard, isLoading: dashLoading } = useDashboard();
   const { data: tunnels, isLoading: tunnelsLoading } = useTunnels();
   const triggerSync = useTriggerSync();
-  const { data: pollingRun } = useSyncRunPolling(activeRunId);
+  const { data: pollingRun, isLoading: pollingLoading } = useSyncRunPolling(activeRunId);
 
   // Auto-detect a running/pending sync from dashboard data (e.g. after page refresh mid-sync)
   useEffect(() => {
@@ -124,7 +124,7 @@ export default function DashboardPage() {
     }
   }, [activeRunId, pollingRun]);
 
-  const isSyncing = triggerSync.isPending || (activeRunId !== null && (pollingRun?.status === 'running' || pollingRun?.status === 'pending'));
+  const isSyncing = triggerSync.isPending || (activeRunId !== null && (pollingLoading || pollingRun?.status === 'running' || pollingRun?.status === 'pending'));
 
   function handleRunSync() {
     triggerSync.mutate(
@@ -244,8 +244,19 @@ export default function DashboardPage() {
       </div>
 
       {/* Live sync progress */}
-      {isSyncing && pollingRun && (
-        <SyncProgressCard run={pollingRun} />
+      {isSyncing && (
+        pollingRun ? (
+          <SyncProgressCard run={pollingRun} />
+        ) : (
+          <Card className="mt-6 border-gold/30 bg-gold/5">
+            <CardContent className="py-4">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-gold" />
+                <span className="font-heading text-navy font-bold">Starting sync...</span>
+              </div>
+            </CardContent>
+          </Card>
+        )
       )}
 
       {/* Two-column grid */}
