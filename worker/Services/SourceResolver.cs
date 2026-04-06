@@ -201,8 +201,9 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
-    /// Upserts resolved SourceUser records to the database using raw SQL
+    /// Upserts resolved SourceUser records to the database using batched raw SQL
     /// INSERT ... ON CONFLICT (entra_id) DO UPDATE for performance.
+    /// Batches of 25 rows (25 columns * 25 rows = 625 params, well within PG limits).
     /// Per D-03 and Pattern 8 in RESEARCH.md.
     /// </summary>
     private async Task UpsertSourceUsersAsync(List<SourceUser> users, CancellationToken ct)
@@ -210,11 +211,15 @@ public class SourceResolver : ISourceResolver
         if (users.Count == 0)
             return;
 
+        const int batchSize = 25;
+        const int colCount = 25;
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
 
-        foreach (var user in users)
+        for (int offset = 0; offset < users.Count; offset += batchSize)
         {
-            await db.Database.ExecuteSqlRawAsync("""
+            var batch = users.Skip(offset).Take(batchSize).ToList();
+            var sql = new System.Text.StringBuilder();
+            sql.AppendLine("""
                 INSERT INTO source_users (
                     entra_id, display_name, first_name, last_name, email,
                     business_phone, mobile_phone, job_title, department,
@@ -222,15 +227,34 @@ public class SourceResolver : ISourceResolver
                     state, postal_code, country, is_enabled, mailbox_type,
                     extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
                     last_fetched_at, created_at, updated_at
-                )
-                VALUES (
-                    {0}, {1}, {2}, {3}, {4},
-                    {5}, {6}, {7}, {8},
-                    {9}, {10}, {11}, {12},
-                    {13}, {14}, {15}, {16}, {17},
-                    {18}, {19}, {20}, {21},
-                    {22}, {23}, {24}
-                )
+                ) VALUES
+                """);
+
+            var parameters = new List<object?>();
+            for (int i = 0; i < batch.Count; i++)
+            {
+                if (i > 0) sql.AppendLine(",");
+                var p = i * colCount;
+                sql.Append($"({{{p}}}, {{{p+1}}}, {{{p+2}}}, {{{p+3}}}, {{{p+4}}}, {{{p+5}}}, {{{p+6}}}, {{{p+7}}}, {{{p+8}}}, {{{p+9}}}, {{{p+10}}}, {{{p+11}}}, {{{p+12}}}, {{{p+13}}}, {{{p+14}}}, {{{p+15}}}, {{{p+16}}}, {{{p+17}}}, {{{p+18}}}, {{{p+19}}}, {{{p+20}}}, {{{p+21}}}, {{{p+22}}}, {{{p+23}}}, {{{p+24}}})");
+
+                var user = batch[i];
+                parameters.AddRange([
+                    user.EntraId, (object?)user.DisplayName, (object?)user.FirstName,
+                    (object?)user.LastName, (object?)user.Email,
+                    (object?)user.BusinessPhone, (object?)user.MobilePhone,
+                    (object?)user.JobTitle, (object?)user.Department,
+                    (object?)user.OfficeLocation, (object?)user.CompanyName,
+                    (object?)user.StreetAddress, (object?)user.City,
+                    (object?)user.State, (object?)user.PostalCode,
+                    (object?)user.Country, user.IsEnabled, (object?)user.MailboxType,
+                    (object?)user.ExtensionAttr1, (object?)user.ExtensionAttr2,
+                    (object?)user.ExtensionAttr3, (object?)user.ExtensionAttr4,
+                    user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
+                ]);
+            }
+
+            sql.AppendLine("""
+
                 ON CONFLICT (entra_id) DO UPDATE SET
                     display_name = EXCLUDED.display_name,
                     first_name = EXCLUDED.first_name,
@@ -255,15 +279,11 @@ public class SourceResolver : ISourceResolver
                     extension_attr_4 = EXCLUDED.extension_attr_4,
                     last_fetched_at = EXCLUDED.last_fetched_at,
                     updated_at = EXCLUDED.updated_at
-                """,
-                user.EntraId, user.DisplayName, user.FirstName, user.LastName, user.Email,
-                user.BusinessPhone, user.MobilePhone, user.JobTitle, user.Department,
-                user.OfficeLocation, user.CompanyName, user.StreetAddress, user.City,
-                user.State, user.PostalCode, user.Country, user.IsEnabled, user.MailboxType,
-                user.ExtensionAttr1, user.ExtensionAttr2, user.ExtensionAttr3, user.ExtensionAttr4,
-                user.LastFetchedAt, user.CreatedAt, user.UpdatedAt);
+                """);
+
+            await db.Database.ExecuteSqlRawAsync(sql.ToString(), parameters.ToArray()!, ct);
         }
 
-        _logger.LogDebug("Upserted {Count} source users to database", users.Count);
+        _logger.LogDebug("Upserted {Count} source users to database in batches of {BatchSize}", users.Count, batchSize);
     }
 }

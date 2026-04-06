@@ -117,7 +117,8 @@ const ACTION_TABS = [
 export default function RunDetailPage() {
   const { id } = useParams();
   const runId = Number(id);
-  const { data: run, isLoading: runLoading } = useSyncRun(runId);
+  const isValidId = !!id && Number.isFinite(runId) && runId > 0;
+  const { data: run, isLoading: runLoading } = useSyncRun(isValidId ? runId : 0);
   const [itemPage, setItemPage] = useState(0);
   const [actionFilter, setActionFilter] = useState<string | undefined>(undefined);
   const pageSize = 25;
@@ -135,6 +136,10 @@ export default function RunDetailPage() {
     const stringVal = String(value);
     setActionFilter(stringVal === 'all' ? undefined : stringVal);
     setItemPage(0);
+  }
+
+  if (!isValidId) {
+    return <div className="p-8 text-text-muted">Invalid run ID</div>;
   }
 
   if (runLoading) {

@@ -44,10 +44,6 @@ export default function SettingsPage() {
   const { data: settings, isLoading } = useSettings();
   const updateSettings = useUpdateSettings();
 
-  function getSetting(key: string): string {
-    return settings?.find((s) => s.key === key)?.value ?? '';
-  }
-
   // Sync Schedule (SETT-01)
   const [cronExpression, setCronExpression] = useState('');
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -71,18 +67,18 @@ export default function SettingsPage() {
   // Initialize from settings
   useEffect(() => {
     if (settings) {
-      setCronExpression(getSetting('sync_schedule_cron'));
-      setPhotoSyncMode(getSetting('photo_sync_mode'));
+      const get = (key: string) => settings.find((s) => s.key === key)?.value ?? '';
+      setCronExpression(get('sync_schedule_cron'));
+      setPhotoSyncMode(get('photo_sync_mode'));
       const photoCronSetting = settings.find(s => s.key === 'photo_sync_cron');
       if (photoCronSetting) setPhotoCron(photoCronSetting.value);
       const autoTriggerSetting = settings.find(s => s.key === 'photo_sync_auto_trigger');
       if (autoTriggerSetting) setPhotoAutoTrigger(autoTriggerSetting.value === 'true');
-      setBatchSize(getSetting('batch_size'));
-      setParallelism(getSetting('parallelism'));
-      setStalePolicy(getSetting('stale_policy_default'));
-      setStaleHoldDays(getSetting('stale_hold_days_default'));
+      setBatchSize(get('batch_size'));
+      setParallelism(get('parallelism'));
+      setStalePolicy(get('stale_policy_default'));
+      setStaleHoldDays(get('stale_hold_days_default'));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings]);
 
   async function saveSchedule() {

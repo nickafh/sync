@@ -41,6 +41,7 @@ import type {
   ImpactPreviewResponse,
   SourceInput,
 } from '@/types/tunnel';
+import type { StalePolicy } from '@/types/common';
 
 const stalePolicyOptions = [
   { value: 'auto_remove', label: 'Auto Remove' },
@@ -73,8 +74,9 @@ export default function TunnelDetailPage() {
   const { id } = useParams();
   const router = useRouter();
   const tunnelId = Number(id);
+  const isValidId = !!id && Number.isFinite(tunnelId) && tunnelId > 0;
 
-  const { data: tunnel, isLoading } = useTunnel(tunnelId);
+  const { data: tunnel, isLoading } = useTunnel(isValidId ? tunnelId : 0);
   const { data: tunnels } = useTunnels();
   const tunnelListData = tunnels?.find((t) => t.id === tunnelId);
 
@@ -110,7 +112,7 @@ export default function TunnelDetailPage() {
     sources: [],
     targetListIds: [],
     fieldProfileId: null,
-    stalePolicy: '',
+    stalePolicy: 'auto_remove' as const,
     staleDays: 14,
     photoSyncEnabled: true,
   });
@@ -276,6 +278,10 @@ export default function TunnelDetailPage() {
         : [...prev.targetListIds, listId],
     }));
   };
+
+  if (!isValidId) {
+    return <div className="p-8 text-text-muted">Invalid tunnel ID</div>;
+  }
 
   if (isLoading) {
     return (
@@ -601,7 +607,7 @@ export default function TunnelDetailPage() {
                     onValueChange={(val: string | null) =>
                       setEditForm((prev) => ({
                         ...prev,
-                        stalePolicy: val ?? prev.stalePolicy,
+                        stalePolicy: (val as StalePolicy) ?? prev.stalePolicy,
                       }))
                     }
                   >

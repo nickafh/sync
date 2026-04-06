@@ -45,9 +45,15 @@ public sealed class SyncEngine(
         bool isDryRun,
         CancellationToken ct)
     {
-        // Guard: skip if another sync is already running (prevents Hangfire overlap)
+        // Guard + claim atomically using a PostgreSQL advisory lock to prevent TOCTOU race
+        // when WorkerCount > 1 (two Hangfire workers could both pass the guard before either claims).
+        SyncRun run;
         await using (var guardDb = await dbContextFactory.CreateDbContextAsync(ct))
         {
+            await using var tx = await guardDb.Database.BeginTransactionAsync(ct);
+            // Advisory lock key 1 = sync run start serialization
+            await guardDb.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1)", ct);
+
             var alreadyRunning = await guardDb.SyncRuns
                 .AnyAsync(r => r.Status == SyncStatus.Running, ct);
             if (alreadyRunning)
@@ -55,13 +61,9 @@ public sealed class SyncEngine(
                 logger.LogWarning("Skipping sync — another run is already in progress");
                 return new SyncRun { Status = SyncStatus.Failed };
             }
-        }
 
-        // Step 1: Claim an existing pending run (created by API) or create a new one.
-        SyncRun run;
-        await using (var claimDb = await dbContextFactory.CreateDbContextAsync(ct))
-        {
-            var pending = await claimDb.SyncRuns
+            // Claim an existing pending run (created by API) or create a new one.
+            var pending = await guardDb.SyncRuns
                 .Where(r => r.Status == SyncStatus.Pending)
                 .OrderBy(r => r.CreatedAt)
                 .FirstOrDefaultAsync(ct);
@@ -70,13 +72,25 @@ public sealed class SyncEngine(
             {
                 pending.Status = SyncStatus.Running;
                 pending.StartedAt = DateTime.UtcNow;
-                await claimDb.SaveChangesAsync(ct);
+                await guardDb.SaveChangesAsync(ct);
                 run = pending;
             }
             else
             {
-                run = await runLogger.CreateRunAsync(runType, isDryRun, ct);
+                var newRun = new SyncRun
+                {
+                    RunType = runType,
+                    Status = SyncStatus.Running,
+                    IsDryRun = isDryRun,
+                    StartedAt = DateTime.UtcNow,
+                    CreatedAt = DateTime.UtcNow
+                };
+                guardDb.SyncRuns.Add(newRun);
+                await guardDb.SaveChangesAsync(ct);
+                run = newRun;
             }
+
+            await tx.CommitAsync(ct);
         }
         logger.LogInformation(
             "SyncEngine starting RunId={RunId}, TunnelId={TunnelId}, IsDryRun={IsDryRun}",
@@ -89,99 +103,122 @@ public sealed class SyncEngine(
         // runs are blocked per SCHD-05 — only one sync run executes at a time).
         throttleCounter.Reset();
 
-        // Step 3: Load tunnels.
-        var tunnels = await LoadTunnelsAsync(tunnelId, ct);
-        logger.LogInformation("Loaded {Count} tunnel(s) to process", tunnels.Count);
-
-        // Step 3b: Read photo_sync_mode once at run start (T-06-04: prevents mid-run mode switch).
-        var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", ct);
-
-        // Step 4: Run-level aggregate counters.
+        // Wrap entire run body in try-catch to guarantee finalization.
+        // Without this, any unhandled exception leaves the run stuck in "Running" forever,
+        // which also blocks all future syncs via the guard check above.
         int totalCreated = 0, totalUpdated = 0, totalSkipped = 0;
         int totalFailed = 0, totalRemoved = 0;
         int tunnelsProcessed = 0, tunnelsWarned = 0, tunnelsFailed = 0;
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;
+        int tunnelCount = 0;
+        string? fatalError = null;
 
-        // Step 5: Process each tunnel sequentially (D-13).
-        foreach (var tunnel in tunnels)
+        try
         {
-            try
+            // Step 3: Load tunnels.
+            var tunnels = await LoadTunnelsAsync(tunnelId, ct);
+            tunnelCount = tunnels.Count;
+            logger.LogInformation("Loaded {Count} tunnel(s) to process", tunnels.Count);
+
+            // Step 3b: Read photo_sync_mode once at run start (T-06-04: prevents mid-run mode switch).
+            var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", ct);
+
+            // Step 5: Process each tunnel sequentially (D-13).
+            foreach (var tunnel in tunnels)
             {
-                var (created, updated, skipped, failed, removed) =
-                    await ProcessTunnelAsync(tunnel, run, isDryRun, ct);
-
-                totalCreated += created;
-                totalUpdated += updated;
-                totalSkipped += skipped;
-                totalFailed += failed;
-                totalRemoved += removed;
-
-                if (failed > 0)
-                    tunnelsWarned++;
-                else
-                    tunnelsProcessed++;
-
-                // Photo sync trailing pass (D-01: runs AFTER all contact creates/updates for this tunnel)
-                if (photoSyncMode == "included" && tunnel.PhotoSyncEnabled)
+                try
                 {
-                    try
+                    var (created, updated, skipped, failed, removed) =
+                        await ProcessTunnelAsync(tunnel, run, isDryRun, ct);
+
+                    totalCreated += created;
+                    totalUpdated += updated;
+                    totalSkipped += skipped;
+                    totalFailed += failed;
+                    totalRemoved += removed;
+
+                    if (failed > 0)
+                        tunnelsWarned++;
+                    else
+                        tunnelsProcessed++;
+
+                    // Photo sync trailing pass (D-01: runs AFTER all contact creates/updates for this tunnel)
+                    if (photoSyncMode == "included" && tunnel.PhotoSyncEnabled)
                     {
-                        var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel, ct);
-                        var (photosUpdated, photosFailed) = await photoSyncService
-                            .SyncPhotosForTunnelAsync(tunnel, run, sourceUsers, isDryRun, ct);
-                        totalPhotosUpdated += photosUpdated;
-                        totalPhotosFailed += photosFailed;
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Photo sync failed for tunnel {TunnelId}", tunnel.Id);
+                        try
+                        {
+                            var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel, ct);
+                            var (photosUpdated, photosFailed) = await photoSyncService
+                                .SyncPhotosForTunnelAsync(tunnel, run, sourceUsers, isDryRun, ct);
+                            totalPhotosUpdated += photosUpdated;
+                            totalPhotosFailed += photosFailed;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogError(ex, "Photo sync failed for tunnel {TunnelId}", tunnel.Id);
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Tunnel {TunnelId} ({TunnelName}) failed with unhandled exception",
+                        tunnel.Id, tunnel.Name);
+                    tunnelsFailed++;
+                }
             }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Tunnel {TunnelId} ({TunnelName}) failed with unhandled exception",
-                    tunnel.Id, tunnel.Name);
-                tunnelsFailed++;
-            }
-        }
 
-        // Step 5b: Auto-trigger photo sync for separate_pass mode (D-02)
-        if (photoSyncMode == "separate_pass")
+            // Step 5b: Auto-trigger photo sync for separate_pass mode (D-02)
+            if (photoSyncMode == "separate_pass")
+            {
+                var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", ct);
+                if (autoTrigger == "true")
+                {
+                    logger.LogInformation("Auto-triggering photo sync after contact sync (D-02)");
+                    await photoSyncService.RunAllAsync(RunType.Scheduled, isDryRun, ct);
+                }
+            }
+
+            // Step 6: Flush all buffered SyncRunItems.
+            // Use CancellationToken.None so shutdown doesn't discard buffered items.
+            await runLogger.FlushItemsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
         {
-            var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", ct);
-            if (autoTrigger == "true")
-            {
-                logger.LogInformation("Auto-triggering photo sync after contact sync (D-02)");
-                await photoSyncService.RunAllAsync(RunType.Scheduled, isDryRun, ct);
-            }
+            fatalError = $"Sync run failed with unhandled exception: {ex.Message}";
+            logger.LogError(ex, "SyncRun {RunId} failed with unhandled exception", run.Id);
         }
-
-        // Step 6: Flush all buffered SyncRunItems.
-        await runLogger.FlushItemsAsync(ct);
-
-        // Update run with photo counts before finalize.
-        run.PhotosUpdated = totalPhotosUpdated;
-        run.PhotosFailed = totalPhotosFailed;
 
         // Step 7: Determine final status.
-        var finalStatus = DetermineStatus(tunnels.Count, tunnelsProcessed, tunnelsWarned, tunnelsFailed, totalFailed);
+        var finalStatus = fatalError != null
+            ? SyncStatus.Failed
+            : DetermineStatus(tunnelCount, tunnelsProcessed, tunnelsWarned, tunnelsFailed, totalFailed);
 
-        // Step 8: Finalize the run.
-        await runLogger.FinalizeRunAsync(
-            run,
-            status: finalStatus,
-            errorSummary: tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed completely" : null,
-            contactsCreated: totalCreated,
-            contactsUpdated: totalUpdated,
-            contactsSkipped: totalSkipped,
-            contactsFailed: totalFailed,
-            contactsRemoved: totalRemoved,
-            tunnelsProcessed: tunnelsProcessed + tunnelsWarned, // both processed (warned = partial success)
-            tunnelsWarned: tunnelsWarned,
-            tunnelsFailed: tunnelsFailed,
-            throttleEvents: throttleCounter.Count,
-            ct: ct);
+        // Step 8: Finalize the run — always runs, even after fatal exceptions.
+        try
+        {
+            await runLogger.FinalizeRunAsync(
+                run,
+                status: finalStatus,
+                errorSummary: fatalError ?? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed completely" : null),
+                contactsCreated: totalCreated,
+                contactsUpdated: totalUpdated,
+                contactsSkipped: totalSkipped,
+                contactsFailed: totalFailed,
+                contactsRemoved: totalRemoved,
+                tunnelsProcessed: tunnelsProcessed + tunnelsWarned, // both processed (warned = partial success)
+                tunnelsWarned: tunnelsWarned,
+                tunnelsFailed: tunnelsFailed,
+                throttleEvents: throttleCounter.Count,
+                photosUpdated: totalPhotosUpdated,
+                photosFailed: totalPhotosFailed,
+                ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Last resort: if even finalization fails, log it. The run will remain stuck,
+            // but at least we have diagnostics. The stale run cleanup job handles this case.
+            logger.LogCritical(ex, "CRITICAL: Failed to finalize SyncRun {RunId} — run is stuck in Running status", run.Id);
+        }
 
         logger.LogInformation(
             "SyncRun {RunId} complete: Status={Status}, Created={Created}, Updated={Updated}, Skipped={Skipped}, Failed={Failed}, Removed={Removed}",

@@ -36,8 +36,10 @@ public class GraphResilienceHandler : DelegatingHandler
                         return ValueTask.FromResult(true);
                     if (statusCode == HttpStatusCode.ServiceUnavailable)
                         return ValueTask.FromResult(true);
-                    // Also retry on transient exceptions (network failures, etc.)
-                    return ValueTask.FromResult(args.Outcome.Exception is not null);
+                    // Only retry transient network exceptions — not auth failures,
+                    // cancellation, or deserialization errors.
+                    return ValueTask.FromResult(
+                        args.Outcome.Exception is HttpRequestException or IOException);
                 },
                 MaxRetryAttempts = 5,
                 BackoffType = DelayBackoffType.Exponential,
@@ -58,13 +60,15 @@ public class GraphResilienceHandler : DelegatingHandler
                 },
                 OnRetry = args =>
                 {
+                    // Dispose the previous response to release socket buffers.
+                    args.Outcome.Result?.Dispose();
                     onThrottle?.Invoke(args.AttemptNumber);
                     var statusLabel = args.Outcome.Result is not null
                         ? args.Outcome.Result.StatusCode.ToString()
                         : args.Outcome.Exception?.GetType().Name ?? "Unknown";
                     _logger.LogWarning(
                         "Graph throttled. Retry {AttemptNumber}/5 after {DelayMs}ms. Status: {StatusCode}",
-                        args.AttemptNumber,
+                        args.AttemptNumber + 1,
                         args.RetryDelay.TotalMilliseconds,
                         statusLabel);
                     return ValueTask.CompletedTask;

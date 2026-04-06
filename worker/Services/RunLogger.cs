@@ -152,6 +152,8 @@ public sealed class RunLogger(
         int tunnelsWarned,
         int tunnelsFailed,
         int throttleEvents,
+        int photosUpdated,
+        int photosFailed,
         CancellationToken ct)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
@@ -175,6 +177,8 @@ public sealed class RunLogger(
         dbRun.TunnelsWarned = tunnelsWarned;
         dbRun.TunnelsFailed = tunnelsFailed;
         dbRun.ThrottleEvents = throttleEvents;
+        dbRun.PhotosUpdated = photosUpdated;
+        dbRun.PhotosFailed = photosFailed;
 
         await db.SaveChangesAsync(ct);
 

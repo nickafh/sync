@@ -49,5 +49,7 @@ public interface IRunLogger
         int tunnelsWarned,
         int tunnelsFailed,
         int throttleEvents,
+        int photosUpdated,
+        int photosFailed,
         CancellationToken ct);
 }

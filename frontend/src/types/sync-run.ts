@@ -1,7 +1,9 @@
+import type { SyncRunStatus, SyncRunType, SyncItemAction } from './common';
+
 export interface SyncRunDto {
   id: number;
-  runType: string;
-  status: string;
+  runType: SyncRunType;
+  status: SyncRunStatus;
   isDryRun: boolean;
   startedAt: string | null;
   completedAt: string | null;
@@ -31,8 +33,8 @@ export interface TunnelRunSummaryDto {
 
 export interface SyncRunDetailDto {
   id: number;
-  runType: string;
-  status: string;
+  runType: SyncRunType;
+  status: SyncRunStatus;
   isDryRun: boolean;
   startedAt: string | null;
   completedAt: string | null;
@@ -55,14 +57,14 @@ export interface SyncRunItemDto {
   id: number;
   tunnelId: number | null;
   sourceUserId: number | null;
-  action: string;
+  action: SyncItemAction;
   fieldChanges: string | null;
   errorMessage: string | null;
   createdAt: string;
 }
 
 export interface TriggerSyncRequest {
-  runType: string;
+  runType: SyncRunType;
   isDryRun: boolean;
   tunnelIds: number[] | null;
 }

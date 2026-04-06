@@ -79,7 +79,8 @@ public class ContactFolderManager : IContactFolderManager
             .ContactFolders
             .GetAsync(config =>
             {
-                config.QueryParameters.Filter = $"displayName eq '{folderName}'";
+                var escapedName = folderName.Replace("'", "''");
+                config.QueryParameters.Filter = $"displayName eq '{escapedName}'";
                 config.QueryParameters.Top = 1;
             }, cancellationToken: ct);
 

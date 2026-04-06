@@ -234,73 +234,91 @@ public class PhotoSyncService : IPhotoSyncService
         var run = await _runLogger.CreateRunAsync(runType, isDryRun, ct);
         _logger.LogInformation("Photo sync RunAllAsync starting RunId={RunId}", run.Id);
 
-        // Load active tunnels with includes
-        await using var tunnelDb = await _dbContextFactory.CreateDbContextAsync(ct);
-        var tunnels = await tunnelDb.Tunnels
-            .Where(t => t.Status == TunnelStatus.Active)
-            .Include(t => t.FieldProfile)
-                .ThenInclude(fp => fp!.FieldProfileFields)
-            .Include(t => t.TunnelPhoneLists)
-                .ThenInclude(tpl => tpl.PhoneList)
-            .ToListAsync(ct);
-
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;
+        int tunnelsWithPhotos = 0;
+        string? fatalError = null;
 
-        foreach (var tunnel in tunnels)
+        try
         {
-            // Per-tunnel opt-out (D-13)
-            if (!tunnel.PhotoSyncEnabled)
+            // Load active tunnels with includes
+            await using var tunnelDb = await _dbContextFactory.CreateDbContextAsync(ct);
+            var tunnels = await tunnelDb.Tunnels
+                .Where(t => t.Status == TunnelStatus.Active)
+                .Include(t => t.FieldProfile)
+                    .ThenInclude(fp => fp!.FieldProfileFields)
+                .Include(t => t.TunnelPhoneLists)
+                    .ThenInclude(tpl => tpl.PhoneList)
+                .ToListAsync(ct);
+
+            tunnelsWithPhotos = tunnels.Count(t => t.PhotoSyncEnabled);
+
+            foreach (var tunnel in tunnels)
             {
-                _logger.LogInformation(
-                    "Photo sync disabled for tunnel {TunnelId} ({TunnelName}), skipping",
-                    tunnel.Id, tunnel.Name);
-                continue;
+                // Per-tunnel opt-out (D-13)
+                if (!tunnel.PhotoSyncEnabled)
+                {
+                    _logger.LogInformation(
+                        "Photo sync disabled for tunnel {TunnelId} ({TunnelName}), skipping",
+                        tunnel.Id, tunnel.Name);
+                    continue;
+                }
+
+                try
+                {
+                    // Load source users that have synced contacts for this tunnel
+                    var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel.Id, ct);
+
+                    var (updated, failed) = await SyncPhotosForTunnelAsync(
+                        tunnel, run, sourceUsers, isDryRun, ct);
+
+                    totalPhotosUpdated += updated;
+                    totalPhotosFailed += failed;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "Photo sync failed for tunnel {TunnelId} ({TunnelName})",
+                        tunnel.Id, tunnel.Name);
+                }
             }
 
-            try
-            {
-                // Load source users that have synced contacts for this tunnel
-                var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel.Id, ct);
-
-                var (updated, failed) = await SyncPhotosForTunnelAsync(
-                    tunnel, run, sourceUsers, isDryRun, ct);
-
-                totalPhotosUpdated += updated;
-                totalPhotosFailed += failed;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Photo sync failed for tunnel {TunnelId} ({TunnelName})",
-                    tunnel.Id, tunnel.Name);
-            }
+            // Flush items — use CancellationToken.None so shutdown doesn't discard buffered items.
+            await _runLogger.FlushItemsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            fatalError = $"Photo sync run failed with unhandled exception: {ex.Message}";
+            _logger.LogError(ex, "Photo sync RunAllAsync {RunId} failed with unhandled exception", run.Id);
         }
 
-        // Update run with photo counts
-        run.PhotosUpdated = totalPhotosUpdated;
-        run.PhotosFailed = totalPhotosFailed;
-        run.CompletedAt = DateTime.UtcNow;
-        run.Status = totalPhotosFailed > 0 ? SyncStatus.Warning : SyncStatus.Success;
-        run.DurationMs = run.StartedAt.HasValue
-            ? (int)(DateTime.UtcNow - run.StartedAt.Value).TotalMilliseconds
-            : null;
+        var finalStatus = fatalError != null
+            ? SyncStatus.Failed
+            : totalPhotosFailed > 0 ? SyncStatus.Warning : SyncStatus.Success;
 
-        // Flush items and finalize
-        await _runLogger.FlushItemsAsync(ct);
-        await _runLogger.FinalizeRunAsync(
-            run,
-            status: run.Status,
-            errorSummary: totalPhotosFailed > 0 ? $"{totalPhotosFailed} photo(s) failed" : null,
-            contactsCreated: 0,
-            contactsUpdated: 0,
-            contactsSkipped: 0,
-            contactsFailed: 0,
-            contactsRemoved: 0,
-            tunnelsProcessed: tunnels.Count(t => t.PhotoSyncEnabled),
-            tunnelsWarned: 0,
-            tunnelsFailed: 0,
-            throttleEvents: _throttleCounter.Count,
-            ct: ct);
+        // Finalize — always runs, even after fatal exceptions.
+        try
+        {
+            await _runLogger.FinalizeRunAsync(
+                run,
+                status: finalStatus,
+                errorSummary: fatalError ?? (totalPhotosFailed > 0 ? $"{totalPhotosFailed} photo(s) failed" : null),
+                contactsCreated: 0,
+                contactsUpdated: 0,
+                contactsSkipped: 0,
+                contactsFailed: 0,
+                contactsRemoved: 0,
+                tunnelsProcessed: tunnelsWithPhotos,
+                tunnelsWarned: 0,
+                tunnelsFailed: 0,
+                throttleEvents: _throttleCounter.Count,
+                photosUpdated: totalPhotosUpdated,
+                photosFailed: totalPhotosFailed,
+                ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "CRITICAL: Failed to finalize photo sync RunId={RunId}", run.Id);
+        }
 
         _logger.LogInformation(
             "Photo sync RunAllAsync complete: RunId={RunId}, PhotosUpdated={Updated}, PhotosFailed={Failed}",

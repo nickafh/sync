@@ -31,11 +31,18 @@ public class GraphClientFactory
 
         if (handlers?.Any() == true)
         {
-            // Build HttpClient with custom handlers injected into the Graph middleware pipeline.
-            // Microsoft.Graph.GraphClientFactory.Create with DelegatingHandlers sets up the
-            // standard Graph middleware (compression, redirect, retry) plus our custom handlers.
-            var handlerArray = handlers.ToArray();
-            var httpClient = Microsoft.Graph.GraphClientFactory.Create(handlers: handlerArray);
+            // Start with the SDK's default middleware (redirect, compress, etc.)
+            // then remove the built-in RetryHandler since we replace it with our
+            // Polly-based GraphResilienceHandler.
+            var defaults = Microsoft.Graph.GraphClientFactory.CreateDefaultHandlers()
+                .Where(h => h is not Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler)
+                .ToList();
+
+            // Prepend our custom handlers (e.g. GraphResilienceHandler) before SDK defaults.
+            var allHandlers = new List<DelegatingHandler>(handlers);
+            allHandlers.AddRange(defaults);
+
+            var httpClient = Microsoft.Graph.GraphClientFactory.Create(handlers: allHandlers.ToArray());
             Client = new GraphServiceClient(httpClient, credential);
         }
         else

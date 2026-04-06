@@ -76,6 +76,7 @@ try
     services.AddScoped<IRunLogger, RunLogger>();
     services.AddScoped<ISyncEngine, SyncEngine>();
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
+    services.AddScoped<StaleRunCleanupService>();
 
     // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17)
     services.AddHangfire(config => config
@@ -114,6 +115,13 @@ try
 
         Log.Information("Registered recurring sync job with cron: {Cron}", cronExpression);
 
+        // Stale run cleanup: mark runs stuck in "Running" for >2 hours as Failed.
+        // Safety net for the rare case where even finalization fails (DB outage, OOM, etc.).
+        recurringJobManager.AddOrUpdate<StaleRunCleanupService>(
+            "stale-run-cleanup",
+            svc => svc.CleanupAsync(),
+            "*/30 * * * *"); // every 30 minutes
+
         // Register photo sync recurring job for separate_pass mode (D-02, PHOT-03)
         var photoModeSetting = await db.AppSettings
             .FirstOrDefaultAsync(s => s.Key == "photo_sync_mode");
@@ -149,3 +157,4 @@ finally
 {
     Log.CloseAndFlush();
 }
+

@@ -15,12 +15,14 @@ export interface SourceInput {
   sourceFilterPlain: string | null;
 }
 
+import type { TunnelStatus, StalePolicy, SyncRunStatus } from './common';
+
 export interface TunnelDto {
   id: number;
   name: string;
   sources: TunnelSourceDto[];
-  status: string;
-  stalePolicy: string;
+  status: TunnelStatus;
+  stalePolicy: StalePolicy;
   staleHoldDays: number;
   fieldProfileId: number | null;
   fieldProfileName: string | null;
@@ -35,8 +37,8 @@ export interface TunnelDetailDto {
   id: number;
   name: string;
   sources: TunnelSourceDto[];
-  status: string;
-  stalePolicy: string;
+  status: TunnelStatus;
+  stalePolicy: StalePolicy;
   staleHoldDays: number;
   fieldProfileId: number | null;
   fieldProfileName: string | null;
@@ -52,7 +54,7 @@ export interface TunnelTargetListDto {
 }
 
 export interface TunnelLastSyncDto {
-  status: string;
+  status: SyncRunStatus;
   completedAt: string | null;
   contactsUpdated: number;
 }
@@ -62,13 +64,13 @@ export interface UpdateTunnelRequest {
   sources: SourceInput[];
   targetListIds: number[];
   fieldProfileId: number | null;
-  stalePolicy: string;
+  stalePolicy: StalePolicy;
   staleDays: number;
   photoSyncEnabled?: boolean;
 }
 
 export interface StatusUpdateRequest {
-  status: string;
+  status: TunnelStatus;
 }
 
 export interface CreateTunnelRequest {
@@ -76,7 +78,7 @@ export interface CreateTunnelRequest {
   sources: SourceInput[];
   targetListIds: number[];
   fieldProfileId: number | null;
-  stalePolicy: string;
+  stalePolicy: StalePolicy;
   staleDays: number;
   photoSyncEnabled?: boolean;
 }

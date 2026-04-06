@@ -13,7 +13,7 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
     credentials: 'include', // Always send httpOnly cookies
     headers: {
-      'Content-Type': 'application/json',
+      ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
       ...options?.headers,
     },
   });

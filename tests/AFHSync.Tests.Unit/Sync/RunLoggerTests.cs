@@ -87,6 +87,8 @@ public class RunLoggerTests
             tunnelsWarned: 0,
             tunnelsFailed: 0,
             throttleEvents: 0,
+            photosUpdated: 0,
+            photosFailed: 0,
             ct: CancellationToken.None);
 
         // Assert

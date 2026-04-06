@@ -570,7 +570,7 @@ public class PhotoSyncServiceTests
             SyncRun run, SyncStatus status, string? errorSummary,
             int contactsCreated, int contactsUpdated, int contactsSkipped, int contactsFailed,
             int contactsRemoved, int tunnelsProcessed, int tunnelsWarned, int tunnelsFailed,
-            int throttleEvents, CancellationToken ct)
+            int throttleEvents, int photosUpdated, int photosFailed, CancellationToken ct)
         {
             WasFinalized = true;
             return Task.CompletedTask;

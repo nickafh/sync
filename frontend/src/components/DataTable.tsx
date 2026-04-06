@@ -81,7 +81,7 @@ export function DataTable<TData>({
                     <TableCell key={`skeleton-cell-${i}-${j}`}>
                       <Skeleton
                         className="h-4 rounded"
-                        style={{ width: `${40 + Math.random() * 40}%` }}
+                        style={{ width: `${40 + ((j * 37 + i * 53) % 40)}%` }}
                       />
                     </TableCell>
                   ))}

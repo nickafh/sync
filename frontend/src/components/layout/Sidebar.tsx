@@ -36,7 +36,7 @@ export function Sidebar() {
 
       <nav className="flex-1 py-4">
         {navItems.map((item) => {
-          const isActive = pathname === item.href;
+          const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
           const Icon = item.icon;
 
           return (
