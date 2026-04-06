@@ -75,19 +75,31 @@ public class FilterConverter : IFilterConverter
             var warnings = new List<string>();
 
             // Strip Exchange system mailbox exclusions (no Graph equivalent, not needed)
-            // Removes patterns like: -and (-not(RecipientTypeDetailsValue -eq 'MailboxPlan'))
+            // Removes: -and (-not(RecipientTypeDetailsValue -eq 'MailboxPlan'))
             filter = Regex.Replace(filter,
                 @"\s*-and\s+\(-not\(RecipientTypeDetailsValue\s+-eq\s+'[^']*'\)\)",
                 string.Empty, RegexOptions.IgnoreCase);
-            // Removes patterns like: -and (-not(Name -like 'SystemMailbox{*'))
+            // Removes: -and (-not(Name -like 'SystemMailbox{*'))
             filter = Regex.Replace(filter,
                 @"\s*-and\s+\(-not\(Name\s+-like\s+'[^']*'\)\)",
                 string.Empty, RegexOptions.IgnoreCase);
+            // Removes: -and (RecipientTypeDetails -eq 'UserMailbox') or with parens
+            filter = Regex.Replace(filter,
+                @"\s*-and\s+\(?RecipientTypeDetails\s+-eq\s+'[^']*'\)?\s*",
+                " ", RegexOptions.IgnoreCase);
+            // Removes if RecipientType is standalone: (RecipientType -eq 'UserMailbox') -and
+            filter = Regex.Replace(filter,
+                @"\(?\s*RecipientType\s+-eq\s+'[^']*'\)?\s*-and\s+",
+                string.Empty, RegexOptions.IgnoreCase);
 
-            // Clean up extra wrapping parentheses left behind
-            // Collapse (((...))) down to the inner content
-            while (Regex.IsMatch(filter, @"^\(+\(([^()]+)\)\)+$"))
-                filter = Regex.Replace(filter, @"^\(+\(([^()]+)\)\)+$", "($1)");
+            // Clean up redundant nested parentheses
+            // Repeatedly collapse ((x)) to (x)
+            string prev;
+            do
+            {
+                prev = filter;
+                filter = Regex.Replace(filter, @"\((\([^()]*\))\)", "$1");
+            } while (filter != prev);
             // Strip single outer parens: (expr) -> expr
             filter = Regex.Replace(filter, @"^\(([^()]*)\)$", "$1");
 
