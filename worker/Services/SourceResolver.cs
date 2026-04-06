@@ -102,7 +102,7 @@ public class SourceResolver : ISourceResolver
             config.QueryParameters.Count = true;
             config.QueryParameters.Select =
             [
-                "id", "displayName", "givenName", "surname", "mail",
+                "id", "displayName", "givenName", "surname", "mail", "userPrincipalName",
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
@@ -150,7 +150,7 @@ public class SourceResolver : ISourceResolver
             DisplayName = graphUser.DisplayName,
             FirstName = graphUser.GivenName,
             LastName = graphUser.Surname,
-            Email = graphUser.Mail,
+            Email = graphUser.UserPrincipalName ?? graphUser.Mail,
             BusinessPhone = graphUser.BusinessPhones?.FirstOrDefault(),
             MobilePhone = graphUser.MobilePhone,
             JobTitle = graphUser.JobTitle,

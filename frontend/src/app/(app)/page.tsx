@@ -101,6 +101,14 @@ export default function DashboardPage() {
   const triggerSync = useTriggerSync();
   const { data: pollingRun } = useSyncRunPolling(activeRunId);
 
+  // Auto-detect a running sync from dashboard data (e.g. after page refresh mid-sync)
+  useEffect(() => {
+    if (activeRunId === null && dashboard?.recentRuns) {
+      const running = dashboard.recentRuns.find((r) => r.status === 'running');
+      if (running) setActiveRunId(running.id);
+    }
+  }, [activeRunId, dashboard]);
+
   // Clear activeRunId when polling run transitions to a terminal status
   useEffect(() => {
     if (activeRunId !== null && pollingRun && pollingRun.status !== 'running') {
