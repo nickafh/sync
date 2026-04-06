@@ -24,6 +24,11 @@ export interface PhoneListSourceTunnelDto {
   name: string;
 }
 
+export interface CreatePhoneListRequest {
+  name: string;
+  description: string | null;
+}
+
 export interface ContactDto {
   sourceUserId: number;
   displayName: string | null;

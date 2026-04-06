@@ -58,6 +58,7 @@ export interface UpdateTunnelRequest {
   sourceSmtpAddress: string | null;
   sourceFilterPlain: string | null;
   targetScope: string;
+  targetUserFilter: string | null;
   targetListIds: number[];
   fieldProfileId: number | null;
   stalePolicy: string;
@@ -77,6 +78,7 @@ export interface CreateTunnelRequest {
   sourceSmtpAddress: string | null;
   sourceFilterPlain: string | null;
   targetScope: string;
+  targetUserFilter: string | null;
   targetListIds: number[];
   fieldProfileId: number | null;
   stalePolicy: string;

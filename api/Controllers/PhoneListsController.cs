@@ -71,6 +71,69 @@ public class PhoneListsController : ControllerBase
     }
 
     /// <summary>
+    /// POST /api/phone-lists — Create a new phone list.
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreatePhoneListRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { message = "Name is required." });
+
+        var phoneList = new AFHSync.Shared.Entities.PhoneList
+        {
+            Name = request.Name.Trim(),
+            Description = request.Description?.Trim(),
+        };
+
+        _db.PhoneLists.Add(phoneList);
+        await _db.SaveChangesAsync();
+
+        return Created($"/api/phone-lists/{phoneList.Id}", new { id = phoneList.Id, name = phoneList.Name });
+    }
+
+    /// <summary>
+    /// PUT /api/phone-lists/{id} — Update a phone list.
+    /// </summary>
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, [FromBody] CreatePhoneListRequest request)
+    {
+        var phoneList = await _db.PhoneLists.FindAsync(id);
+        if (phoneList is null)
+            return NotFound(new { message = $"Phone list {id} not found." });
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { message = "Name is required." });
+
+        phoneList.Name = request.Name.Trim();
+        phoneList.Description = request.Description?.Trim();
+        phoneList.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+        return Ok(new { message = "Phone list updated." });
+    }
+
+    /// <summary>
+    /// DELETE /api/phone-lists/{id} — Delete a phone list.
+    /// </summary>
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var phoneList = await _db.PhoneLists
+            .Include(pl => pl.TunnelPhoneLists)
+            .FirstOrDefaultAsync(pl => pl.Id == id);
+
+        if (phoneList is null)
+            return NotFound(new { message = $"Phone list {id} not found." });
+
+        if (phoneList.TunnelPhoneLists.Count > 0)
+            return BadRequest(new { message = "Cannot delete a phone list that is used by tunnels. Remove it from all tunnels first." });
+
+        _db.PhoneLists.Remove(phoneList);
+        await _db.SaveChangesAsync();
+        return Ok(new { message = "Phone list deleted." });
+    }
+
+    /// <summary>
     /// GET /api/phone-lists/{id}/contacts?page=1&amp;pageSize=20 — Paginated contacts in a phone list.
     /// Returns distinct source users from ContactSyncState for the given phone list.
     /// </summary>

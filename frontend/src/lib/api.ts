@@ -1,7 +1,7 @@
 import type { DashboardDto } from '@/types/dashboard';
 import type { TunnelDto, TunnelDetailDto, UpdateTunnelRequest, CreateTunnelRequest, ImpactPreviewResponse, RefreshDdgResponse } from '@/types/tunnel';
 import type { SyncRunDto, SyncRunDetailDto, SyncRunItemDto, TriggerSyncRequest } from '@/types/sync-run';
-import type { PhoneListDto, PhoneListDetailDto, ContactDto } from '@/types/phone-list';
+import type { PhoneListDto, PhoneListDetailDto, ContactDto, CreatePhoneListRequest } from '@/types/phone-list';
 import type { FieldProfileDto, FieldProfileDetailDto, UpdateFieldProfileRequest } from '@/types/field-profile';
 import type { SettingsDto, SettingsUpdateRequest } from '@/types/settings';
 import type { DdgDto, DdgMemberDto } from '@/types/ddg';
@@ -88,6 +88,12 @@ export const api = {
     get: (id: number) => fetchApi<PhoneListDetailDto>(`/phone-lists/${id}`),
     getContacts: (id: number, page: number, pageSize: number) =>
       fetchApi<ContactDto[]>(`/phone-lists/${id}/contacts?page=${page}&pageSize=${pageSize}`),
+    create: (data: CreatePhoneListRequest) =>
+      fetchApi<{ id: number; name: string }>('/phone-lists', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: number, data: CreatePhoneListRequest) =>
+      fetchApi<{ message: string }>(`/phone-lists/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: number) =>
+      fetchApi<{ message: string }>(`/phone-lists/${id}`, { method: 'DELETE' }),
   },
 
   fieldProfiles: {
