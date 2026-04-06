@@ -74,6 +74,23 @@ public class FilterConverter : IFilterConverter
             var filter = opathFilter.Trim();
             var warnings = new List<string>();
 
+            // Strip Exchange system mailbox exclusions (no Graph equivalent, not needed)
+            // Removes patterns like: -and (-not(RecipientTypeDetailsValue -eq 'MailboxPlan'))
+            filter = Regex.Replace(filter,
+                @"\s*-and\s+\(-not\(RecipientTypeDetailsValue\s+-eq\s+'[^']*'\)\)",
+                string.Empty, RegexOptions.IgnoreCase);
+            // Removes patterns like: -and (-not(Name -like 'SystemMailbox{*'))
+            filter = Regex.Replace(filter,
+                @"\s*-and\s+\(-not\(Name\s+-like\s+'[^']*'\)\)",
+                string.Empty, RegexOptions.IgnoreCase);
+
+            // Clean up extra wrapping parentheses left behind
+            // Collapse (((...))) down to the inner content
+            while (Regex.IsMatch(filter, @"^\(+\(([^()]+)\)\)+$"))
+                filter = Regex.Replace(filter, @"^\(+\(([^()]+)\)\)+$", "($1)");
+            // Strip single outer parens: (expr) -> expr
+            filter = Regex.Replace(filter, @"^\(([^()]*)\)$", "$1");
+
             // Track which attributes in the filter are recognized
             DetectUnrecognizedAttributes(filter, warnings);
 
