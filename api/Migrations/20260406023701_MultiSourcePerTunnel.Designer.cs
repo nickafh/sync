@@ -13,7 +13,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AFHSync.Api.Migrations
 {
     [DbContext(typeof(AFHSyncDbContext))]
-    [Migration("20260406020113_MultiSourcePerTunnel")]
+    [Migration("20260406023701_MultiSourcePerTunnel")]
     partial class MultiSourcePerTunnel
     {
         /// <inheritdoc />
@@ -1163,80 +1163,6 @@ namespace AFHSync.Api.Migrations
                         .HasDatabaseName("idx_tunnels_status");
 
                     b.ToTable("tunnels", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "Buckhead",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        },
-                        new
-                        {
-                            Id = 2,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "North Atlanta",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        },
-                        new
-                        {
-                            Id = 3,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "Intown",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        },
-                        new
-                        {
-                            Id = 4,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "Blue Ridge",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        },
-                        new
-                        {
-                            Id = 5,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "Cobb",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        },
-                        new
-                        {
-                            Id = 6,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            FieldProfileId = 1,
-                            Name = "Clayton",
-                            PhotoSyncEnabled = true,
-                            StaleHoldDays = 14,
-                            StalePolicy = StalePolicy.FlagHold,
-                            Status = TunnelStatus.Active,
-                            UpdatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified)
-                        });
                 });
 
             modelBuilder.Entity("AFHSync.Shared.Entities.TunnelPhoneList", b =>
@@ -1408,68 +1334,6 @@ namespace AFHSync.Api.Migrations
                         .HasDatabaseName("idx_tunnel_sources_tunnel_id");
 
                     b.ToTable("tunnel_sources", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Buckhead Office DDG",
-                            SourceIdentifier = "buckhead-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 1
-                        },
-                        new
-                        {
-                            Id = 2,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "North Atlanta Office DDG",
-                            SourceIdentifier = "northatlanta-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "northatlanta-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 2
-                        },
-                        new
-                        {
-                            Id = 3,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Intown Office DDG",
-                            SourceIdentifier = "intown-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 3
-                        },
-                        new
-                        {
-                            Id = 4,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Blue Ridge Office DDG",
-                            SourceIdentifier = "blueridge-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "blueridge-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 4
-                        },
-                        new
-                        {
-                            Id = 5,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Cobb Office DDG",
-                            SourceIdentifier = "cobb-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "cobb-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 5
-                        },
-                        new
-                        {
-                            Id = 6,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Clayton Office DDG",
-                            SourceIdentifier = "clayton-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "clayton-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 6
-                        });
                 });
 
             modelBuilder.Entity("AFHSync.Shared.Entities.ContactSyncState", b =>

@@ -31,14 +31,5 @@ public class TunnelConfiguration : IEntityTypeConfiguration<Tunnel>
             .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasIndex(e => e.Status).HasDatabaseName("idx_tunnels_status");
-
-        builder.HasData(
-            new Tunnel { Id = 1, Name = "Buckhead", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active },
-            new Tunnel { Id = 2, Name = "North Atlanta", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active },
-            new Tunnel { Id = 3, Name = "Intown", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active },
-            new Tunnel { Id = 4, Name = "Blue Ridge", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active },
-            new Tunnel { Id = 5, Name = "Cobb", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active },
-            new Tunnel { Id = 6, Name = "Clayton", FieldProfileId = 1, StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, PhotoSyncEnabled = true, Status = TunnelStatus.Active }
-        );
     }
 }
