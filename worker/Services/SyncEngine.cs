@@ -168,6 +168,7 @@ public sealed class SyncEngine(
         if (tunnelId.HasValue)
         {
             var tunnel = await db.Tunnels
+                .Include(t => t.TunnelSources)
                 .Include(t => t.FieldProfile)
                     .ThenInclude(fp => fp!.FieldProfileFields)
                 .Include(t => t.TunnelPhoneLists)
@@ -184,6 +185,7 @@ public sealed class SyncEngine(
 
         return await db.Tunnels
             .Where(t => t.Status == TunnelStatus.Active)
+            .Include(t => t.TunnelSources)
             .Include(t => t.FieldProfile)
                 .ThenInclude(fp => fp!.FieldProfileFields)
             .Include(t => t.TunnelPhoneLists)
@@ -486,14 +488,8 @@ public sealed class SyncEngine(
 
     private async Task<List<TargetMailbox>> LoadTargetMailboxesAsync(Tunnel tunnel, CancellationToken ct)
     {
-        if (tunnel.TargetScope == TargetScope.SpecificUsers)
-        {
-            logger.LogWarning(
-                "Tunnel {TunnelName} uses SpecificUsers scope — not yet implemented, skipping",
-                tunnel.Name);
-            return [];
-        }
-
+        // Target scope is now per phone list, not per tunnel.
+        // Load all active mailboxes; per-list scope filtering is handled downstream.
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
         return await db.TargetMailboxes
             .Where(m => m.IsActive)

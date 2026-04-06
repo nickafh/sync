@@ -35,20 +35,33 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
-    /// Resolves source members for the given tunnel: queries Graph, maps to SourceUser entities,
-    /// applies post-query filtering, upserts to the database, and returns the filtered list.
+    /// Resolves source members for the given tunnel: queries Graph for each source,
+    /// combines results, applies post-query filtering, upserts to the database, and returns the filtered list.
     /// </summary>
     public async Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
     {
-        _logger.LogInformation("Resolving source members for tunnel {TunnelId} ({TunnelName})",
-            tunnel.Id, tunnel.Name);
+        _logger.LogInformation("Resolving source members for tunnel {TunnelId} ({TunnelName}) with {SourceCount} source(s)",
+            tunnel.Id, tunnel.Name, tunnel.TunnelSources.Count);
 
-        var graphUsers = await FetchGraphUsersAsync(tunnel.SourceIdentifier, ct);
+        var allGraphUsers = new List<Microsoft.Graph.Models.User>();
+        foreach (var source in tunnel.TunnelSources)
+        {
+            var graphUsers = await FetchGraphUsersAsync(source.SourceIdentifier, ct);
+            _logger.LogDebug("Fetched {Count} users from Graph for source {SourceId} ({SourceName})",
+                graphUsers.Count, source.Id, source.SourceDisplayName);
+            allGraphUsers.AddRange(graphUsers);
+        }
 
-        _logger.LogDebug("Fetched {Count} users from Graph for tunnel {TunnelId}",
-            graphUsers.Count, tunnel.Id);
+        // Deduplicate by Graph user ID across multiple sources
+        var deduped = allGraphUsers
+            .GroupBy(u => u.Id)
+            .Select(g => g.First())
+            .ToList();
 
-        var sourceUsers = graphUsers
+        _logger.LogDebug("Total {RawCount} users from all sources, {DedupedCount} after dedup",
+            allGraphUsers.Count, deduped.Count);
+
+        var sourceUsers = deduped
             .Select(MapGraphUserToSourceUser)
             .ToList();
 
