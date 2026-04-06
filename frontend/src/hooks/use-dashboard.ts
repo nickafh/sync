@@ -32,7 +32,7 @@ export function useSyncRunPolling(runId: number | null) {
     enabled: runId !== null && runId > 0,
     refetchInterval: (query) => {
       const data = query.state.data as SyncRunDto | undefined;
-      return data?.status === 'running' ? 3000 : false;
+      return data?.status === 'running' || data?.status === 'pending' ? 3000 : false;
     },
   });
 }

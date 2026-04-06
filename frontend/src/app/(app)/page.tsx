@@ -38,8 +38,16 @@ function formatRunType(runType: string): string {
 }
 
 function SyncProgressCard({ run }: { run: SyncRunDetailDto }) {
+  const [now, setNow] = useState(Date.now());
+
+  // Tick every second so the elapsed timer updates live
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const elapsed = run.startedAt
-    ? Math.floor((Date.now() - new Date(run.startedAt).getTime()) / 1000)
+    ? Math.floor((now - new Date(run.startedAt).getTime()) / 1000)
     : 0;
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;
@@ -101,22 +109,22 @@ export default function DashboardPage() {
   const triggerSync = useTriggerSync();
   const { data: pollingRun } = useSyncRunPolling(activeRunId);
 
-  // Auto-detect a running sync from dashboard data (e.g. after page refresh mid-sync)
+  // Auto-detect a running/pending sync from dashboard data (e.g. after page refresh mid-sync)
   useEffect(() => {
     if (activeRunId === null && dashboard?.recentRuns) {
-      const running = dashboard.recentRuns.find((r) => r.status === 'running');
-      if (running) setActiveRunId(running.id);
+      const active = dashboard.recentRuns.find((r) => r.status === 'running' || r.status === 'pending');
+      if (active) setActiveRunId(active.id);
     }
   }, [activeRunId, dashboard]);
 
   // Clear activeRunId when polling run transitions to a terminal status
   useEffect(() => {
-    if (activeRunId !== null && pollingRun && pollingRun.status !== 'running') {
+    if (activeRunId !== null && pollingRun && pollingRun.status !== 'running' && pollingRun.status !== 'pending') {
       setActiveRunId(null);
     }
   }, [activeRunId, pollingRun]);
 
-  const isSyncing = triggerSync.isPending || (activeRunId !== null && pollingRun?.status === 'running');
+  const isSyncing = triggerSync.isPending || (activeRunId !== null && (pollingRun?.status === 'running' || pollingRun?.status === 'pending'));
 
   function handleRunSync() {
     triggerSync.mutate(

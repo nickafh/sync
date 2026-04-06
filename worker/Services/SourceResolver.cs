@@ -102,7 +102,7 @@ public class SourceResolver : ISourceResolver
             config.QueryParameters.Count = true;
             config.QueryParameters.Select =
             [
-                "id", "displayName", "givenName", "surname", "mail", "userPrincipalName",
+                "id", "displayName", "givenName", "surname", "mail", "proxyAddresses",
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
@@ -150,7 +150,7 @@ public class SourceResolver : ISourceResolver
             DisplayName = graphUser.DisplayName,
             FirstName = graphUser.GivenName,
             LastName = graphUser.Surname,
-            Email = graphUser.UserPrincipalName ?? graphUser.Mail,
+            Email = GetPrimarySmtp(graphUser) ?? graphUser.Mail,
             BusinessPhone = graphUser.BusinessPhones?.FirstOrDefault(),
             MobilePhone = graphUser.MobilePhone,
             JobTitle = graphUser.JobTitle,
@@ -191,6 +191,17 @@ public class SourceResolver : ISourceResolver
             !string.IsNullOrWhiteSpace(u.Email) &&
             !IsServiceAccount(u.Email!)
         ).ToList();
+    }
+
+    /// <summary>
+    /// Extracts the primary SMTP address from proxyAddresses.
+    /// The primary is the entry prefixed with uppercase "SMTP:" (e.g., "SMTP:David@example.com").
+    /// </summary>
+    private static string? GetPrimarySmtp(User graphUser)
+    {
+        var primary = graphUser.ProxyAddresses?
+            .FirstOrDefault(p => p.StartsWith("SMTP:", StringComparison.Ordinal));
+        return primary?[5..]; // Strip "SMTP:" prefix
     }
 
     private static bool IsServiceAccount(string email)
