@@ -158,6 +158,11 @@ public sealed class SyncEngine(
                             logger.LogError(ex, "Photo sync failed for tunnel {TunnelId}", tunnel.Id);
                         }
                     }
+
+                    // Interim progress update so the dashboard can show live counts.
+                    await UpdateRunProgressAsync(run.Id, totalCreated, totalUpdated, totalSkipped,
+                        totalFailed, totalRemoved, tunnelsProcessed + tunnelsWarned, tunnelsWarned,
+                        tunnelsFailed, totalPhotosUpdated, totalPhotosFailed);
                 }
                 catch (Exception ex)
                 {
@@ -616,6 +621,40 @@ public sealed class SyncEngine(
         {
             logger.LogWarning(ex, "Failed to read {Key} from app_settings, using default: {Default}", key, defaultValue);
             return defaultValue;
+        }
+    }
+
+    /// <summary>
+    /// Writes interim progress counts to the SyncRun row so the dashboard can poll live stats.
+    /// Best-effort: failures are logged but don't interrupt the sync.
+    /// </summary>
+    private async Task UpdateRunProgressAsync(
+        int runId, int created, int updated, int skipped, int failed, int removed,
+        int tunnelsProcessed, int tunnelsWarned, int tunnelsFailed,
+        int photosUpdated, int photosFailed)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var dbRun = await db.SyncRuns.FindAsync([runId]);
+            if (dbRun != null)
+            {
+                dbRun.ContactsCreated = created;
+                dbRun.ContactsUpdated = updated;
+                dbRun.ContactsSkipped = skipped;
+                dbRun.ContactsFailed = failed;
+                dbRun.ContactsRemoved = removed;
+                dbRun.TunnelsProcessed = tunnelsProcessed;
+                dbRun.TunnelsWarned = tunnelsWarned;
+                dbRun.TunnelsFailed = tunnelsFailed;
+                dbRun.PhotosUpdated = photosUpdated;
+                dbRun.PhotosFailed = photosFailed;
+                await db.SaveChangesAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to write interim progress for RunId={RunId}", runId);
         }
     }
 

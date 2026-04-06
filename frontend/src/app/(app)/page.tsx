@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Cable, ClipboardList, Play, FlaskConical } from 'lucide-react';
+import { Loader2, Cable, ClipboardList, Play, FlaskConical, ArrowUpDown } from 'lucide-react';
 import { useDashboard, useTriggerSync, useSyncRunPolling } from '@/hooks/use-dashboard';
 import { useTunnels } from '@/hooks/use-tunnels';
+import type { SyncRunDetailDto } from '@/types/sync-run';
 import { PageHeader } from '@/components/PageHeader';
 import { KPICard } from '@/components/KPICard';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -34,6 +35,61 @@ function formatRunType(runType: string): string {
   return runType
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function SyncProgressCard({ run }: { run: SyncRunDetailDto }) {
+  const elapsed = run.startedAt
+    ? Math.floor((Date.now() - new Date(run.startedAt).getTime()) / 1000)
+    : 0;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const total = run.contactsCreated + run.contactsUpdated + run.contactsSkipped + run.contactsFailed + run.contactsRemoved;
+
+  return (
+    <Card className="mt-6 border-gold/30 bg-gold/5">
+      <CardContent className="py-4">
+        <div className="flex items-center gap-3 mb-3">
+          <Loader2 className="h-5 w-5 animate-spin text-gold" />
+          <span className="font-heading text-navy font-bold">
+            Sync in progress
+          </span>
+          <span className="text-xs text-text-muted ml-auto">
+            {mins}m {secs.toString().padStart(2, '0')}s elapsed
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
+          <div>
+            <div className="text-text-muted text-xs">Processed</div>
+            <div className="font-medium text-navy">{total} contacts</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Created</div>
+            <div className="font-medium text-emerald-600">{run.contactsCreated}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Updated</div>
+            <div className="font-medium text-blue-600">{run.contactsUpdated}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Skipped</div>
+            <div className="font-medium text-text-muted">{run.contactsSkipped}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Failed</div>
+            <div className="font-medium text-red-600">{run.contactsFailed}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Removed</div>
+            <div className="font-medium text-amber-600">{run.contactsRemoved}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Tunnels</div>
+            <div className="font-medium text-navy">{run.tunnelsProcessed ?? 0}</div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function DashboardPage() {
@@ -170,6 +226,11 @@ export default function DashboardPage() {
           )}
         </KPICard>
       </div>
+
+      {/* Live sync progress */}
+      {isSyncing && pollingRun && (
+        <SyncProgressCard run={pollingRun} />
+      )}
 
       {/* Two-column grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
