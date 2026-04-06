@@ -102,7 +102,7 @@ public class FieldProfilesController : ControllerBase
                 continue;
 
             // Parse behavior string to SyncBehavior enum (case-insensitive)
-            if (Enum.TryParse<SyncBehavior>(entry.Behavior, ignoreCase: true, out var behavior))
+            if (EnumHelpers.TryFromPgName<SyncBehavior>(entry.Behavior, out var behavior))
             {
                 field.Behavior = behavior;
             }

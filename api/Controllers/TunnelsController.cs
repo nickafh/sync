@@ -134,7 +134,7 @@ public class TunnelsController : ControllerBase
         if (request.Sources is null || request.Sources.Length == 0)
             return BadRequest(new { message = "At least one source is required." });
 
-        if (!Enum.TryParse<StalePolicy>(request.StalePolicy, ignoreCase: true, out var stalePolicy))
+        if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
         var tunnel = new Tunnel
@@ -155,7 +155,7 @@ public class TunnelsController : ControllerBase
         // Create TunnelSource records
         foreach (var src in request.Sources)
         {
-            if (!Enum.TryParse<SourceType>(src.SourceType, ignoreCase: true, out var sourceType))
+            if (!EnumHelpers.TryFromPgName<SourceType>(src.SourceType, out var sourceType))
                 return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
 
             _db.TunnelSources.Add(new TunnelSource
@@ -198,7 +198,7 @@ public class TunnelsController : ControllerBase
         if (request.Sources is null || request.Sources.Length == 0)
             return BadRequest(new { message = "At least one source is required." });
 
-        if (!Enum.TryParse<StalePolicy>(request.StalePolicy, ignoreCase: true, out var stalePolicy))
+        if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
         tunnel.Name = request.Name;
@@ -216,7 +216,7 @@ public class TunnelsController : ControllerBase
 
         foreach (var src in request.Sources)
         {
-            if (!Enum.TryParse<SourceType>(src.SourceType, ignoreCase: true, out var sourceType))
+            if (!EnumHelpers.TryFromPgName<SourceType>(src.SourceType, out var sourceType))
                 return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
 
             _db.TunnelSources.Add(new TunnelSource
@@ -261,7 +261,7 @@ public class TunnelsController : ControllerBase
         if (tunnel is null)
             return NotFound(new { message = $"Tunnel {id} not found." });
 
-        if (!Enum.TryParse<TunnelStatus>(request.Status, ignoreCase: true, out var status))
+        if (!EnumHelpers.TryFromPgName<TunnelStatus>(request.Status, out var status))
             return BadRequest(new { message = $"Invalid status: {request.Status}. Use 'active' or 'inactive'." });
 
         tunnel.Status = status;

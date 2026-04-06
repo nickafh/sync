@@ -83,7 +83,7 @@ public class PhoneListsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "Name is required." });
 
-        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
+        if (!EnumHelpers.TryFromPgName<TargetScope>(request.TargetScope, out var targetScope))
             return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
 
         var phoneList = new AFHSync.Shared.Entities.PhoneList
@@ -113,7 +113,7 @@ public class PhoneListsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "Name is required." });
 
-        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
+        if (!EnumHelpers.TryFromPgName<TargetScope>(request.TargetScope, out var targetScope))
             return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
 
         phoneList.Name = request.Name.Trim();
