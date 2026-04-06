@@ -73,7 +73,15 @@ public class SourceResolver : ISourceResolver
 
         await UpsertSourceUsersAsync(filtered, ct);
 
-        return filtered;
+        // Reload from DB to get actual IDs (raw SQL upsert doesn't populate in-memory IDs)
+        var entraIds = filtered.Select(u => u.EntraId).ToList();
+        await using var reloadDb = await _dbContextFactory.CreateDbContextAsync(ct);
+        var reloaded = await reloadDb.SourceUsers
+            .Where(u => entraIds.Contains(u.EntraId))
+            .ToListAsync(ct);
+
+        _logger.LogDebug("Reloaded {Count} source users with DB IDs", reloaded.Count);
+        return reloaded;
     }
 
     /// <summary>
