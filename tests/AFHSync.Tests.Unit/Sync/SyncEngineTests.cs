@@ -101,7 +101,6 @@ public class SyncEngineTests
             Status = TunnelStatus.Active,
             StalePolicy = StalePolicy.FlagHold,
             StaleHoldDays = 14,
-            SourceIdentifier = "some-filter"
         };
         seedCtx.Tunnels.Add(tunnel);
         await seedCtx.SaveChangesAsync();

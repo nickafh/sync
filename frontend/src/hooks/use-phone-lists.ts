@@ -20,6 +20,15 @@ export function useCreatePhoneList() {
   });
 }
 
+export function useUpdatePhoneList() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: number; data: CreatePhoneListRequest }) =>
+      api.phoneLists.update(id, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['phone-lists'] }),
+  });
+}
+
 export function useDeletePhoneList() {
   const queryClient = useQueryClient();
   return useMutation({

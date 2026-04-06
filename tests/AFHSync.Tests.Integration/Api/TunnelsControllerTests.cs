@@ -86,19 +86,25 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         for (int i = 1; i <= count; i++)
         {
-            db.Tunnels.Add(new Tunnel
+            var tunnel = new Tunnel
             {
                 Name = $"Test Tunnel {i}",
-                SourceType = SourceType.Ddg,
-                SourceIdentifier = $"startsWith(displayName, 'Office{i}')",
-                SourceDisplayName = $"Office {i} DDG",
-                SourceSmtpAddress = $"office{i}-ddg@atlantafinehomes.com",
-                TargetScope = TargetScope.AllUsers,
                 StalePolicy = StalePolicy.FlagHold,
                 StaleHoldDays = 14,
                 Status = TunnelStatus.Active,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
+            };
+            db.Tunnels.Add(tunnel);
+            db.SaveChanges();
+            db.TunnelSources.Add(new TunnelSource
+            {
+                TunnelId = tunnel.Id,
+                SourceType = SourceType.Ddg,
+                SourceIdentifier = $"startsWith(displayName, 'Office{i}')",
+                SourceDisplayName = $"Office {i} DDG",
+                SourceSmtpAddress = $"office{i}-ddg@atlantafinehomes.com",
+                CreatedAt = DateTime.UtcNow
             });
         }
         db.SaveChanges();
@@ -144,11 +150,13 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var createRequest = new
         {
             name = "Buckhead Office",
-            sourceType = "Ddg",
-            sourceIdentifier = "startsWith(displayName, 'Buckhead')",
-            sourceDisplayName = "Buckhead DDG",
-            sourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
-            targetScope = "AllUsers",
+            sources = new[] { new {
+                sourceType = "Ddg",
+                sourceIdentifier = "startsWith(displayName, 'Buckhead')",
+                sourceDisplayName = "Buckhead DDG",
+                sourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
+                sourceFilterPlain = (string?)null
+            }},
             targetListIds = new[] { phoneList.Id },
             fieldProfileId = (int?)null,
             stalePolicy = "FlagHold",
@@ -167,15 +175,17 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task PostTunnel_StoresDdgReference_DDG04()
     {
-        // Per DDG-04: SourceIdentifier stores the Graph $filter and SourceDisplayName stores DDG name
+        // Per DDG-04: sources array stores Graph $filter and DDG display name
         var createRequest = new
         {
             name = "Intown Office",
-            sourceType = "Ddg",
-            sourceIdentifier = "startsWith(displayName, 'Intown')",
-            sourceDisplayName = "Intown DDG Display Name",
-            sourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
-            targetScope = "AllUsers",
+            sources = new[] { new {
+                sourceType = "Ddg",
+                sourceIdentifier = "startsWith(displayName, 'Intown')",
+                sourceDisplayName = "Intown DDG Display Name",
+                sourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
+                sourceFilterPlain = (string?)null
+            }},
             targetListIds = Array.Empty<int>(),
             fieldProfileId = (int?)null,
             stalePolicy = "FlagHold",
@@ -188,14 +198,17 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var body = await createResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         var newId = body.GetProperty("id").GetInt32();
 
-        // Fetch the tunnel to verify DDG-04 fields were stored
+        // Fetch the tunnel to verify DDG-04 source fields were stored
         var getResponse = await AuthenticatedGetAsync($"/api/tunnels/{newId}");
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
 
-        var tunnel = await getResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
-        Assert.Equal("startsWith(displayName, 'Intown')", tunnel.GetProperty("sourceIdentifier").GetString());
-        Assert.Equal("Intown DDG Display Name", tunnel.GetProperty("sourceDisplayName").GetString());
-        Assert.Equal("intown-ddg@atlantafinehomes.com", tunnel.GetProperty("sourceSmtpAddress").GetString());
+        var tunnelJson = await getResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var sources = tunnelJson.GetProperty("sources");
+        Assert.Equal(1, sources.GetArrayLength());
+        var source = sources[0];
+        Assert.Equal("startsWith(displayName, 'Intown')", source.GetProperty("sourceIdentifier").GetString());
+        Assert.Equal("Intown DDG Display Name", source.GetProperty("sourceDisplayName").GetString());
+        Assert.Equal("intown-ddg@atlantafinehomes.com", source.GetProperty("sourceSmtpAddress").GetString());
     }
 
     [Fact]
@@ -207,9 +220,6 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var tunnel = new Tunnel
         {
             Name = "Status Toggle Test",
-            SourceType = SourceType.Ddg,
-            SourceIdentifier = "filter",
-            TargetScope = TargetScope.AllUsers,
             StalePolicy = StalePolicy.FlagHold,
             StaleHoldDays = 14,
             Status = TunnelStatus.Active,
@@ -239,9 +249,6 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var tunnel = new Tunnel
         {
             Name = "Delete Me",
-            SourceType = SourceType.Ddg,
-            SourceIdentifier = "filter",
-            TargetScope = TargetScope.AllUsers,
             StalePolicy = StalePolicy.FlagHold,
             StaleHoldDays = 14,
             Status = TunnelStatus.Inactive,
