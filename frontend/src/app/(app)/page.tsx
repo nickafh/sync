@@ -65,7 +65,7 @@ function SyncProgressCard({ run }: { run: SyncRunDetailDto }) {
             {mins}m {secs.toString().padStart(2, '0')}s elapsed
           </span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-sm">
+        <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3 text-sm">
           <div>
             <div className="text-text-muted text-xs">Processed</div>
             <div className="font-medium text-navy">{total} contacts</div>
@@ -89,6 +89,14 @@ function SyncProgressCard({ run }: { run: SyncRunDetailDto }) {
           <div>
             <div className="text-text-muted text-xs">Removed</div>
             <div className="font-medium text-amber-600">{run.contactsRemoved}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Photos</div>
+            <div className="font-medium text-indigo-600">{run.photosUpdated}</div>
+          </div>
+          <div>
+            <div className="text-text-muted text-xs">Photos Failed</div>
+            <div className="font-medium text-red-600">{run.photosFailed}</div>
           </div>
           <div>
             <div className="text-text-muted text-xs">Tunnels</div>
