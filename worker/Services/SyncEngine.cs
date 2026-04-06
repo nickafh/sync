@@ -350,11 +350,11 @@ public sealed class SyncEngine(
         string folderId;
         try
         {
-            folderId = await contactFolderManager.GetOrCreateFolderAsync(mailbox.EntraId, phoneList.Name, ct);
+            folderId = await contactFolderManager.GetOrCreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", phoneList.Name, mailbox.Id);
+            logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
             failed++;
             return (created, updated, skipped, failed, removed);
         }
