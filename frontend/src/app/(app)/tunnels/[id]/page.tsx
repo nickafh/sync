@@ -39,6 +39,7 @@ import type {
   UpdateTunnelRequest,
   TunnelDetailDto,
   ImpactPreviewResponse,
+  SourceInput,
 } from '@/types/tunnel';
 
 const stalePolicyOptions = [
@@ -56,8 +57,10 @@ function isHighImpactChange(
   original: TunnelDetailDto,
   edited: UpdateTunnelRequest,
 ): boolean {
-  // Source DDG swap
-  if (original.sourceIdentifier !== edited.sourceIdentifier) return true;
+  // Source change: compare source identifiers
+  const origSourceIds = original.sources.map((s) => s.sourceIdentifier).sort();
+  const editSourceIds = edited.sources.map((s) => s.sourceIdentifier).sort();
+  if (origSourceIds.length !== editSourceIds.length || origSourceIds.some((id, i) => id !== editSourceIds[i])) return true;
   // Target list removal (any original target not in new targets)
   const originalIds = new Set(original.targetLists.map((l) => l.id));
   for (const id of originalIds) {
@@ -104,13 +107,7 @@ export default function TunnelDetailPage() {
 
   const [editForm, setEditForm] = useState<UpdateTunnelRequest>({
     name: '',
-    sourceType: '',
-    sourceIdentifier: '',
-    sourceDisplayName: null,
-    sourceSmtpAddress: null,
-    sourceFilterPlain: null,
-    targetScope: '',
-    targetUserFilter: null,
+    sources: [],
     targetListIds: [],
     fieldProfileId: null,
     stalePolicy: '',
@@ -122,13 +119,13 @@ export default function TunnelDetailPage() {
     if (tunnel && !isEditing) {
       setEditForm({
         name: tunnel.name,
-        sourceType: tunnel.sourceType,
-        sourceIdentifier: tunnel.sourceIdentifier,
-        sourceDisplayName: tunnel.sourceDisplayName,
-        sourceSmtpAddress: tunnel.sourceSmtpAddress,
-        sourceFilterPlain: tunnel.sourceFilterPlain,
-        targetScope: tunnel.targetScope,
-        targetUserFilter: tunnel.targetUserFilter ?? null,
+        sources: tunnel.sources.map((s) => ({
+          sourceType: s.sourceType,
+          sourceIdentifier: s.sourceIdentifier,
+          sourceDisplayName: s.sourceDisplayName,
+          sourceSmtpAddress: s.sourceSmtpAddress,
+          sourceFilterPlain: s.sourceFilterPlain,
+        })),
         targetListIds: tunnel.targetLists.map((l) => l.id),
         fieldProfileId: tunnel.fieldProfileId,
         stalePolicy: tunnel.stalePolicy,
@@ -142,13 +139,13 @@ export default function TunnelDetailPage() {
     if (!tunnel) return;
     setEditForm({
       name: tunnel.name,
-      sourceType: tunnel.sourceType,
-      sourceIdentifier: tunnel.sourceIdentifier,
-      sourceDisplayName: tunnel.sourceDisplayName,
-      sourceSmtpAddress: tunnel.sourceSmtpAddress,
-      sourceFilterPlain: tunnel.sourceFilterPlain,
-      targetScope: tunnel.targetScope,
-      targetUserFilter: tunnel.targetUserFilter ?? null,
+      sources: tunnel.sources.map((s) => ({
+        sourceType: s.sourceType,
+        sourceIdentifier: s.sourceIdentifier,
+        sourceDisplayName: s.sourceDisplayName,
+        sourceSmtpAddress: s.sourceSmtpAddress,
+        sourceFilterPlain: s.sourceFilterPlain,
+      })),
       targetListIds: tunnel.targetLists.map((l) => l.id),
       fieldProfileId: tunnel.fieldProfileId,
       stalePolicy: tunnel.stalePolicy,
@@ -162,13 +159,13 @@ export default function TunnelDetailPage() {
     if (!tunnel) return;
     setEditForm({
       name: tunnel.name,
-      sourceType: tunnel.sourceType,
-      sourceIdentifier: tunnel.sourceIdentifier,
-      sourceDisplayName: tunnel.sourceDisplayName,
-      sourceSmtpAddress: tunnel.sourceSmtpAddress,
-      sourceFilterPlain: tunnel.sourceFilterPlain,
-      targetScope: tunnel.targetScope,
-      targetUserFilter: tunnel.targetUserFilter ?? null,
+      sources: tunnel.sources.map((s) => ({
+        sourceType: s.sourceType,
+        sourceIdentifier: s.sourceIdentifier,
+        sourceDisplayName: s.sourceDisplayName,
+        sourceSmtpAddress: s.sourceSmtpAddress,
+        sourceFilterPlain: s.sourceFilterPlain,
+      })),
       targetListIds: tunnel.targetLists.map((l) => l.id),
       fieldProfileId: tunnel.fieldProfileId,
       stalePolicy: tunnel.stalePolicy,
@@ -219,12 +216,16 @@ export default function TunnelDetailPage() {
   };
 
   const handleDdgSelect = (ddg: DdgDto) => {
-    setEditForm((prev) => ({
-      ...prev,
+    const newSource: SourceInput = {
+      sourceType: 'ddg',
       sourceIdentifier: ddg.graphFilter ?? ddg.recipientFilter,
       sourceDisplayName: ddg.displayName,
       sourceSmtpAddress: ddg.primarySmtpAddress,
       sourceFilterPlain: ddg.recipientFilterPlain,
+    };
+    setEditForm((prev) => ({
+      ...prev,
+      sources: [...prev.sources, newSource],
     }));
   };
 
@@ -384,7 +385,18 @@ export default function TunnelDetailPage() {
         {/* Source Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Source</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Sources</CardTitle>
+              {isEditing && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDdgPickerOpen(true)}
+                >
+                  Add Source
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {isEditing ? (
@@ -402,87 +414,87 @@ export default function TunnelDetailPage() {
                   />
                 </div>
                 <Separator />
-                <div>
-                  <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                    DDG Source
-                  </label>
-                  <div className="mt-1 flex items-center gap-3">
-                    <div className="flex-1">
+                {editForm.sources.map((src, idx) => (
+                  <div key={idx} className="space-y-2 border rounded-md p-3">
+                    <div className="flex items-center justify-between">
                       <p className="font-medium">
-                        {editForm.sourceDisplayName || editForm.sourceIdentifier}
+                        {src.sourceDisplayName || src.sourceIdentifier}
                       </p>
-                      {editForm.sourceSmtpAddress && (
-                        <p className="text-sm text-text-muted">
-                          {editForm.sourceSmtpAddress}
-                        </p>
-                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() =>
+                          setEditForm((prev) => ({
+                            ...prev,
+                            sources: prev.sources.filter((_, i) => i !== idx),
+                          }))
+                        }
+                        disabled={editForm.sources.length <= 1}
+                      >
+                        Remove
+                      </Button>
                     </div>
-                    <Button
-                      variant="outline"
-                      onClick={() => setDdgPickerOpen(true)}
-                    >
-                      Change Source
-                    </Button>
-                  </div>
-                </div>
-                {editForm.sourceFilterPlain && (
-                  <div>
-                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                      Filter Description
-                    </label>
-                    <p className="text-sm text-text-muted mt-1">
-                      {editForm.sourceFilterPlain}
+                    {src.sourceSmtpAddress && (
+                      <p className="text-sm text-text-muted">{src.sourceSmtpAddress}</p>
+                    )}
+                    {src.sourceFilterPlain && (
+                      <p className="text-sm text-text-muted">{src.sourceFilterPlain}</p>
+                    )}
+                    <p className="text-sm text-text-muted font-mono text-xs break-all">
+                      {src.sourceIdentifier}
                     </p>
                   </div>
+                ))}
+                {editForm.sources.length === 0 && (
+                  <p className="text-sm text-text-muted">No sources. Add at least one DDG source.</p>
                 )}
-                <div>
-                  <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                    Graph Filter
-                  </label>
-                  <p className="text-sm text-text-muted mt-1 font-mono text-xs break-all">
-                    {editForm.sourceIdentifier}
-                  </p>
-                </div>
               </div>
             ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                      DDG Name
-                    </label>
-                    <p className="mt-1 font-medium">
-                      {tunnel.sourceDisplayName || tunnel.sourceIdentifier}
-                    </p>
+              <div className="space-y-4">
+                {tunnel.sources.map((src) => (
+                  <div key={src.id} className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                          DDG Name
+                        </label>
+                        <p className="mt-1 font-medium">
+                          {src.sourceDisplayName || src.sourceIdentifier}
+                        </p>
+                      </div>
+                      <DDGRefreshButton tunnelId={tunnelId} sourceId={src.id} />
+                    </div>
+                    {src.sourceSmtpAddress && (
+                      <div>
+                        <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                          SMTP Address
+                        </label>
+                        <p className="mt-1 text-sm">{src.sourceSmtpAddress}</p>
+                      </div>
+                    )}
+                    {src.sourceFilterPlain && (
+                      <div>
+                        <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                          Filter Description
+                        </label>
+                        <p className="mt-1 text-sm">{src.sourceFilterPlain}</p>
+                      </div>
+                    )}
+                    <div>
+                      <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                        Graph Filter
+                      </label>
+                      <p className="mt-1 text-sm font-mono text-xs text-text-muted break-all">
+                        {src.sourceIdentifier}
+                      </p>
+                    </div>
+                    {tunnel.sources.length > 1 && <Separator />}
                   </div>
-                  <DDGRefreshButton tunnelId={tunnelId} />
-                </div>
-                {tunnel.sourceSmtpAddress && (
-                  <div>
-                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                      SMTP Address
-                    </label>
-                    <p className="mt-1 text-sm">{tunnel.sourceSmtpAddress}</p>
-                  </div>
+                ))}
+                {tunnel.sources.length === 0 && (
+                  <p className="text-sm text-text-muted">No sources configured.</p>
                 )}
-                {tunnel.sourceFilterPlain && (
-                  <div>
-                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                      Filter Description
-                    </label>
-                    <p className="mt-1 text-sm">
-                      {tunnel.sourceFilterPlain}
-                    </p>
-                  </div>
-                )}
-                <div>
-                  <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                    Graph Filter
-                  </label>
-                  <p className="mt-1 text-sm font-mono text-xs text-text-muted break-all">
-                    {tunnel.sourceIdentifier}
-                  </p>
-                </div>
               </div>
             )}
           </CardContent>
@@ -497,7 +509,7 @@ export default function TunnelDetailPage() {
             {isEditing ? (
               <div className="space-y-2">
                 <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                  Target Phone Lists
+                  Targets
                 </label>
                 <div className="space-y-2 mt-1">
                   {phoneLists?.map((list) => (
@@ -516,7 +528,7 @@ export default function TunnelDetailPage() {
                   ))}
                   {!phoneLists?.length && (
                     <p className="text-sm text-text-muted">
-                      No phone lists available.
+                      No targets available.
                     </p>
                   )}
                 </div>
@@ -524,7 +536,7 @@ export default function TunnelDetailPage() {
             ) : (
               <div>
                 <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                  Target Phone Lists
+                  Targets
                 </label>
                 <div className="flex flex-wrap gap-2 mt-2">
                   {tunnel.targetLists.length > 0 ? (

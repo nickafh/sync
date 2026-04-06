@@ -82,9 +82,10 @@ export function usePreviewTunnelImpact() {
 export function useRefreshDdg() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => api.tunnels.refreshDdg(id),
-    onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ['tunnel', id] });
+    mutationFn: ({ tunnelId, sourceId }: { tunnelId: number; sourceId: number }) =>
+      api.tunnels.refreshDdg(tunnelId, sourceId),
+    onSuccess: (_data, { tunnelId }) => {
+      queryClient.invalidateQueries({ queryKey: ['tunnel', tunnelId] });
       queryClient.invalidateQueries({ queryKey: ['tunnels'] });
     },
   });

@@ -72,12 +72,12 @@ export default function PhoneListsPage() {
       ) : !phoneLists || phoneLists.length === 0 ? (
         <EmptyState
           icon={Phone}
-          heading="No phone lists"
-          body="Phone lists will appear after tunnels are configured."
+          heading="No targets"
+          body="Targets will appear after tunnels are configured."
         />
       ) : (
         <div className="flex flex-col lg:flex-row gap-8">
-          {/* Left panel: Phone list selector */}
+          {/* Left panel: Target selector */}
           <div className="min-w-[320px] lg:w-[45%] space-y-2">
             {phoneLists.map((list: PhoneListDto) => (
               <div
@@ -89,7 +89,14 @@ export default function PhoneListsPage() {
                 }
                 onClick={() => setSelectedListId(list.id)}
               >
-                <div className="text-sm font-bold text-navy">{list.name}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-navy">{list.name}</span>
+                  {list.targetScope === 'specific_users' && (
+                    <span className="text-xs bg-gold/10 text-gold px-2 py-0.5 rounded-full">
+                      Specific users
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-text-muted mt-1">
                   {list.contactCount} contacts &middot; {list.userCount} users
                 </div>

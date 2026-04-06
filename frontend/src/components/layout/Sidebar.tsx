@@ -16,7 +16,7 @@ import { useAuth } from '@/lib/auth';
 const navItems = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard },
   { label: 'Tunnels', href: '/tunnels', icon: Cable },
-  { label: 'Phone Lists', href: '/lists', icon: Phone },
+  { label: 'Targets', href: '/lists', icon: Phone },
   { label: 'Field Profiles', href: '/fields', icon: SlidersHorizontal },
   { label: 'Runs & Logs', href: '/runs', icon: ClipboardList },
   { label: 'Settings', href: '/settings', icon: Settings },

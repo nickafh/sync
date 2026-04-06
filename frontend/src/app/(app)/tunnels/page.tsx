@@ -88,7 +88,7 @@ export default function TunnelsPage() {
     {
       id: 'source',
       header: 'Source',
-      accessorFn: (row) => row.sourceDisplayName || row.sourceIdentifier,
+      accessorFn: (row) => row.sources.map((s) => s.sourceDisplayName || s.sourceIdentifier).join(', '),
       cell: ({ getValue }) => {
         const val = getValue() as string;
         return (
@@ -185,7 +185,7 @@ export default function TunnelsPage() {
     <div>
       <PageHeader
         title="Tunnels"
-        description="Manage contact sync tunnels between DDGs and phone lists."
+        description="Manage contact sync tunnels between DDGs and targets."
       >
         <Button
           className="bg-gold text-white hover:bg-gold/90"

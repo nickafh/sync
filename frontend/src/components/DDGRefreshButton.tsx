@@ -18,15 +18,16 @@ import {
 
 interface DDGRefreshButtonProps {
   tunnelId: number;
+  sourceId: number;
 }
 
-export function DDGRefreshButton({ tunnelId }: DDGRefreshButtonProps) {
+export function DDGRefreshButton({ tunnelId, sourceId }: DDGRefreshButtonProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const refreshDdg = useRefreshDdg();
 
   const handleRefresh = () => {
     setPopoverOpen(false);
-    refreshDdg.mutate(tunnelId, {
+    refreshDdg.mutate({ tunnelId, sourceId }, {
       onSuccess: () => {
         toast.success('Filter refreshed successfully.');
       },

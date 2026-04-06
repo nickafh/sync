@@ -3,11 +3,7 @@ namespace AFHSync.Api.DTOs;
 public record TunnelDto(
     int Id,
     string Name,
-    string SourceType,
-    string SourceIdentifier,
-    string? SourceDisplayName,
-    string? SourceSmtpAddress,
-    string TargetScope,
+    TunnelSourceDto[] Sources,
     string Status,
     string StalePolicy,
     int StaleHoldDays,
@@ -18,6 +14,15 @@ public record TunnelDto(
     int EstimatedTargetUsers,
     TunnelLastSyncDto? LastSync,
     bool PhotoSyncEnabled
+);
+
+public record TunnelSourceDto(
+    int Id,
+    string SourceType,
+    string SourceIdentifier,
+    string? SourceDisplayName,
+    string? SourceSmtpAddress,
+    string? SourceFilterPlain
 );
 
 public record TunnelTargetListDto(int Id, string Name);

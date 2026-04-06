@@ -37,13 +37,12 @@ public class TunnelsController : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var tunnels = await _db.Tunnels
+            .Include(t => t.TunnelSources)
             .Include(t => t.TunnelPhoneLists)
                 .ThenInclude(tp => tp.PhoneList)
             .Include(t => t.FieldProfile)
             .AsNoTracking()
             .ToListAsync();
-
-        var activeTargetUsers = await _db.TargetMailboxes.CountAsync(m => m.IsActive);
 
         var lastRuns = await _db.SyncRuns
             .OrderByDescending(r => r.CompletedAt)
@@ -60,10 +59,7 @@ public class TunnelsController : ControllerBase
                 .Distinct()
                 .CountAsync();
 
-            // For AllUsers scope, use the global active target user count
-            var estimatedTargetUsers = t.TargetScope == TargetScope.AllUsers
-                ? activeTargetUsers
-                : 0;
+            var estimatedTargetUsers = await _db.TargetMailboxes.CountAsync(m => m.IsActive);
 
             // Last sync: most recent completed SyncRun (tunnel-level aggregates are stored at SyncRun level for now)
             var lastRun = lastRuns.FirstOrDefault(r => r.Status == SyncStatus.Success || r.Status == SyncStatus.Warning);
@@ -77,11 +73,7 @@ public class TunnelsController : ControllerBase
             result.Add(new TunnelDto(
                 t.Id,
                 t.Name,
-                EnumHelpers.ToPgName(t.SourceType),
-                t.SourceIdentifier,
-                t.SourceDisplayName,
-                t.SourceSmtpAddress,
-                EnumHelpers.ToPgName(t.TargetScope),
+                t.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain)).ToArray(),
                 EnumHelpers.ToPgName(t.Status),
                 EnumHelpers.ToPgName(t.StalePolicy),
                 t.StaleHoldDays,
@@ -105,6 +97,7 @@ public class TunnelsController : ControllerBase
     public async Task<IActionResult> GetById(int id)
     {
         var tunnel = await _db.Tunnels
+            .Include(t => t.TunnelSources)
             .Include(t => t.TunnelPhoneLists)
                 .ThenInclude(tp => tp.PhoneList)
             .Include(t => t.FieldProfile)
@@ -117,13 +110,7 @@ public class TunnelsController : ControllerBase
         var dto = new TunnelDetailDto(
             tunnel.Id,
             tunnel.Name,
-            EnumHelpers.ToPgName(tunnel.SourceType),
-            tunnel.SourceIdentifier,
-            tunnel.SourceDisplayName,
-            tunnel.SourceSmtpAddress,
-            tunnel.SourceFilterPlain,
-            EnumHelpers.ToPgName(tunnel.TargetScope),
-            tunnel.TargetUserFilter,
+            tunnel.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain)).ToArray(),
             EnumHelpers.ToPgName(tunnel.Status),
             EnumHelpers.ToPgName(tunnel.StalePolicy),
             tunnel.StaleHoldDays,
@@ -139,18 +126,13 @@ public class TunnelsController : ControllerBase
     }
 
     /// <summary>
-    /// POST /api/tunnels — Create a new tunnel storing DDG reference and Graph filter (DDG-04).
-    /// SourceIdentifier stores the Graph $filter string.
-    /// SourceDisplayName stores the human-readable DDG display name.
+    /// POST /api/tunnels — Create a new tunnel with one or more DDG sources.
     /// </summary>
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTunnelRequest request)
     {
-        if (!Enum.TryParse<SourceType>(request.SourceType, ignoreCase: true, out var sourceType))
-            return BadRequest(new { message = $"Invalid SourceType: {request.SourceType}" });
-
-        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
-            return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
+        if (request.Sources is null || request.Sources.Length == 0)
+            return BadRequest(new { message = "At least one source is required." });
 
         if (!Enum.TryParse<StalePolicy>(request.StalePolicy, ignoreCase: true, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
@@ -158,12 +140,6 @@ public class TunnelsController : ControllerBase
         var tunnel = new Tunnel
         {
             Name = request.Name,
-            SourceType = sourceType,
-            SourceIdentifier = request.SourceIdentifier,    // Graph $filter per DDG-04
-            SourceDisplayName = request.SourceDisplayName,  // DDG display name per DDG-04
-            SourceSmtpAddress = request.SourceSmtpAddress,  // DDG SMTP address per DDG-04
-            SourceFilterPlain = request.SourceFilterPlain,  // Plain-language filter per DDG-06
-            TargetScope = targetScope,
             FieldProfileId = request.FieldProfileId,
             StalePolicy = stalePolicy,
             StaleHoldDays = request.StaleDays,
@@ -175,6 +151,24 @@ public class TunnelsController : ControllerBase
 
         _db.Tunnels.Add(tunnel);
         await _db.SaveChangesAsync();
+
+        // Create TunnelSource records
+        foreach (var src in request.Sources)
+        {
+            if (!Enum.TryParse<SourceType>(src.SourceType, ignoreCase: true, out var sourceType))
+                return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
+
+            _db.TunnelSources.Add(new TunnelSource
+            {
+                TunnelId = tunnel.Id,
+                SourceType = sourceType,
+                SourceIdentifier = src.SourceIdentifier,
+                SourceDisplayName = src.SourceDisplayName,
+                SourceSmtpAddress = src.SourceSmtpAddress,
+                SourceFilterPlain = src.SourceFilterPlain,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
 
         // Create TunnelPhoneList join records for each target list
         foreach (var listId in request.TargetListIds)
@@ -192,7 +186,7 @@ public class TunnelsController : ControllerBase
     }
 
     /// <summary>
-    /// PUT /api/tunnels/{id} — Update tunnel properties including name, source, targets, field profile, and stale policy.
+    /// PUT /api/tunnels/{id} — Update tunnel properties including name, sources, targets, field profile, and stale policy.
     /// </summary>
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateTunnelRequest request)
@@ -201,27 +195,41 @@ public class TunnelsController : ControllerBase
         if (tunnel is null)
             return NotFound(new { message = $"Tunnel {id} not found." });
 
-        if (!Enum.TryParse<SourceType>(request.SourceType, ignoreCase: true, out var sourceType))
-            return BadRequest(new { message = $"Invalid SourceType: {request.SourceType}" });
-
-        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
-            return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
+        if (request.Sources is null || request.Sources.Length == 0)
+            return BadRequest(new { message = "At least one source is required." });
 
         if (!Enum.TryParse<StalePolicy>(request.StalePolicy, ignoreCase: true, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
         tunnel.Name = request.Name;
-        tunnel.SourceType = sourceType;
-        tunnel.SourceIdentifier = request.SourceIdentifier;
-        tunnel.SourceDisplayName = request.SourceDisplayName;
-        tunnel.SourceSmtpAddress = request.SourceSmtpAddress;
-        tunnel.SourceFilterPlain = request.SourceFilterPlain;
-        tunnel.TargetScope = targetScope;
         tunnel.FieldProfileId = request.FieldProfileId;
         tunnel.StalePolicy = stalePolicy;
         tunnel.StaleHoldDays = request.StaleDays;
         tunnel.PhotoSyncEnabled = request.PhotoSyncEnabled;
         tunnel.UpdatedAt = DateTime.UtcNow;
+
+        // Replace TunnelSource records
+        var existingSources = await _db.TunnelSources
+            .Where(ts => ts.TunnelId == id)
+            .ToListAsync();
+        _db.TunnelSources.RemoveRange(existingSources);
+
+        foreach (var src in request.Sources)
+        {
+            if (!Enum.TryParse<SourceType>(src.SourceType, ignoreCase: true, out var sourceType))
+                return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
+
+            _db.TunnelSources.Add(new TunnelSource
+            {
+                TunnelId = tunnel.Id,
+                SourceType = sourceType,
+                SourceIdentifier = src.SourceIdentifier,
+                SourceDisplayName = src.SourceDisplayName,
+                SourceSmtpAddress = src.SourceSmtpAddress,
+                SourceFilterPlain = src.SourceFilterPlain,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
 
         // Replace TunnelPhoneList join records
         var existingLinks = await _db.TunnelPhoneLists
@@ -289,6 +297,7 @@ public class TunnelsController : ControllerBase
     public async Task<IActionResult> Preview(int id, [FromBody] UpdateTunnelRequest request)
     {
         var tunnel = await _db.Tunnels
+            .Include(t => t.TunnelSources)
             .Include(t => t.TunnelPhoneLists)
             .FirstOrDefaultAsync(t => t.Id == id);
 
@@ -305,24 +314,32 @@ public class TunnelsController : ControllerBase
         var estimatedUpdates = 0;
         var estimatedRemovals = 0;
 
-        // If source changed, estimate new source count via Graph
-        if (tunnel.SourceIdentifier != request.SourceIdentifier)
+        // Compare source identifiers to detect source changes
+        var currentSourceIds = tunnel.TunnelSources.Select(s => s.SourceIdentifier).OrderBy(s => s).ToList();
+        var newSourceIds = request.Sources.Select(s => s.SourceIdentifier).OrderBy(s => s).ToList();
+        var sourcesChanged = !currentSourceIds.SequenceEqual(newSourceIds);
+
+        if (sourcesChanged)
         {
             try
             {
-                var usersPage = await _graphClient.Users.GetAsync(cfg =>
+                var totalNewCount = 0;
+                foreach (var src in request.Sources)
                 {
-                    cfg.QueryParameters.Filter = request.SourceIdentifier;
-                    cfg.QueryParameters.Select = new[] { "id" };
-                    cfg.QueryParameters.Top = 999;
-                    cfg.QueryParameters.Count = true;
-                    cfg.Headers.Add("ConsistencyLevel", "eventual");
-                });
+                    var usersPage = await _graphClient.Users.GetAsync(cfg =>
+                    {
+                        cfg.QueryParameters.Filter = src.SourceIdentifier;
+                        cfg.QueryParameters.Select = new[] { "id" };
+                        cfg.QueryParameters.Top = 999;
+                        cfg.QueryParameters.Count = true;
+                        cfg.Headers.Add("ConsistencyLevel", "eventual");
+                    });
+                    totalNewCount += usersPage?.Value?.Count ?? 0;
+                }
 
-                var newCount = usersPage?.Value?.Count ?? 0;
-                estimatedCreates = Math.Max(0, newCount - currentCount);
-                estimatedRemovals = Math.Max(0, currentCount - newCount);
-                estimatedUpdates = Math.Min(currentCount, newCount);
+                estimatedCreates = Math.Max(0, totalNewCount - currentCount);
+                estimatedRemovals = Math.Max(0, currentCount - totalNewCount);
+                estimatedUpdates = Math.Min(currentCount, totalNewCount);
             }
             catch
             {
@@ -357,28 +374,30 @@ public class TunnelsController : ControllerBase
     }
 
     /// <summary>
-    /// POST /api/tunnels/{id}/refresh-ddg — Re-read DDG filter from Exchange and update tunnel (DDG-07).
+    /// POST /api/tunnels/{id}/sources/{sourceId}/refresh-ddg — Re-read DDG filter from Exchange and update source (DDG-07).
     /// </summary>
-    [HttpPost("{id:int}/refresh-ddg")]
-    public async Task<IActionResult> RefreshDdg(int id, CancellationToken ct)
+    [HttpPost("{id:int}/sources/{sourceId:int}/refresh-ddg")]
+    public async Task<IActionResult> RefreshDdg(int id, int sourceId, CancellationToken ct)
     {
-        var tunnel = await _db.Tunnels.FindAsync(id);
-        if (tunnel is null)
-            return NotFound(new { message = $"Tunnel {id} not found." });
+        var source = await _db.TunnelSources.FirstOrDefaultAsync(s => s.Id == sourceId && s.TunnelId == id, ct);
+        if (source is null)
+            return NotFound(new { message = $"Source {sourceId} not found on tunnel {id}." });
 
-        if (string.IsNullOrEmpty(tunnel.SourceSmtpAddress))
-            return BadRequest(new { message = "Tunnel has no source SMTP address." });
+        if (string.IsNullOrEmpty(source.SourceSmtpAddress))
+            return BadRequest(new { message = "Source has no SMTP address." });
 
-        var ddgInfo = await _ddgResolver.GetDdgAsync(tunnel.SourceSmtpAddress, ct);
+        var ddgInfo = await _ddgResolver.GetDdgAsync(source.SourceSmtpAddress, ct);
         if (ddgInfo is null)
             return NotFound(new { message = "DDG not found in Exchange." });
 
         var conversionResult = _filterConverter.Convert(ddgInfo.RecipientFilter);
 
-        tunnel.SourceIdentifier = conversionResult.Filter ?? tunnel.SourceIdentifier;
-        tunnel.SourceFilterPlain = _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter);
-        tunnel.SourceDisplayName = ddgInfo.DisplayName;
-        tunnel.UpdatedAt = DateTime.UtcNow;
+        source.SourceIdentifier = conversionResult.Filter ?? source.SourceIdentifier;
+        source.SourceFilterPlain = _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter);
+        source.SourceDisplayName = ddgInfo.DisplayName;
+
+        var tunnel = await _db.Tunnels.FindAsync(id);
+        if (tunnel is not null) tunnel.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
 

@@ -3,6 +3,7 @@ export interface PhoneListDto {
   name: string;
   contactCount: number;
   userCount: number;
+  targetScope: string;
   sourceTunnels: PhoneListSourceTunnelDto[];
   lastSyncStatus: string | null;
 }
@@ -14,6 +15,8 @@ export interface PhoneListDetailDto {
   exchangeFolderId: string | null;
   contactCount: number;
   userCount: number;
+  targetScope: string;
+  targetUserFilter: string | null;
   sourceTunnels: PhoneListSourceTunnelDto[];
   createdAt: string;
   updatedAt: string;
@@ -27,6 +30,8 @@ export interface PhoneListSourceTunnelDto {
 export interface CreatePhoneListRequest {
   name: string;
   description: string | null;
+  targetScope?: string;
+  targetUserFilter?: string | null;
 }
 
 export interface ContactDto {

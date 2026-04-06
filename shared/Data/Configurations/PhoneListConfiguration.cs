@@ -17,6 +17,8 @@ public class PhoneListConfiguration : IEntityTypeConfiguration<PhoneList>
         builder.Property(e => e.Description).HasColumnName("description");
         builder.Property(e => e.ContactCount).HasColumnName("contact_count").HasDefaultValue(0);
         builder.Property(e => e.UserCount).HasColumnName("user_count").HasDefaultValue(0);
+        builder.Property(e => e.TargetScope).HasColumnName("target_scope").IsRequired();
+        builder.Property(e => e.TargetUserFilter).HasColumnName("target_user_filter").HasColumnType("jsonb");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
 

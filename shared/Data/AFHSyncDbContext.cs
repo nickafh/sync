@@ -9,6 +9,7 @@ public class AFHSyncDbContext : DbContext
 
     public DbSet<Tunnel> Tunnels => Set<Tunnel>();
     public DbSet<PhoneList> PhoneLists => Set<PhoneList>();
+    public DbSet<TunnelSource> TunnelSources => Set<TunnelSource>();
     public DbSet<TunnelPhoneList> TunnelPhoneLists => Set<TunnelPhoneList>();
     public DbSet<FieldProfile> FieldProfiles => Set<FieldProfile>();
     public DbSet<FieldProfileField> FieldProfileFields => Set<FieldProfileField>();

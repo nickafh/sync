@@ -1,11 +1,24 @@
-export interface TunnelDto {
+export interface TunnelSourceDto {
   id: number;
-  name: string;
   sourceType: string;
   sourceIdentifier: string;
   sourceDisplayName: string | null;
   sourceSmtpAddress: string | null;
-  targetScope: string;
+  sourceFilterPlain: string | null;
+}
+
+export interface SourceInput {
+  sourceType: string;
+  sourceIdentifier: string;
+  sourceDisplayName: string | null;
+  sourceSmtpAddress: string | null;
+  sourceFilterPlain: string | null;
+}
+
+export interface TunnelDto {
+  id: number;
+  name: string;
+  sources: TunnelSourceDto[];
   status: string;
   stalePolicy: string;
   staleHoldDays: number;
@@ -21,13 +34,7 @@ export interface TunnelDto {
 export interface TunnelDetailDto {
   id: number;
   name: string;
-  sourceType: string;
-  sourceIdentifier: string;
-  sourceDisplayName: string | null;
-  sourceSmtpAddress: string | null;
-  sourceFilterPlain: string | null;
-  targetScope: string;
-  targetUserFilter: string | null;
+  sources: TunnelSourceDto[];
   status: string;
   stalePolicy: string;
   staleHoldDays: number;
@@ -52,13 +59,7 @@ export interface TunnelLastSyncDto {
 
 export interface UpdateTunnelRequest {
   name: string;
-  sourceType: string;
-  sourceIdentifier: string;
-  sourceDisplayName: string | null;
-  sourceSmtpAddress: string | null;
-  sourceFilterPlain: string | null;
-  targetScope: string;
-  targetUserFilter: string | null;
+  sources: SourceInput[];
   targetListIds: number[];
   fieldProfileId: number | null;
   stalePolicy: string;
@@ -72,13 +73,7 @@ export interface StatusUpdateRequest {
 
 export interface CreateTunnelRequest {
   name: string;
-  sourceType: string;
-  sourceIdentifier: string;
-  sourceDisplayName: string | null;
-  sourceSmtpAddress: string | null;
-  sourceFilterPlain: string | null;
-  targetScope: string;
-  targetUserFilter: string | null;
+  sources: SourceInput[];
   targetListIds: number[];
   fieldProfileId: number | null;
   stalePolicy: string;

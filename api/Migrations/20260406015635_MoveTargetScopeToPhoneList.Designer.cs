@@ -4,6 +4,7 @@ using AFHSync.Shared.Data;
 using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AFHSync.Api.Migrations
 {
     [DbContext(typeof(AFHSyncDbContext))]
-    partial class AFHSyncDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260406015635_MoveTargetScopeToPhoneList")]
+    partial class MoveTargetScopeToPhoneList
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1134,6 +1137,31 @@ namespace AFHSync.Api.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("photo_sync_enabled");
 
+                    b.Property<string>("SourceDisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("source_display_name");
+
+                    b.Property<string>("SourceFilterPlain")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("source_filter_plain");
+
+                    b.Property<string>("SourceIdentifier")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("source_identifier");
+
+                    b.Property<string>("SourceSmtpAddress")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("source_smtp_address");
+
+                    b.Property<SourceType>("SourceType")
+                        .HasColumnType("source_type")
+                        .HasColumnName("source_type");
+
                     b.Property<int>("StaleHoldDays")
                         .HasColumnType("integer")
                         .HasColumnName("stale_hold_days");
@@ -1169,6 +1197,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "Buckhead",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "Buckhead Office DDG",
+                            SourceIdentifier = "buckhead-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1181,6 +1213,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "North Atlanta",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "North Atlanta Office DDG",
+                            SourceIdentifier = "northatlanta-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "northatlanta-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1193,6 +1229,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "Intown",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "Intown Office DDG",
+                            SourceIdentifier = "intown-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1205,6 +1245,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "Blue Ridge",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "Blue Ridge Office DDG",
+                            SourceIdentifier = "blueridge-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "blueridge-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1217,6 +1261,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "Cobb",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "Cobb Office DDG",
+                            SourceIdentifier = "cobb-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "cobb-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1229,6 +1277,10 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             Name = "Clayton",
                             PhotoSyncEnabled = true,
+                            SourceDisplayName = "Clayton Office DDG",
+                            SourceIdentifier = "clayton-ddg@atlantafinehomes.com",
+                            SourceSmtpAddress = "clayton-ddg@atlantafinehomes.com",
+                            SourceType = SourceType.Ddg,
                             StaleHoldDays = 14,
                             StalePolicy = StalePolicy.FlagHold,
                             Status = TunnelStatus.Active,
@@ -1355,120 +1407,6 @@ namespace AFHSync.Api.Migrations
                         });
                 });
 
-            modelBuilder.Entity("AFHSync.Shared.Entities.TunnelSource", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at")
-                        .HasDefaultValueSql("NOW()");
-
-                    b.Property<string>("SourceDisplayName")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("source_display_name");
-
-                    b.Property<string>("SourceFilterPlain")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("source_filter_plain");
-
-                    b.Property<string>("SourceIdentifier")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("source_identifier");
-
-                    b.Property<string>("SourceSmtpAddress")
-                        .HasMaxLength(320)
-                        .HasColumnType("character varying(320)")
-                        .HasColumnName("source_smtp_address");
-
-                    b.Property<SourceType>("SourceType")
-                        .HasColumnType("source_type")
-                        .HasColumnName("source_type");
-
-                    b.Property<int>("TunnelId")
-                        .HasColumnType("integer")
-                        .HasColumnName("tunnel_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TunnelId")
-                        .HasDatabaseName("idx_tunnel_sources_tunnel_id");
-
-                    b.ToTable("tunnel_sources", (string)null);
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Buckhead Office DDG",
-                            SourceIdentifier = "buckhead-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "buckhead-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 1
-                        },
-                        new
-                        {
-                            Id = 2,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "North Atlanta Office DDG",
-                            SourceIdentifier = "northatlanta-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "northatlanta-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 2
-                        },
-                        new
-                        {
-                            Id = 3,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Intown Office DDG",
-                            SourceIdentifier = "intown-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "intown-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 3
-                        },
-                        new
-                        {
-                            Id = 4,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Blue Ridge Office DDG",
-                            SourceIdentifier = "blueridge-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "blueridge-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 4
-                        },
-                        new
-                        {
-                            Id = 5,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Cobb Office DDG",
-                            SourceIdentifier = "cobb-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "cobb-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 5
-                        },
-                        new
-                        {
-                            Id = 6,
-                            CreatedAt = new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
-                            SourceDisplayName = "Clayton Office DDG",
-                            SourceIdentifier = "clayton-ddg@atlantafinehomes.com",
-                            SourceSmtpAddress = "clayton-ddg@atlantafinehomes.com",
-                            SourceType = SourceType.Ddg,
-                            TunnelId = 6
-                        });
-                });
-
             modelBuilder.Entity("AFHSync.Shared.Entities.ContactSyncState", b =>
                 {
                     b.HasOne("AFHSync.Shared.Entities.PhoneList", "PhoneList")
@@ -1582,17 +1520,6 @@ namespace AFHSync.Api.Migrations
                     b.Navigation("Tunnel");
                 });
 
-            modelBuilder.Entity("AFHSync.Shared.Entities.TunnelSource", b =>
-                {
-                    b.HasOne("AFHSync.Shared.Entities.Tunnel", "Tunnel")
-                        .WithMany("TunnelSources")
-                        .HasForeignKey("TunnelId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tunnel");
-                });
-
             modelBuilder.Entity("AFHSync.Shared.Entities.FieldProfile", b =>
                 {
                     b.Navigation("FieldProfileFields");
@@ -1613,8 +1540,6 @@ namespace AFHSync.Api.Migrations
             modelBuilder.Entity("AFHSync.Shared.Entities.Tunnel", b =>
                 {
                     b.Navigation("TunnelPhoneLists");
-
-                    b.Navigation("TunnelSources");
                 });
 #pragma warning restore 612, 618
         }

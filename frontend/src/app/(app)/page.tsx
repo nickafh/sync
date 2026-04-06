@@ -158,7 +158,7 @@ export default function DashboardPage() {
       {/* KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
         <KPICard label="Active Tunnels" value={dashboard?.activeTunnels ?? 0} />
-        <KPICard label="Phone Lists" value={dashboard?.totalPhoneLists ?? 0} />
+        <KPICard label="Targets" value={dashboard?.totalPhoneLists ?? 0} />
         <KPICard label="Target Users" value={dashboard?.totalTargetUsers ?? 0} />
         <KPICard
           label="Last Sync"
@@ -191,7 +191,7 @@ export default function DashboardPage() {
               <EmptyState
                 icon={Cable}
                 heading="No tunnels configured"
-                body="Create your first tunnel to start syncing contacts to phone lists."
+                body="Create your first tunnel to start syncing contacts to targets."
                 ctaLabel="Go to Tunnels"
                 ctaHref="/tunnels"
               />
@@ -217,7 +217,7 @@ export default function DashboardPage() {
                           {tunnel.name}
                         </td>
                         <td className="py-2.5 pr-4 text-text-muted">
-                          {tunnel.sourceDisplayName ?? tunnel.sourceIdentifier}
+                          {tunnel.sources.map((s) => s.sourceDisplayName || s.sourceIdentifier).join(', ') || 'No sources'}
                         </td>
                         <td className="py-2.5 pr-4 text-text-muted">
                           {tunnel.estimatedContacts}

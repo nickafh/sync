@@ -31,16 +31,12 @@ interface TunnelWizardProps {
 interface FormData {
   name: string;
   sourceDdg: DdgDto | null;
-  targetScope: string;
-  targetEmails: string;
   targetListIds: number[];
 }
 
 const initialFormData: FormData = {
   name: '',
   sourceDdg: null,
-  targetScope: 'all_users',
-  targetEmails: '',
   targetListIds: [],
 };
 
@@ -57,8 +53,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   const hasData =
     formData.name.trim() !== '' ||
     formData.sourceDdg !== null ||
-    formData.targetListIds.length > 0 ||
-    formData.targetEmails.trim() !== '';
+    formData.targetListIds.length > 0;
 
   const resetForm = useCallback(() => {
     setStep(0);
@@ -88,9 +83,6 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
         case 2:
           if (formData.targetListIds.length === 0) {
             newErrors.targets = 'Select at least one target list.';
-          }
-          if (formData.targetScope === 'specific_users' && !formData.targetEmails.trim()) {
-            newErrors.targets = 'Enter at least one email address.';
           }
           break;
       }
@@ -125,16 +117,14 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
 
     const request: CreateTunnelRequest = {
       name: formData.name.trim(),
-      sourceType: 'ddg',
-      sourceIdentifier:
-        formData.sourceDdg.graphFilter ?? formData.sourceDdg.recipientFilter,
-      sourceDisplayName: formData.sourceDdg.displayName,
-      sourceSmtpAddress: formData.sourceDdg.primarySmtpAddress,
-      sourceFilterPlain: formData.sourceDdg.recipientFilterPlain,
-      targetScope: formData.targetScope,
-      targetUserFilter: formData.targetScope === 'specific_users'
-        ? JSON.stringify({ emails: formData.targetEmails.split(',').map(e => e.trim()).filter(Boolean) })
-        : null,
+      sources: [{
+        sourceType: 'ddg',
+        sourceIdentifier:
+          formData.sourceDdg.graphFilter ?? formData.sourceDdg.recipientFilter,
+        sourceDisplayName: formData.sourceDdg.displayName,
+        sourceSmtpAddress: formData.sourceDdg.primarySmtpAddress,
+        sourceFilterPlain: formData.sourceDdg.recipientFilterPlain,
+      }],
       targetListIds: formData.targetListIds,
       fieldProfileId: null,
       stalePolicy: 'auto_remove',
@@ -240,14 +230,6 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 onToggle={handleToggleTarget}
                 onSelectAll={handleSelectAll}
                 onDeselectAll={handleDeselectAll}
-                targetScope={formData.targetScope}
-                onTargetScopeChange={(scope) =>
-                  setFormData((prev) => ({ ...prev, targetScope: scope }))
-                }
-                targetEmails={formData.targetEmails}
-                onTargetEmailsChange={(emails) =>
-                  setFormData((prev) => ({ ...prev, targetEmails: emails }))
-                }
                 error={errors.targets || null}
               />
             )}

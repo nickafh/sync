@@ -67,8 +67,8 @@ export const api = {
       fetchApi<{ id: number }>('/tunnels', { method: 'POST', body: JSON.stringify(data) }),
     preview: (id: number, data: UpdateTunnelRequest) =>
       fetchApi<ImpactPreviewResponse>(`/tunnels/${id}/preview`, { method: 'POST', body: JSON.stringify(data) }),
-    refreshDdg: (id: number) =>
-      fetchApi<RefreshDdgResponse>(`/tunnels/${id}/refresh-ddg`, { method: 'POST' }),
+    refreshDdg: (id: number, sourceId: number) =>
+      fetchApi<RefreshDdgResponse>(`/tunnels/${id}/sources/${sourceId}/refresh-ddg`, { method: 'POST' }),
   },
 
   syncRuns: {

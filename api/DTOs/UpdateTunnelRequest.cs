@@ -4,12 +4,7 @@ using System.ComponentModel.DataAnnotations;
 
 public record UpdateTunnelRequest(
     [Required][StringLength(100, MinimumLength = 1)] string Name,
-    string SourceType,
-    [Required][StringLength(500)] string SourceIdentifier,
-    string? SourceDisplayName,
-    string? SourceSmtpAddress,
-    string? SourceFilterPlain,
-    string TargetScope,
+    SourceInput[] Sources,
     int[] TargetListIds,
     int? FieldProfileId,
     string StalePolicy,

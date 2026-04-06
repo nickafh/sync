@@ -1,5 +1,6 @@
 using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
+using AFHSync.Shared.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -33,6 +34,7 @@ public class PhoneListsController : ControllerBase
             pl.Name,
             pl.ContactCount,
             pl.UserCount,
+            EnumHelpers.ToPgName(pl.TargetScope),
             pl.TunnelPhoneLists.Select(tp => new PhoneListSourceTunnelDto(tp.Tunnel.Id, tp.Tunnel.Name)).ToArray(),
             null // LastSyncStatus: derived from SyncRun data — not yet wired for v1
         )).ToArray();
@@ -62,6 +64,8 @@ public class PhoneListsController : ControllerBase
             phoneList.ExchangeFolderId,
             phoneList.ContactCount,
             phoneList.UserCount,
+            EnumHelpers.ToPgName(phoneList.TargetScope),
+            phoneList.TargetUserFilter,
             phoneList.TunnelPhoneLists.Select(tp => new PhoneListSourceTunnelDto(tp.Tunnel.Id, tp.Tunnel.Name)).ToArray(),
             phoneList.CreatedAt,
             phoneList.UpdatedAt
@@ -79,10 +83,15 @@ public class PhoneListsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "Name is required." });
 
+        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
+            return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
+
         var phoneList = new AFHSync.Shared.Entities.PhoneList
         {
             Name = request.Name.Trim(),
             Description = request.Description?.Trim(),
+            TargetScope = targetScope,
+            TargetUserFilter = request.TargetUserFilter,
         };
 
         _db.PhoneLists.Add(phoneList);
@@ -104,8 +113,13 @@ public class PhoneListsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "Name is required." });
 
+        if (!Enum.TryParse<TargetScope>(request.TargetScope, ignoreCase: true, out var targetScope))
+            return BadRequest(new { message = $"Invalid TargetScope: {request.TargetScope}" });
+
         phoneList.Name = request.Name.Trim();
         phoneList.Description = request.Description?.Trim();
+        phoneList.TargetScope = targetScope;
+        phoneList.TargetUserFilter = request.TargetUserFilter;
         phoneList.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
