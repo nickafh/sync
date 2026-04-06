@@ -45,6 +45,24 @@ public sealed class SyncEngine(
         bool isDryRun,
         CancellationToken ct)
     {
+        // Guard: skip if another sync is already running (prevents Hangfire overlap)
+        await using (var guardDb = await dbContextFactory.CreateDbContextAsync(ct))
+        {
+            var alreadyRunning = await guardDb.SyncRuns
+                .AnyAsync(r => r.Status == SyncStatus.Running, ct);
+            if (alreadyRunning)
+            {
+                logger.LogWarning("Skipping sync — another run is already in progress");
+                // Return a dummy failed run so Hangfire doesn't retry
+                var skipped = await runLogger.CreateRunAsync(runType, isDryRun, ct);
+                await runLogger.FinalizeRunAsync(skipped, SyncStatus.Failed,
+                    errorSummary: "Skipped — another sync was already running",
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, ct);
+                skipped.Status = SyncStatus.Failed;
+                return skipped;
+            }
+        }
+
         // Step 1: Create the run record.
         var run = await runLogger.CreateRunAsync(runType, isDryRun, ct);
         logger.LogInformation(

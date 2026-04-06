@@ -31,8 +31,8 @@ public class SyncRunsController : ControllerBase
         [FromServices] IBackgroundJobClient jobs)
     {
         // Concurrent run prevention (SCHD-05, D-10)
-        var isRunning = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running);
-        if (isRunning)
+        var isActive = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending);
+        if (isActive)
             return Conflict(new { message = "A sync run is already in progress" });
 
         // Determine RunType from request
