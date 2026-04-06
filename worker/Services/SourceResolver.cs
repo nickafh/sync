@@ -212,7 +212,7 @@ public class SourceResolver : ISourceResolver
                     business_phone, mobile_phone, job_title, department,
                     office_location, company_name, street_address, city,
                     state, postal_code, country, is_enabled, mailbox_type,
-                    extension_attr1, extension_attr2, extension_attr3, extension_attr4,
+                    extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
                     last_fetched_at, created_at, updated_at
                 )
                 VALUES (
@@ -241,10 +241,10 @@ public class SourceResolver : ISourceResolver
                     country = EXCLUDED.country,
                     is_enabled = EXCLUDED.is_enabled,
                     mailbox_type = EXCLUDED.mailbox_type,
-                    extension_attr1 = EXCLUDED.extension_attr1,
-                    extension_attr2 = EXCLUDED.extension_attr2,
-                    extension_attr3 = EXCLUDED.extension_attr3,
-                    extension_attr4 = EXCLUDED.extension_attr4,
+                    extension_attr_1 = EXCLUDED.extension_attr_1,
+                    extension_attr_2 = EXCLUDED.extension_attr_2,
+                    extension_attr_3 = EXCLUDED.extension_attr_3,
+                    extension_attr_4 = EXCLUDED.extension_attr_4,
                     last_fetched_at = EXCLUDED.last_fetched_at,
                     updated_at = EXCLUDED.updated_at
                 """,
