@@ -63,6 +63,6 @@ public class SettingsController : ControllerBase
         }
 
         await db.SaveChangesAsync();
-        return Ok();
+        return Ok(new { message = "Settings updated." });
     }
 }
