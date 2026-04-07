@@ -202,20 +202,50 @@ public class SyncRunsController : ControllerBase
         if (!string.IsNullOrWhiteSpace(action))
             query = query.Where(i => i.Action == action);
 
-        var items = await query
+        // Two-step query: fetch items first, then resolve source user names.
+        // Previous single-query approach used navigation property access
+        // (i.SourceUser.DisplayName) which caused EF Core/Npgsql to generate
+        // a query that returned empty results despite items existing in the DB.
+        var rawItems = await query
             .OrderByDescending(i => i.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(i => new SyncRunItemDto(
+            .Select(i => new
+            {
                 i.Id,
                 i.TunnelId,
                 i.SourceUserId,
-                i.SourceUser != null ? i.SourceUser.DisplayName : null,
                 i.Action,
                 i.FieldChanges,
                 i.ErrorMessage,
-                i.CreatedAt))
+                i.CreatedAt
+            })
             .ToListAsync();
+
+        // Resolve source user display names in a separate query (avoids JOIN issues).
+        var sourceUserIds = rawItems
+            .Where(i => i.SourceUserId.HasValue)
+            .Select(i => i.SourceUserId!.Value)
+            .Distinct()
+            .ToList();
+
+        var userNames = sourceUserIds.Count > 0
+            ? await db.SourceUsers
+                .Where(u => sourceUserIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id, u => u.DisplayName)
+            : new Dictionary<int, string?>();
+
+        var items = rawItems.Select(i => new SyncRunItemDto(
+            i.Id,
+            i.TunnelId,
+            i.SourceUserId,
+            i.SourceUserId.HasValue && userNames.TryGetValue(i.SourceUserId.Value, out var name)
+                ? name : null,
+            i.Action,
+            i.FieldChanges,
+            i.ErrorMessage,
+            i.CreatedAt
+        )).ToList();
 
         return Ok(items);
     }
