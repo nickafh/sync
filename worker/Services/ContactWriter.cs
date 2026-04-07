@@ -120,22 +120,17 @@ public class ContactWriter : IContactWriter
             contact.PersonalNotes = personalNotes;
 
         // EmailAddresses — Graph expects List<EmailAddress> with Address and Name set
-        if (payload.TryGetValue("EmailAddresses", out var email) && !string.IsNullOrWhiteSpace(email))
+        if (payload.TryGetValue("EmailAddresses", out var email))
         {
-            contact.EmailAddresses =
-            [
-                new EmailAddress
-                {
-                    Address = email,
-                    Name = displayName ?? email
-                }
-            ];
+            contact.EmailAddresses = string.IsNullOrWhiteSpace(email)
+                ? []
+                : [new EmailAddress { Address = email, Name = displayName ?? email }];
         }
 
         // BusinessPhones — Graph expects List<string>
-        if (payload.TryGetValue("BusinessPhones", out var businessPhone) && !string.IsNullOrWhiteSpace(businessPhone))
+        if (payload.TryGetValue("BusinessPhones", out var businessPhone))
         {
-            contact.BusinessPhones = [businessPhone];
+            contact.BusinessPhones = string.IsNullOrWhiteSpace(businessPhone) ? [] : [businessPhone];
         }
 
         // Business address — composite from separate street/city/state/postal fields

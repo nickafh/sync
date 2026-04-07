@@ -112,7 +112,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
 
-  const { data: dashboard, isLoading: dashLoading } = useDashboard();
+  const isSyncActive = activeRunId !== null;
+  const { data: dashboard, isLoading: dashLoading } = useDashboard(isSyncActive);
   const { data: tunnels, isLoading: tunnelsLoading } = useTunnels();
   const triggerSync = useTriggerSync();
   const { data: pollingRun, isLoading: pollingLoading } = useSyncRunPolling(activeRunId);

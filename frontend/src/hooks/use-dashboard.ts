@@ -5,11 +5,12 @@ import { api } from '@/lib/api';
 import type { TriggerSyncRequest } from '@/types/sync-run';
 import type { SyncRunDto } from '@/types/sync-run';
 
-export function useDashboard() {
+export function useDashboard(isSyncing = false) {
   return useQuery({
     queryKey: ['dashboard'],
     queryFn: () => api.dashboard.get(),
     staleTime: 30 * 1000,
+    refetchInterval: isSyncing ? 3000 : false,
   });
 }
 

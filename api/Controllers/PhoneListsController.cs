@@ -29,11 +29,25 @@ public class PhoneListsController : ControllerBase
             .AsNoTracking()
             .ToListAsync();
 
+        // Compute live contact counts from ContactSyncState instead of static fields
+        var phoneListIds = phoneLists.Select(pl => pl.Id).ToList();
+        var contactCounts = await _db.ContactSyncStates
+            .Where(c => phoneListIds.Contains(c.PhoneListId))
+            .GroupBy(c => c.PhoneListId)
+            .Select(g => new { PhoneListId = g.Key, ContactCount = g.Select(c => c.SourceUserId).Distinct().Count() })
+            .ToDictionaryAsync(x => x.PhoneListId, x => x.ContactCount);
+
+        var userCounts = await _db.ContactSyncStates
+            .Where(c => phoneListIds.Contains(c.PhoneListId))
+            .GroupBy(c => c.PhoneListId)
+            .Select(g => new { PhoneListId = g.Key, UserCount = g.Select(c => c.TargetMailboxId).Distinct().Count() })
+            .ToDictionaryAsync(x => x.PhoneListId, x => x.UserCount);
+
         var result = phoneLists.Select(pl => new PhoneListDto(
             pl.Id,
             pl.Name,
-            pl.ContactCount,
-            pl.UserCount,
+            contactCounts.GetValueOrDefault(pl.Id, 0),
+            userCounts.GetValueOrDefault(pl.Id, 0),
             EnumHelpers.ToPgName(pl.TargetScope),
             pl.TunnelPhoneLists.Select(tp => new PhoneListSourceTunnelDto(tp.Tunnel.Id, tp.Tunnel.Name)).ToArray(),
             null // LastSyncStatus: derived from SyncRun data — not yet wired for v1
@@ -57,13 +71,26 @@ public class PhoneListsController : ControllerBase
         if (phoneList is null)
             return NotFound(new { message = $"Phone list {id} not found." });
 
+        // Compute live counts from ContactSyncState
+        var liveContactCount = await _db.ContactSyncStates
+            .Where(c => c.PhoneListId == id)
+            .Select(c => c.SourceUserId)
+            .Distinct()
+            .CountAsync();
+
+        var liveUserCount = await _db.ContactSyncStates
+            .Where(c => c.PhoneListId == id)
+            .Select(c => c.TargetMailboxId)
+            .Distinct()
+            .CountAsync();
+
         var dto = new PhoneListDetailDto(
             phoneList.Id,
             phoneList.Name,
             phoneList.Description,
             phoneList.ExchangeFolderId,
-            phoneList.ContactCount,
-            phoneList.UserCount,
+            liveContactCount,
+            liveUserCount,
             EnumHelpers.ToPgName(phoneList.TargetScope),
             phoneList.TargetUserFilter,
             phoneList.TunnelPhoneLists.Select(tp => new PhoneListSourceTunnelDto(tp.Tunnel.Id, tp.Tunnel.Name)).ToArray(),

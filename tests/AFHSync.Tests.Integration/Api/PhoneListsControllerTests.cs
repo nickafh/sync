@@ -111,7 +111,8 @@ public class PhoneListsControllerTests : IClassFixture<TestWebApplicationFactory
 
         var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         Assert.Equal("Specific List", body.GetProperty("name").GetString());
-        Assert.Equal(50, body.GetProperty("contactCount").GetInt32());
+        // contactCount is now computed from ContactSyncState, not the static field
+        Assert.Equal(0, body.GetProperty("contactCount").GetInt32());
     }
 
     [Fact]

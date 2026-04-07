@@ -63,8 +63,16 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
             switch (field.Behavior)
             {
                 case SyncBehavior.Nosync:
-                    // Excluded entirely — not written to contact, not included in hash
+                {
+                    // For existing contacts: include as empty string to clear the field in Graph.
+                    // Graph PATCH ignores omitted fields, so we must explicitly send empty string.
+                    // For new contacts: exclude entirely (no need to clear what doesn't exist).
+                    if (existingState is not null)
+                    {
+                        payload[field.FieldName] = string.Empty;
+                    }
                     break;
+                }
 
                 case SyncBehavior.Always:
                 {

@@ -65,7 +65,7 @@ public class SourceResolver : ISourceResolver
             .Select(MapGraphUserToSourceUser)
             .ToList();
 
-        var filtered = ApplySourceFilters(sourceUsers);
+        var filtered = ApplySourceFiltersWithLogging(sourceUsers);
 
         _logger.LogInformation(
             "Tunnel {TunnelId}: {TotalCount} Graph users -> {FilteredCount} after source filtering",
@@ -106,7 +106,7 @@ public class SourceResolver : ISourceResolver
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
-                "showInAddressList", "onPremisesExtensionAttributes"
+                "showInAddressList", "onPremisesExtensionAttributes", "aboutMe"
             ];
             // Required for advanced filters on extension attributes and $count
             config.Headers.Add("ConsistencyLevel", "eventual");
@@ -142,7 +142,9 @@ public class SourceResolver : ISourceResolver
     /// </summary>
     public static SourceUser MapGraphUserToSourceUser(User graphUser)
     {
-        var mailboxType = graphUser.UserType == "Member" ? "UserMailbox" : graphUser.UserType;
+        // Treat null/empty userType as "Member" — on-prem synced users may not have userType set
+        var userType = graphUser.UserType;
+        var mailboxType = (string.IsNullOrEmpty(userType) || userType == "Member") ? "UserMailbox" : userType;
 
         return new SourceUser
         {
@@ -162,8 +164,10 @@ public class SourceResolver : ISourceResolver
             State = graphUser.State,
             PostalCode = graphUser.PostalCode,
             Country = graphUser.Country,
-            IsEnabled = graphUser.AccountEnabled ?? false,
+            // Treat null accountEnabled as true — org users with mailboxes default to enabled
+            IsEnabled = graphUser.AccountEnabled ?? true,
             MailboxType = mailboxType,
+            Notes = graphUser.AboutMe,
             ExtensionAttr1 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute1,
             ExtensionAttr2 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute2,
             ExtensionAttr3 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute3,
@@ -183,6 +187,9 @@ public class SourceResolver : ISourceResolver
     ///
     /// Public for unit testability per plan spec.
     /// </summary>
+    /// <summary>
+    /// Static overload for unit test compatibility. No logging.
+    /// </summary>
     public static List<SourceUser> ApplySourceFilters(IEnumerable<SourceUser> users)
     {
         return users.Where(u =>
@@ -191,6 +198,52 @@ public class SourceResolver : ISourceResolver
             !string.IsNullOrWhiteSpace(u.Email) &&
             !IsServiceAccount(u.Email!)
         ).ToList();
+    }
+
+    /// <summary>
+    /// Instance method with diagnostic logging showing exactly why each user was filtered out.
+    /// </summary>
+    private List<SourceUser> ApplySourceFiltersWithLogging(IEnumerable<SourceUser> users)
+    {
+        var userList = users.ToList();
+        var filtered = new List<SourceUser>();
+
+        foreach (var u in userList)
+        {
+            if (!u.IsEnabled)
+            {
+                _logger.LogDebug("Filtered out {Email} ({EntraId}): disabled account", u.Email, u.EntraId);
+                continue;
+            }
+            if (u.MailboxType != "UserMailbox")
+            {
+                _logger.LogDebug("Filtered out {Email} ({EntraId}): mailbox type '{Type}'", u.Email, u.EntraId, u.MailboxType);
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(u.Email))
+            {
+                _logger.LogDebug("Filtered out {DisplayName} ({EntraId}): no email address", u.DisplayName, u.EntraId);
+                continue;
+            }
+            if (IsServiceAccount(u.Email!))
+            {
+                _logger.LogDebug("Filtered out {Email} ({EntraId}): service account prefix", u.Email, u.EntraId);
+                continue;
+            }
+            filtered.Add(u);
+        }
+
+        if (filtered.Count < userList.Count)
+        {
+            _logger.LogInformation("Source filter removed {Count} users: {Disabled} disabled, {MailboxType} non-user mailbox, {NoEmail} no email, {ServiceAcct} service accounts",
+                userList.Count - filtered.Count,
+                userList.Count(u => !u.IsEnabled),
+                userList.Count(u => u.IsEnabled && u.MailboxType != "UserMailbox"),
+                userList.Count(u => u.IsEnabled && u.MailboxType == "UserMailbox" && string.IsNullOrWhiteSpace(u.Email)),
+                userList.Count(u => u.IsEnabled && u.MailboxType == "UserMailbox" && !string.IsNullOrWhiteSpace(u.Email) && IsServiceAccount(u.Email!)));
+        }
+
+        return filtered;
     }
 
     /// <summary>
@@ -223,7 +276,7 @@ public class SourceResolver : ISourceResolver
             return;
 
         const int batchSize = 25;
-        const int colCount = 25;
+        const int colCount = 26;
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
 
         for (int offset = 0; offset < users.Count; offset += batchSize)
@@ -235,7 +288,7 @@ public class SourceResolver : ISourceResolver
                     entra_id, display_name, first_name, last_name, email,
                     business_phone, mobile_phone, job_title, department,
                     office_location, company_name, street_address, city,
-                    state, postal_code, country, is_enabled, mailbox_type,
+                    state, postal_code, country, notes, is_enabled, mailbox_type,
                     extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
                     last_fetched_at, created_at, updated_at
                 ) VALUES
@@ -246,7 +299,7 @@ public class SourceResolver : ISourceResolver
             {
                 if (i > 0) sql.AppendLine(",");
                 var p = i * colCount;
-                sql.Append($"({{{p}}}, {{{p+1}}}, {{{p+2}}}, {{{p+3}}}, {{{p+4}}}, {{{p+5}}}, {{{p+6}}}, {{{p+7}}}, {{{p+8}}}, {{{p+9}}}, {{{p+10}}}, {{{p+11}}}, {{{p+12}}}, {{{p+13}}}, {{{p+14}}}, {{{p+15}}}, {{{p+16}}}, {{{p+17}}}, {{{p+18}}}, {{{p+19}}}, {{{p+20}}}, {{{p+21}}}, {{{p+22}}}, {{{p+23}}}, {{{p+24}}})");
+                sql.Append($"({{{p}}}, {{{p+1}}}, {{{p+2}}}, {{{p+3}}}, {{{p+4}}}, {{{p+5}}}, {{{p+6}}}, {{{p+7}}}, {{{p+8}}}, {{{p+9}}}, {{{p+10}}}, {{{p+11}}}, {{{p+12}}}, {{{p+13}}}, {{{p+14}}}, {{{p+15}}}, {{{p+16}}}, {{{p+17}}}, {{{p+18}}}, {{{p+19}}}, {{{p+20}}}, {{{p+21}}}, {{{p+22}}}, {{{p+23}}}, {{{p+24}}}, {{{p+25}}})");
 
                 var user = batch[i];
                 parameters.AddRange([
@@ -257,7 +310,7 @@ public class SourceResolver : ISourceResolver
                     (object?)user.OfficeLocation, (object?)user.CompanyName,
                     (object?)user.StreetAddress, (object?)user.City,
                     (object?)user.State, (object?)user.PostalCode,
-                    (object?)user.Country, user.IsEnabled, (object?)user.MailboxType,
+                    (object?)user.Country, (object?)user.Notes, user.IsEnabled, (object?)user.MailboxType,
                     (object?)user.ExtensionAttr1, (object?)user.ExtensionAttr2,
                     (object?)user.ExtensionAttr3, (object?)user.ExtensionAttr4,
                     user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
@@ -282,6 +335,7 @@ public class SourceResolver : ISourceResolver
                     state = EXCLUDED.state,
                     postal_code = EXCLUDED.postal_code,
                     country = EXCLUDED.country,
+                    notes = EXCLUDED.notes,
                     is_enabled = EXCLUDED.is_enabled,
                     mailbox_type = EXCLUDED.mailbox_type,
                     extension_attr_1 = EXCLUDED.extension_attr_1,
