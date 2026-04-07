@@ -43,9 +43,9 @@ const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
     cell: ({ getValue }) => getValue<number | null>() ?? '--',
   },
   {
-    accessorKey: 'sourceUserId',
+    accessorKey: 'sourceUserName',
     header: 'Source User',
-    cell: ({ getValue }) => getValue<number | null>() ?? '--',
+    cell: ({ row }) => row.original.sourceUserName ?? row.original.sourceUserId ?? '--',
   },
   {
     accessorKey: 'action',

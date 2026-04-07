@@ -57,6 +57,7 @@ export interface SyncRunItemDto {
   id: number;
   tunnelId: number | null;
   sourceUserId: number | null;
+  sourceUserName: string | null;
   action: SyncItemAction;
   fieldChanges: string | null;
   errorMessage: string | null;

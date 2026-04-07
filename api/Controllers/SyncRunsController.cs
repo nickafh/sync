@@ -210,6 +210,7 @@ public class SyncRunsController : ControllerBase
                 i.Id,
                 i.TunnelId,
                 i.SourceUserId,
+                i.SourceUser != null ? i.SourceUser.DisplayName : null,
                 i.Action,
                 i.FieldChanges,
                 i.ErrorMessage,

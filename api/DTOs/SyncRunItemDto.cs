@@ -4,6 +4,7 @@ public record SyncRunItemDto(
     int Id,
     int? TunnelId,
     int? SourceUserId,
+    string? SourceUserName,
     string Action,
     string? FieldChanges,
     string? ErrorMessage,
