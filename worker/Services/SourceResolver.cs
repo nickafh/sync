@@ -121,6 +121,9 @@ public class SourceResolver : ISourceResolver
                 response,
                 user =>
                 {
+                    // Skip users hidden from the Global Address List
+                    if (user.ShowInAddressList == false)
+                        return true; // continue iterating, just don't add
                     users.Add(user);
                     return true;
                 },
