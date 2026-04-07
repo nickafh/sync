@@ -19,7 +19,7 @@ namespace AFHSync.Api.Migrations
         {
             // Clear photo hashes on ContactSyncState so delta logic re-processes all photos
             migrationBuilder.Sql(
-                "UPDATE contact_sync_states SET photo_hash = NULL, previous_photo_hash = NULL WHERE photo_hash IS NOT NULL;");
+                "UPDATE contact_sync_state SET photo_hash = NULL, previous_photo_hash = NULL WHERE photo_hash IS NOT NULL;");
 
             // Clear photo hashes on SourceUsers so they get re-fetched and re-compared
             migrationBuilder.Sql(
