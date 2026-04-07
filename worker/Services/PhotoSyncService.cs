@@ -25,6 +25,7 @@ public class PhotoSyncService : IPhotoSyncService
 {
     private readonly IDbContextFactory<AFHSyncDbContext> _dbContextFactory;
     private readonly GraphClientFactory? _graphClientFactory;
+    private readonly IContactFolderManager _contactFolderManager;
     private readonly IRunLogger _runLogger;
     private readonly ThrottleCounter _throttleCounter;
     private readonly ILogger<PhotoSyncService> _logger;
@@ -54,12 +55,14 @@ public class PhotoSyncService : IPhotoSyncService
     public PhotoSyncService(
         IDbContextFactory<AFHSyncDbContext> dbContextFactory,
         GraphClientFactory graphClientFactory,
+        IContactFolderManager contactFolderManager,
         IRunLogger runLogger,
         ThrottleCounter throttleCounter,
         ILogger<PhotoSyncService> logger)
     {
         _dbContextFactory = dbContextFactory;
         _graphClientFactory = graphClientFactory;
+        _contactFolderManager = contactFolderManager;
         _runLogger = runLogger;
         _throttleCounter = throttleCounter;
         _logger = logger;
@@ -184,8 +187,16 @@ public class PhotoSyncService : IPhotoSyncService
                 var states = mailboxGroup.ToList();
                 var mailboxEntraId = states.First().TargetMailbox.EntraId;
 
+                // Resolve the contact folder ID for this mailbox+tunnel.
+                // Photos must be written via the ContactFolders path since contacts
+                // live in a subfolder (e.g. "Buckhead-test"), not the root contacts
+                // collection. The flat /contacts/{id}/photo path does not reliably
+                // resolve the photo sub-resource for subfolder contacts.
+                var (folderId, _) = await _contactFolderManager.GetOrCreateFolderAsync(
+                    mailboxEntraId, tunnel.Name, ct);
+
                 var (updated, failed) = await ProcessMailboxPhotosAsync(
-                    tunnel, run, mailboxEntraId, states, sourcePhotos,
+                    tunnel, run, mailboxEntraId, folderId, states, sourcePhotos,
                     photoBehavior, isBackfill, isDryRun, ct);
 
                 lock (counterLock)
@@ -375,15 +386,19 @@ public class PhotoSyncService : IPhotoSyncService
 
     /// <summary>
     /// Writes photo bytes to a target contact via Microsoft Graph.
+    /// Uses the ContactFolders path because contacts live in a named subfolder
+    /// (e.g. "Buckhead-test"), not the root contacts collection. The flat
+    /// /contacts/{id}/photo path does not reliably write photos for subfolder contacts.
     /// Creates a new MemoryStream for each call to avoid stream exhaustion (Pitfall 2).
     /// Protected virtual for test subclassing.
     /// </summary>
     protected virtual async Task WriteContactPhotoAsync(
-        string mailboxEntraId, string graphContactId, byte[] photoBytes, CancellationToken ct)
+        string mailboxEntraId, string folderId, string graphContactId, byte[] photoBytes, CancellationToken ct)
     {
         using var stream = new MemoryStream(photoBytes);
         await _graphClientFactory!.Client
             .Users[mailboxEntraId]
+            .ContactFolders[folderId]
             .Contacts[graphContactId]
             .Photo.Content
             .PutAsync(stream, cancellationToken: ct);
@@ -404,6 +419,7 @@ public class PhotoSyncService : IPhotoSyncService
         Tunnel tunnel,
         SyncRun run,
         string mailboxEntraId,
+        string folderId,
         List<ContactSyncState> states,
         Dictionary<int, (byte[]? bytes, string? hash)> sourcePhotos,
         SyncBehavior photoBehavior,
@@ -462,7 +478,7 @@ public class PhotoSyncService : IPhotoSyncService
                     if (!isDryRun)
                     {
                         await WriteContactPhotoAsync(
-                            mailboxEntraId, state.GraphContactId!, photoBytes, ct);
+                            mailboxEntraId, folderId, state.GraphContactId!, photoBytes, ct);
                     }
 
                     // Update ContactSyncState photo hash

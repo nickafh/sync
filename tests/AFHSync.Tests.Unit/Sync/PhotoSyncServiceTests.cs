@@ -475,8 +475,9 @@ public class PhotoSyncServiceTests
     private static TestablePhotoSyncContext CreateTestableService(string dbName)
     {
         var runLogger = new FakeRunLogger();
+        var folderManager = new FakeContactFolderManager();
         var service = new TestablePhotoSyncService(
-            CreateFactory(dbName), runLogger,
+            CreateFactory(dbName), folderManager, runLogger,
             new ThrottleCounter(), NullLogger<PhotoSyncService>.Instance);
         return new TestablePhotoSyncContext(service, runLogger);
     }
@@ -515,10 +516,11 @@ public class PhotoSyncServiceTests
 
         public TestablePhotoSyncService(
             IDbContextFactory<AFHSyncDbContext> dbContextFactory,
+            IContactFolderManager contactFolderManager,
             IRunLogger runLogger,
             ThrottleCounter throttleCounter,
             ILogger<PhotoSyncService> logger)
-            : base(dbContextFactory, null!, runLogger, throttleCounter, logger)
+            : base(dbContextFactory, null!, contactFolderManager, runLogger, throttleCounter, logger)
         {
         }
 
@@ -531,13 +533,22 @@ public class PhotoSyncServiceTests
         }
 
         protected override Task WriteContactPhotoAsync(
-            string mailboxEntraId, string graphContactId, byte[] photoBytes, CancellationToken ct)
+            string mailboxEntraId, string folderId, string graphContactId, byte[] photoBytes, CancellationToken ct)
         {
             if (FailPuts)
                 throw new InvalidOperationException("Simulated Graph PUT failure");
             PhotoPutCount++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FakeContactFolderManager : IContactFolderManager
+    {
+        public Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(
+            string mailboxEntraId, string folderName, CancellationToken ct)
+            => Task.FromResult(("fake-folder-id", false));
+
+        public void ResetCache() { }
     }
 
     private sealed class FakeRunLogger : IRunLogger
