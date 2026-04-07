@@ -106,7 +106,7 @@ public class SourceResolver : ISourceResolver
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
-                "showInAddressList", "onPremisesExtensionAttributes", "aboutMe"
+                "showInAddressList", "onPremisesExtensionAttributes"
             ];
             // Required for advanced filters on extension attributes and $count
             config.Headers.Add("ConsistencyLevel", "eventual");
@@ -167,7 +167,6 @@ public class SourceResolver : ISourceResolver
             // Treat null accountEnabled as true — org users with mailboxes default to enabled
             IsEnabled = graphUser.AccountEnabled ?? true,
             MailboxType = mailboxType,
-            Notes = graphUser.AboutMe,
             ExtensionAttr1 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute1,
             ExtensionAttr2 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute2,
             ExtensionAttr3 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute3,
