@@ -15,7 +15,7 @@ export function useSyncRun(id: number) {
   return useQuery({
     queryKey: ['sync-run', id],
     queryFn: () => api.syncRuns.get(id),
-    staleTime: Infinity,
+    staleTime: 30 * 1000,
     enabled: id > 0,
   });
 }
@@ -24,7 +24,7 @@ export function useSyncRunItems(id: number, page: number, pageSize: number, acti
   return useQuery({
     queryKey: ['sync-run-items', id, page, pageSize, action],
     queryFn: () => api.syncRuns.getItems(id, page, pageSize + 1, action),
-    staleTime: Infinity,
+    staleTime: 30 * 1000,
     enabled: id > 0,
   });
 }
