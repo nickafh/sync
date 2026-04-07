@@ -43,13 +43,23 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
     /// <summary>
     /// Builds a normalized contact payload and computes a deterministic SHA-256 hash.
     ///
-    /// Behavior per field:
-    /// - Nosync: field is excluded entirely from payload and hash
-    /// - Always: field included with trimmed value if non-null and non-empty
-    /// - AddMissing: field included only when existingState is null (new contact);
-    ///   excluded when existingState exists (preserve existing contact value)
-    /// - RemoveBlank: if source value is null/empty/whitespace, adds empty string "";
-    ///   if source value is present, adds trimmed value
+    /// IMPORTANT: The hash is computed from a STABLE set of fields that does NOT depend on
+    /// existingState. This ensures the same source data always produces the same hash,
+    /// regardless of whether the contact is new or existing. The Graph payload may differ
+    /// from the hash input (e.g., Nosync sends empty string for existing contacts to clear
+    /// the field, AddMissing excludes fields for existing contacts to preserve them).
+    ///
+    /// Hash behavior per field:
+    /// - Nosync: excluded from hash (user doesn't want this field — changes shouldn't trigger updates)
+    /// - Always: included in hash with trimmed value if non-null and non-empty
+    /// - AddMissing: included in hash (source value is tracked even if not written to existing contacts)
+    /// - RemoveBlank: included in hash (empty string when source is blank, trimmed value otherwise)
+    ///
+    /// Graph payload behavior per field:
+    /// - Nosync: excluded for new contacts; empty string for existing (to clear the field in Graph)
+    /// - Always: included with trimmed value if non-null and non-empty
+    /// - AddMissing: included for new contacts only; excluded for existing (preserve existing value)
+    /// - RemoveBlank: always included (empty string when source is blank, trimmed value otherwise)
     /// </summary>
     public ContactPayloadResult BuildPayload(
         SourceUser source,
@@ -57,6 +67,7 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
         ContactSyncState? existingState)
     {
         var payload = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        var hashInput = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var field in fieldSettings)
         {
@@ -64,7 +75,8 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
             {
                 case SyncBehavior.Nosync:
                 {
-                    // For existing contacts: include as empty string to clear the field in Graph.
+                    // Hash: excluded (field is not synced, changes should not trigger updates).
+                    // Payload: for existing contacts, send empty string to clear the field in Graph.
                     // Graph PATCH ignores omitted fields, so we must explicitly send empty string.
                     // For new contacts: exclude entirely (no need to clear what doesn't exist).
                     if (existingState is not null)
@@ -80,18 +92,21 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
                     if (value is not null)
                     {
                         payload[field.FieldName] = value;
+                        hashInput[field.FieldName] = value;
                     }
                     break;
                 }
 
                 case SyncBehavior.AddMissing:
                 {
-                    // Include only for new contacts (no existing sync state).
+                    // Hash: always include (track source value for delta detection).
+                    // Payload: include only for new contacts (no existing sync state).
                     // When a contact already exists, the existing value is preserved.
-                    if (existingState is null)
+                    var value = GetFieldValue(source, field.FieldName);
+                    if (value is not null)
                     {
-                        var value = GetFieldValue(source, field.FieldName);
-                        if (value is not null)
+                        hashInput[field.FieldName] = value;
+                        if (existingState is null)
                         {
                             payload[field.FieldName] = value;
                         }
@@ -106,17 +121,19 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
                     {
                         // Explicit empty string signals target field should be cleared
                         payload[field.FieldName] = string.Empty;
+                        hashInput[field.FieldName] = string.Empty;
                     }
                     else
                     {
                         payload[field.FieldName] = rawValue.Trim();
+                        hashInput[field.FieldName] = rawValue.Trim();
                     }
                     break;
                 }
             }
         }
 
-        var hash = ComputeHash(payload);
+        var hash = ComputeHash(hashInput);
         return new ContactPayloadResult(payload, hash);
     }
 

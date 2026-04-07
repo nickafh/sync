@@ -299,29 +299,40 @@ public sealed class SyncEngine(
         var counterLock = new object();
 
         // Step 5h: Process mailboxes in parallel (bounded by semaphore, D-15).
+        // Use first phone list as the canonical owner for ContactSyncState records.
+        // All phone lists resolve to the same source users (via sourceResolver.ResolveAsync),
+        // so processing once per mailbox with a canonical phone list avoids creating duplicate
+        // Graph contacts in the same folder (one contact folder per tunnel, not per phone list).
         var phoneLists = tunnel.TunnelPhoneLists
             .Select(tpl => tpl.PhoneList)
             .Where(pl => pl != null)
             .ToList();
+
+        if (phoneLists.Count == 0)
+        {
+            logger.LogWarning("Tunnel {TunnelName}: no phone lists configured, skipping", tunnel.Name);
+            return (0, 0, 0, 0, 0);
+        }
+
+        var canonicalPhoneList = phoneLists[0];
+        var allPhoneListIds = phoneLists.Select(pl => pl.Id).ToList();
 
         var mailboxTasks = targetMailboxes.Select(async mailbox =>
         {
             await semaphore.WaitAsync(ct);
             try
             {
-                foreach (var phoneList in phoneLists)
-                {
-                    var (c, u, s, f, r) = await ProcessMailboxPhoneListAsync(
-                        tunnel, phoneList, mailbox, run, sourceUsers, fieldSettings, isDryRun, ct);
+                var (c, u, s, f, r) = await ProcessMailboxAsync(
+                    tunnel, canonicalPhoneList, allPhoneListIds, mailbox, run,
+                    sourceUsers, fieldSettings, isDryRun, ct);
 
-                    lock (counterLock)
-                    {
-                        created += c;
-                        updated += u;
-                        skipped += s;
-                        failed += f;
-                        removed += r;
-                    }
+                lock (counterLock)
+                {
+                    created += c;
+                    updated += u;
+                    skipped += s;
+                    failed += f;
+                    removed += r;
                 }
             }
             finally
@@ -339,9 +350,16 @@ public sealed class SyncEngine(
         return (created, updated, skipped, failed, removed);
     }
 
-    private async Task<(int created, int updated, int skipped, int failed, int removed)> ProcessMailboxPhoneListAsync(
+    /// <summary>
+    /// Processes a single mailbox for a tunnel: creates/updates/skips contacts based on delta hash,
+    /// then handles stale contacts. Source users are deduplicated across all phone lists in the tunnel
+    /// (since all phone lists share the same contact folder). A canonical phone list is used for new
+    /// ContactSyncState records; existing records from any phone list are found and reused.
+    /// </summary>
+    private async Task<(int created, int updated, int skipped, int failed, int removed)> ProcessMailboxAsync(
         Tunnel tunnel,
-        PhoneList phoneList,
+        PhoneList canonicalPhoneList,
+        List<int> allPhoneListIds,
         TargetMailbox mailbox,
         SyncRun run,
         List<SourceUser> sourceUsers,
@@ -366,13 +384,13 @@ public sealed class SyncEngine(
         }
 
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
-        // Clear it so all contacts get re-created in the new folder.
+        // Clear across ALL phone lists so all contacts get re-created in the new folder.
         if (folderWasCreated)
         {
             await using var cleanupDb = await dbContextFactory.CreateDbContextAsync(ct);
             var staleCount = await cleanupDb.ContactSyncStates
                 .Where(s => s.TunnelId == tunnel.Id
-                            && s.PhoneListId == phoneList.Id
+                            && allPhoneListIds.Contains(s.PhoneListId)
                             && s.TargetMailboxId == mailbox.Id)
                 .ExecuteDeleteAsync(ct);
             if (staleCount > 0)
@@ -381,14 +399,63 @@ public sealed class SyncEngine(
                     staleCount, tunnel.Id, mailbox.Id);
         }
 
-        // Load existing sync state for this tunnel+phoneList+mailbox (AsNoTracking per Pitfall 5).
+        // Load existing sync state across ALL phone lists for this tunnel+mailbox.
+        // This finds records regardless of which phone list originally created them,
+        // preventing duplicates when multiple phone lists exist.
+        // If a SourceUser has records under multiple phone lists, keep the first one found
+        // (the others are duplicates from before this fix and will be cleaned up below).
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
-        var existingStates = await db.ContactSyncStates
+        var allExistingStates = await db.ContactSyncStates
             .AsNoTracking()
             .Where(s => s.TunnelId == tunnel.Id
-                        && s.PhoneListId == phoneList.Id
+                        && allPhoneListIds.Contains(s.PhoneListId)
                         && s.TargetMailboxId == mailbox.Id)
-            .ToDictionaryAsync(s => s.SourceUserId, ct);
+            .ToListAsync(ct);
+
+        // Deduplicate: keep one state per SourceUserId (prefer canonical phone list, then lowest ID).
+        var existingStates = allExistingStates
+            .GroupBy(s => s.SourceUserId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(s => s.PhoneListId == canonicalPhoneList.Id)
+                      .ThenBy(s => s.Id)
+                      .First());
+
+        // Identify duplicate sync state records to clean up (from before this fix).
+        // These have Graph contacts that are duplicates in the same folder.
+        var duplicateStates = allExistingStates
+            .Where(s => existingStates.Values.All(kept => kept.Id != s.Id))
+            .ToList();
+
+        if (duplicateStates.Count > 0)
+        {
+            logger.LogInformation(
+                "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
+                duplicateStates.Count, tunnel.Id, mailbox.Id);
+
+            // Delete duplicate Graph contacts and sync state records.
+            await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
+            foreach (var dupe in duplicateStates)
+            {
+                if (!isDryRun && !string.IsNullOrEmpty(dupe.GraphContactId))
+                {
+                    try
+                    {
+                        await contactWriter.DeleteContactAsync(mailbox.EntraId, dupe.GraphContactId, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to delete duplicate Graph contact {GraphContactId}", dupe.GraphContactId);
+                    }
+                }
+            }
+
+            var dupeIds = duplicateStates.Select(d => d.Id).ToList();
+            await dupeDb.ContactSyncStates
+                .Where(s => dupeIds.Contains(s.Id))
+                .ExecuteDeleteAsync(ct);
+            removed += duplicateStates.Count;
+        }
 
         // Track new/modified states to save at the end.
         var statesToAdd = new List<ContactSyncState>();
@@ -416,7 +483,7 @@ public sealed class SyncEngine(
                     statesToAdd.Add(new ContactSyncState
                     {
                         SourceUserId = sourceUser.Id,
-                        PhoneListId = phoneList.Id,
+                        PhoneListId = canonicalPhoneList.Id,
                         TargetMailboxId = mailbox.Id,
                         TunnelId = tunnel.Id,
                         GraphContactId = graphContactId,
@@ -431,7 +498,7 @@ public sealed class SyncEngine(
                     {
                         SyncRunId = run.Id,
                         TunnelId = tunnel.Id,
-                        PhoneListId = phoneList.Id,
+                        PhoneListId = canonicalPhoneList.Id,
                         TargetMailboxId = mailbox.Id,
                         SourceUserId = sourceUser.Id,
                         Action = "created",
@@ -457,7 +524,7 @@ public sealed class SyncEngine(
                     {
                         SyncRunId = run.Id,
                         TunnelId = tunnel.Id,
-                        PhoneListId = phoneList.Id,
+                        PhoneListId = canonicalPhoneList.Id,
                         TargetMailboxId = mailbox.Id,
                         SourceUserId = sourceUser.Id,
                         Action = "updated",
@@ -481,7 +548,7 @@ public sealed class SyncEngine(
                 {
                     SyncRunId = run.Id,
                     TunnelId = tunnel.Id,
-                    PhoneListId = phoneList.Id,
+                    PhoneListId = canonicalPhoneList.Id,
                     TargetMailboxId = mailbox.Id,
                     SourceUserId = sourceUser.Id,
                     Action = "failed",
@@ -537,39 +604,45 @@ public sealed class SyncEngine(
         }
 
         // Handle stale contacts after processing all source users.
+        // Check across all phone lists for this tunnel+mailbox (stale handler scopes by phone list,
+        // so call it for each phone list to catch records from any phone list).
         if (!isDryRun)
         {
             var currentSourceIds = new HashSet<int>(sourceUsers.Select(u => u.Id));
-            var staleResult = await staleContactHandler.HandleStaleAsync(
-                tunnel, phoneList.Id, mailbox.Id, mailbox.EntraId, currentSourceIds, ct);
 
-            for (int i = 0; i < staleResult.Removed; i++)
+            foreach (var phoneListId in allPhoneListIds)
             {
-                runLogger.AddItem(new SyncRunItem
-                {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = phoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    Action = "removed",
-                    CreatedAt = DateTime.UtcNow
-                });
-            }
+                var staleResult = await staleContactHandler.HandleStaleAsync(
+                    tunnel, phoneListId, mailbox.Id, mailbox.EntraId, currentSourceIds, ct);
 
-            for (int i = 0; i < staleResult.StaleDetected; i++)
-            {
-                runLogger.AddItem(new SyncRunItem
+                for (int i = 0; i < staleResult.Removed; i++)
                 {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = phoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    Action = "stale_detected",
-                    CreatedAt = DateTime.UtcNow
-                });
-            }
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = phoneListId,
+                        TargetMailboxId = mailbox.Id,
+                        Action = "removed",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
 
-            removed += staleResult.Removed;
+                for (int i = 0; i < staleResult.StaleDetected; i++)
+                {
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = phoneListId,
+                        TargetMailboxId = mailbox.Id,
+                        Action = "stale_detected",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
+
+                removed += staleResult.Removed;
+            }
         }
 
         return (created, updated, skipped, failed, removed);
