@@ -5,6 +5,7 @@ using AFHSync.Shared.Enums;
 using AFHSync.Worker.Graph;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace AFHSync.Worker.Services;
@@ -434,6 +435,21 @@ public class PhotoSyncService : IPhotoSyncService
             }, cancellationToken: ct);
     }
 
+    /// <summary>
+    /// PATCHes the contact with an empty categories array to bump lastModifiedDateTime.
+    /// EAS delta sync only re-sends contacts whose modification time changed; the photo
+    /// PUT updates a sub-resource without touching the parent contact's timestamp.
+    /// </summary>
+    protected virtual async Task TouchContactAsync(
+        string mailboxEntraId, string folderId, string graphContactId, CancellationToken ct)
+    {
+        await _graphClientFactory!.Client
+            .Users[mailboxEntraId]
+            .ContactFolders[folderId]
+            .Contacts[graphContactId]
+            .PatchAsync(new Contact { Categories = [] }, cancellationToken: ct);
+    }
+
     // ==============================
     // Private helpers
     // ==============================
@@ -524,6 +540,13 @@ public class PhotoSyncService : IPhotoSyncService
                     {
                         await WriteContactPhotoAsync(
                             mailboxEntraId, folderId, state.GraphContactId!, photoBytes, ct);
+
+                        // Touch the contact to bump lastModifiedDateTime.
+                        // EAS delta sync only re-sends contacts whose modification time changed.
+                        // The photo PUT updates a sub-resource but does NOT update the parent
+                        // contact's timestamp, so EAS clients never re-fetch the photo.
+                        await TouchContactAsync(
+                            mailboxEntraId, folderId, state.GraphContactId!, ct);
                     }
 
                     // Update ContactSyncState photo hash

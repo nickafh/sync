@@ -6,20 +6,19 @@ namespace AFHSync.Api.Migrations
 {
     /// <inheritdoc />
     /// <summary>
-    /// Resets all photo hashes to force a full photo re-write with correct
-    /// Content-Type: image/jpeg header and EAS touch (PATCH after photo PUT to bump
-    /// lastModifiedDateTime so Exchange ActiveSync re-syncs the contact with the photo).
+    /// Resets all photo hashes to force a full photo re-write with EAS touch.
+    /// Previous writes stored the photo correctly (visible in OWA) but did not
+    /// PATCH the contact afterward, so Exchange ActiveSync never re-synced the
+    /// contact with the photo to phone clients.
     /// </summary>
-    public partial class ResetPhotoHashesForContentType : Migration
+    public partial class ResetPhotoHashesForEASTouch : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Clear photo hashes on ContactSyncState so delta logic re-processes all photos
             migrationBuilder.Sql(
                 "UPDATE contact_sync_state SET photo_hash = NULL, previous_photo_hash = NULL WHERE photo_hash IS NOT NULL;");
 
-            // Clear photo hashes on SourceUsers so they get re-fetched and re-compared
             migrationBuilder.Sql(
                 "UPDATE source_users SET photo_hash = NULL WHERE photo_hash IS NOT NULL;");
         }
@@ -27,8 +26,6 @@ namespace AFHSync.Api.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Cannot restore previous hashes — they were written with wrong content-type anyway.
-            // The next sync run will recompute all hashes correctly.
         }
     }
 }
