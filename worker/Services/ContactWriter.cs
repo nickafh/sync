@@ -116,8 +116,19 @@ public class ContactWriter : IContactWriter
         if (payload.TryGetValue("MobilePhone", out var mobilePhone))
             contact.MobilePhone = mobilePhone;
 
-        if (payload.TryGetValue("PersonalNotes", out var personalNotes))
+        // Build PersonalNotes: prepend OfficeLocation since iOS has no dedicated field for it
+        payload.TryGetValue("PersonalNotes", out var personalNotes);
+        if (!string.IsNullOrWhiteSpace(officeLocation))
+        {
+            var prefix = $"Office: {officeLocation}";
+            contact.PersonalNotes = string.IsNullOrWhiteSpace(personalNotes)
+                ? prefix
+                : $"{prefix}\n{personalNotes}";
+        }
+        else if (personalNotes != null)
+        {
             contact.PersonalNotes = personalNotes;
+        }
 
         // EmailAddresses — Graph expects List<EmailAddress> with Address and Name set
         if (payload.TryGetValue("EmailAddresses", out var email))
