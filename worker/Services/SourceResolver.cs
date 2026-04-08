@@ -61,8 +61,19 @@ public class SourceResolver : ISourceResolver
         _logger.LogDebug("Total {RawCount} users from all sources, {DedupedCount} after dedup",
             allGraphUsers.Count, deduped.Count);
 
+        // Fetch notes from beta API (the "Notes" field in Entra admin maps to the AD
+        // `info` attribute, which is only available via /beta/users, not /v1.0/users).
+        var notesLookup = await FetchUserNotesFromBetaAsync(
+            deduped.Where(u => u.Id != null).Select(u => u.Id!).ToList(), ct);
+
         var sourceUsers = deduped
-            .Select(MapGraphUserToSourceUser)
+            .Select(u =>
+            {
+                var su = MapGraphUserToSourceUser(u);
+                if (u.Id != null && notesLookup.TryGetValue(u.Id, out var notes))
+                    su.Notes = notes;
+                return su;
+            })
             .ToList();
 
         var filtered = ApplySourceFiltersWithLogging(sourceUsers);
@@ -178,6 +189,62 @@ public class SourceResolver : ISourceResolver
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
+    }
+
+    /// <summary>
+    /// Fetches the "notes" field from the Graph beta API for a batch of users.
+    /// The Entra admin "Notes" field (AD `info` attribute) is only available via
+    /// /beta/users, not /v1.0/users. Temporarily swaps the adapter's base URL.
+    /// </summary>
+    private async Task<Dictionary<string, string>> FetchUserNotesFromBetaAsync(
+        List<string> entraIds, CancellationToken ct)
+    {
+        var result = new Dictionary<string, string>();
+        if (entraIds.Count == 0) return result;
+
+        var adapter = _graphClientFactory.Client.RequestAdapter;
+        var originalBaseUrl = adapter.BaseUrl;
+
+        try
+        {
+            adapter.BaseUrl = "https://graph.microsoft.com/beta";
+            var betaClient = new GraphServiceClient(adapter);
+
+            // Fetch in batches of 15 using $filter with id IN (...)
+            foreach (var batch in entraIds.Chunk(15))
+            {
+                var idFilter = string.Join(" or ", batch.Select(id => $"id eq '{id}'"));
+                var response = await betaClient.Users.GetAsync(config =>
+                {
+                    config.QueryParameters.Filter = idFilter;
+                    config.QueryParameters.Select = ["id", "notes"];
+                    config.QueryParameters.Top = 15;
+                }, cancellationToken: ct);
+
+                if (response?.Value != null)
+                {
+                    foreach (var user in response.Value)
+                    {
+                        if (user.Id != null && user.AdditionalData.TryGetValue("notes", out var notes)
+                            && notes is string notesStr && !string.IsNullOrWhiteSpace(notesStr))
+                        {
+                            result[user.Id] = notesStr;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch user notes from beta API, continuing without notes");
+        }
+        finally
+        {
+            adapter.BaseUrl = originalBaseUrl;
+        }
+
+        _logger.LogDebug("Fetched notes for {Count} users from beta API", result.Count);
+        return result;
     }
 
     /// <summary>
