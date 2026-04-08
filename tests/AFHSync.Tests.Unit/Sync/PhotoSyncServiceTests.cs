@@ -543,9 +543,6 @@ public class PhotoSyncServiceTests
             return Task.CompletedTask;
         }
 
-        protected override Task TouchContactAsync(
-            string mailboxEntraId, string folderId, string graphContactId, CancellationToken ct)
-            => Task.CompletedTask;
     }
 
     private sealed class FakeContactFolderManager : IContactFolderManager

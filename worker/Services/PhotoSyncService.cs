@@ -5,7 +5,6 @@ using AFHSync.Shared.Enums;
 using AFHSync.Worker.Graph;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 
 namespace AFHSync.Worker.Services;
@@ -32,10 +31,14 @@ public class PhotoSyncService : IPhotoSyncService
     private readonly ILogger<PhotoSyncService> _logger;
 
     /// <summary>
-    /// Lower concurrency for photo writes than contact sync (D-04).
-    /// Photo PUT operations send binary payloads (~200KB each).
+    /// Concurrency for photo writes (D-04). Thumbnails are 5-20KB each.
     /// </summary>
-    private readonly SemaphoreSlim _photoSemaphore = new(2);
+    private readonly SemaphoreSlim _photoSemaphore = new(4);
+
+    /// <summary>
+    /// Concurrency for photo fetches. Bounded to avoid Graph throttling.
+    /// </summary>
+    private readonly SemaphoreSlim _fetchSemaphore = new(8);
 
     /// <summary>
     /// Batch size for initial backfill processing (D-12).
@@ -98,35 +101,33 @@ public class PhotoSyncService : IPhotoSyncService
         }
 
         // Step b: Fetch source photos with fetch-once pattern (D-06)
-        var sourcePhotos = new Dictionary<int, (byte[]? bytes, string? hash)>();
-
-        // Diagnostic counters to identify photo fetch bottleneck
+        // Parallel fetches bounded by _fetchSemaphore to avoid Graph throttling.
+        var sourcePhotos = new System.Collections.Concurrent.ConcurrentDictionary<int, (byte[]? bytes, string? hash)>();
         int fetchSuccess = 0, fetchNotFound = 0, fetchError = 0, fetchOversized = 0;
 
-        foreach (var sourceUser in sourceUsers)
+        var fetchTasks = sourceUsers.Select(async sourceUser =>
         {
+            await _fetchSemaphore.WaitAsync(ct);
             try
             {
                 var (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
 
                 if (photoBytes != null)
                 {
-                    // Validate photo size (T-06-02: max 4MB)
                     if (photoBytes.Length > MaxPhotoSizeBytes)
                     {
                         _logger.LogWarning(
                             "Photo for user {EntraId} exceeds 4MB limit ({Size} bytes), skipping",
                             sourceUser.EntraId, photoBytes.Length);
                         sourcePhotos[sourceUser.Id] = (null, null);
-                        fetchOversized++;
-                        continue;
+                        Interlocked.Increment(ref fetchOversized);
+                        return;
                     }
 
                     var hash = ComputePhotoHash(photoBytes);
                     sourcePhotos[sourceUser.Id] = (photoBytes, hash);
-                    fetchSuccess++;
+                    Interlocked.Increment(ref fetchSuccess);
 
-                    // Update source user photo hash if changed
                     if (sourceUser.PhotoHash != hash)
                     {
                         sourceUser.PhotoHash = hash;
@@ -138,11 +139,10 @@ public class PhotoSyncService : IPhotoSyncService
                     sourcePhotos[sourceUser.Id] = (null, null);
 
                     if (wasNotFound)
-                        fetchNotFound++;
+                        Interlocked.Increment(ref fetchNotFound);
                     else
-                        fetchError++;
+                        Interlocked.Increment(ref fetchError);
 
-                    // Source user removed their photo
                     if (sourceUser.PhotoHash != null)
                     {
                         sourceUser.PhotoHash = null;
@@ -155,19 +155,24 @@ public class PhotoSyncService : IPhotoSyncService
                 _logger.LogError(ex,
                     "Failed to fetch photo for source user {EntraId}", sourceUser.EntraId);
                 sourcePhotos[sourceUser.Id] = (null, null);
-                fetchError++;
+                Interlocked.Increment(ref fetchError);
             }
-        }
+            finally
+            {
+                _fetchSemaphore.Release();
+            }
+        }).ToList();
 
-        var photosFound = sourcePhotos.Count(p => p.Value.bytes != null);
+        await Task.WhenAll(fetchTasks);
+
+        // Convert to Dictionary now that concurrent writes are done
+        var sourcePhotoResults = new Dictionary<int, (byte[]? bytes, string? hash)>(sourcePhotos);
+
+        var photosFound = sourcePhotoResults.Count(p => p.Value.bytes != null);
         _logger.LogInformation(
-            "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Found} with photos, {Missing} without",
-            tunnel.Id, sourcePhotos.Count, photosFound, sourcePhotos.Count - photosFound);
-
-        // Diagnostic breakdown: identifies WHY photos are missing
-        _logger.LogWarning(
-            "Photo fetch diagnostics for tunnel {TunnelId}: Success={Success}, NotFound404={NotFound}, Error={Error}, Oversized={Oversized}, SourceUsersInput={InputCount}",
-            tunnel.Id, fetchSuccess, fetchNotFound, fetchError, fetchOversized, sourceUsers.Count);
+            "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Found} with photos, {Missing} without (Success={Success}, NotFound404={NotFound}, Error={Error}, Oversized={Oversized})",
+            tunnel.Id, sourcePhotoResults.Count, photosFound, sourcePhotoResults.Count - photosFound,
+            fetchSuccess, fetchNotFound, fetchError, fetchOversized);
 
         // Step c: Load ContactSyncState records for this tunnel where GraphContactId is not null
         // (contact must exist before photo write per D-01)
@@ -189,8 +194,8 @@ public class PhotoSyncService : IPhotoSyncService
         var nullPhotoHashCount = contactStates.Count(s => s.PhotoHash == null);
         var distinctMailboxes = contactStates.Select(s => s.TargetMailboxId).Distinct().Count();
         var distinctSourceUsers = contactStates.Select(s => s.SourceUserId).Distinct().Count();
-        _logger.LogWarning(
-            "Photo sync state diagnostics for tunnel {TunnelId}: ContactSyncStates={Total}, NullPhotoHash={NullHash}, NonNullPhotoHash={NonNullHash}, DistinctMailboxes={Mailboxes}, DistinctSourceUsers={SourceUsers}",
+        _logger.LogInformation(
+            "Photo sync state for tunnel {TunnelId}: ContactSyncStates={Total}, NullPhotoHash={NullHash}, NonNullPhotoHash={NonNullHash}, DistinctMailboxes={Mailboxes}, DistinctSourceUsers={SourceUsers}",
             tunnel.Id, contactStates.Count, nullPhotoHashCount, contactStates.Count - nullPhotoHashCount,
             distinctMailboxes, distinctSourceUsers);
 
@@ -222,7 +227,7 @@ public class PhotoSyncService : IPhotoSyncService
                     mailboxEntraId, tunnel.Name, ct);
 
                 var (updated, failed) = await ProcessMailboxPhotosAsync(
-                    tunnel, run, mailboxEntraId, folderId, states, sourcePhotos,
+                    tunnel, run, mailboxEntraId, folderId, states, sourcePhotoResults,
                     photoBehavior, isBackfill, isDryRun, ct);
 
                 lock (counterLock)
@@ -380,9 +385,36 @@ public class PhotoSyncService : IPhotoSyncService
     /// </summary>
     protected virtual async Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
     {
-        // Try 240x240 thumbnail first — full-size profile photos (50-200KB+) are too
-        // large for Exchange ActiveSync to include in the contact sync payload. The
-        // 240x240 JPEG thumbnail is typically 5-20KB, well within EAS limits.
+        // Try 648x648 first — max Graph thumbnail, best quality for Exchange Online.
+        // Exchange Online EAS supports contact photos up to ~100KB. 648x648 JPEG
+        // thumbnails are typically 30-80KB, well within that limit. Full-size profile
+        // photos (200KB+) are too large and get dropped by EAS.
+        try
+        {
+            var stream = await _graphClientFactory!.Client
+                .Users[entraId]
+                .Photos["648x648"]
+                .Content
+                .GetAsync(cancellationToken: ct);
+
+            if (stream is not null)
+            {
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms, ct);
+                _logger.LogDebug("Fetched 648x648 photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
+                return (ms.ToArray(), false);
+            }
+        }
+        catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+        {
+            // 648x648 not available, try 240x240
+        }
+        catch (ODataError)
+        {
+            // Non-404 error on 648x648, try 240x240
+        }
+
+        // Fall back to 240x240 thumbnail
         try
         {
             var stream = await _graphClientFactory!.Client
@@ -401,34 +433,6 @@ public class PhotoSyncService : IPhotoSyncService
         }
         catch (ODataError ex) when (ex.ResponseStatusCode == 404)
         {
-            // 240x240 size not available, fall through to full-size fetch
-        }
-        catch (ODataError)
-        {
-            // Non-404 error on thumbnail, fall through to full-size fetch
-        }
-
-        // Fall back to full-size photo
-        try
-        {
-            var stream = await _graphClientFactory!.Client
-                .Users[entraId]
-                .Photo.Content
-                .GetAsync(cancellationToken: ct);
-
-            if (stream is null)
-            {
-                _logger.LogDebug("Photo stream null for user {EntraId}", entraId);
-                return (null, true);
-            }
-
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms, ct);
-            _logger.LogDebug("Fetched full-size photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
-            return (ms.ToArray(), false);
-        }
-        catch (ODataError ex) when (ex.ResponseStatusCode == 404)
-        {
             return (null, true);
         }
         catch (ODataError ex)
@@ -437,6 +441,8 @@ public class PhotoSyncService : IPhotoSyncService
                 entraId, ex.ResponseStatusCode, ex.Message);
             return (null, false);
         }
+
+        return (null, true);
     }
 
     /// <summary>
@@ -460,21 +466,6 @@ public class PhotoSyncService : IPhotoSyncService
             {
                 requestConfiguration.Headers.Add("Content-Type", "image/jpeg");
             }, cancellationToken: ct);
-    }
-
-    /// <summary>
-    /// PATCHes the contact with an empty categories array to bump lastModifiedDateTime.
-    /// EAS delta sync only re-sends contacts whose modification time changed; the photo
-    /// PUT updates a sub-resource without touching the parent contact's timestamp.
-    /// </summary>
-    protected virtual async Task TouchContactAsync(
-        string mailboxEntraId, string folderId, string graphContactId, CancellationToken ct)
-    {
-        await _graphClientFactory!.Client
-            .Users[mailboxEntraId]
-            .ContactFolders[folderId]
-            .Contacts[graphContactId]
-            .PatchAsync(new Contact { Categories = [] }, cancellationToken: ct);
     }
 
     // ==============================
@@ -567,13 +558,6 @@ public class PhotoSyncService : IPhotoSyncService
                     {
                         await WriteContactPhotoAsync(
                             mailboxEntraId, folderId, state.GraphContactId!, photoBytes, ct);
-
-                        // Touch the contact to bump lastModifiedDateTime.
-                        // EAS delta sync only re-sends contacts whose modification time changed.
-                        // The photo PUT updates a sub-resource but does NOT update the parent
-                        // contact's timestamp, so EAS clients never re-fetch the photo.
-                        await TouchContactAsync(
-                            mailboxEntraId, folderId, state.GraphContactId!, ct);
                     }
 
                     // Update ContactSyncState photo hash
