@@ -428,7 +428,10 @@ public class PhotoSyncService : IPhotoSyncService
             .ContactFolders[folderId]
             .Contacts[graphContactId]
             .Photo.Content
-            .PutAsync(stream, cancellationToken: ct);
+            .PutAsync(stream, requestConfiguration =>
+            {
+                requestConfiguration.Headers.Add("Content-Type", "image/jpeg");
+            }, cancellationToken: ct);
     }
 
     // ==============================
