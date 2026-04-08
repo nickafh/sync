@@ -385,14 +385,14 @@ public class PhotoSyncService : IPhotoSyncService
     /// </summary>
     protected virtual async Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
     {
-        // Try 504x504 — high quality while staying well within Exchange Online EAS
-        // photo size limits (~100KB). 504x504 JPEG thumbnails are typically 20-50KB.
+        // Try 360x360 — high quality while staying well within Exchange Online EAS
+        // photo size limits (~100KB). 360x360 JPEG thumbnails are typically 20-50KB.
         // Full-size profile photos (200KB+) are too large and get dropped by EAS.
         try
         {
             var stream = await _graphClientFactory!.Client
                 .Users[entraId]
-                .Photos["504x504"]
+                .Photos["360x360"]
                 .Content
                 .GetAsync(cancellationToken: ct);
 
@@ -400,17 +400,17 @@ public class PhotoSyncService : IPhotoSyncService
             {
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms, ct);
-                _logger.LogDebug("Fetched 504x504 photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
+                _logger.LogDebug("Fetched 360x360 photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
                 return (ms.ToArray(), false);
             }
         }
         catch (ODataError ex) when (ex.ResponseStatusCode == 404)
         {
-            // 504x504 not available, try 240x240
+            // 360x360 not available, try 240x240
         }
         catch (ODataError)
         {
-            // Non-404 error on 504x504, try 240x240
+            // Non-404 error on 360x360, try 240x240
         }
 
         // Fall back to 240x240 thumbnail
