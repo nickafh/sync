@@ -21,7 +21,7 @@ public class ContactFolderManager : IContactFolderManager
     private readonly GraphClientFactory? _graphClientFactory;
     private readonly ILogger<ContactFolderManager> _logger;
 
-    // ConcurrentDictionary: key = mailboxEntraId, value = folderId.
+    // ConcurrentDictionary: key = "mailboxEntraId:folderName", value = folderId.
     // Thread-safe for concurrent mailbox processing (D-14: parallelism at mailbox level).
     private readonly ConcurrentDictionary<string, string> _folderCache = new();
 
@@ -38,13 +38,14 @@ public class ContactFolderManager : IContactFolderManager
         CancellationToken ct)
     {
         // Fast path: return cached folder ID without Graph call
-        if (_folderCache.TryGetValue(mailboxEntraId, out var cachedId))
+        var cacheKey = $"{mailboxEntraId}:{folderName}";
+        if (_folderCache.TryGetValue(cacheKey, out var cachedId))
             return (cachedId, false);
 
         // Slow path: hit Graph to find or create the folder
         var (folderId, wasCreated) = await FetchOrCreateFolderFromGraphAsync(mailboxEntraId, folderName, ct);
 
-        _folderCache.TryAdd(mailboxEntraId, folderId);
+        _folderCache.TryAdd(cacheKey, folderId);
 
         _logger.LogDebug(
             "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId} (created={Created})",
