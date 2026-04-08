@@ -19,6 +19,7 @@ public class SourceResolver : ISourceResolver
 {
     private readonly AFHSync.Worker.Graph.GraphClientFactory _graphClientFactory;
     private readonly IDbContextFactory<AFHSyncDbContext> _dbContextFactory;
+    private readonly IExchangeNotesResolver _notesResolver;
     private readonly ILogger<SourceResolver> _logger;
 
     private static readonly string[] ServiceAccountPrefixes =
@@ -27,10 +28,12 @@ public class SourceResolver : ISourceResolver
     public SourceResolver(
         AFHSync.Worker.Graph.GraphClientFactory graphClientFactory,
         IDbContextFactory<AFHSyncDbContext> dbContextFactory,
+        IExchangeNotesResolver notesResolver,
         ILogger<SourceResolver> logger)
     {
         _graphClientFactory = graphClientFactory;
         _dbContextFactory = dbContextFactory;
+        _notesResolver = notesResolver;
         _logger = logger;
     }
 
@@ -64,6 +67,20 @@ public class SourceResolver : ISourceResolver
         var sourceUsers = deduped
             .Select(MapGraphUserToSourceUser)
             .ToList();
+
+        // Fetch Notes from Exchange Online PowerShell (AD `info` attribute,
+        // not available via Graph API). Keyed by UPN for matching.
+        var notesLookup = await _notesResolver.FetchNotesAsync(ct);
+        if (notesLookup.Count > 0)
+        {
+            foreach (var su in sourceUsers)
+            {
+                if (su.Email != null && notesLookup.TryGetValue(su.Email, out var notes))
+                    su.Notes = notes;
+            }
+            _logger.LogInformation("Merged Notes for {Count}/{Total} source users",
+                sourceUsers.Count(u => u.Notes != null), sourceUsers.Count);
+        }
 
         var filtered = ApplySourceFiltersWithLogging(sourceUsers);
 
@@ -170,10 +187,6 @@ public class SourceResolver : ISourceResolver
             // Treat null accountEnabled as true — org users with mailboxes default to enabled
             IsEnabled = graphUser.AccountEnabled ?? true,
             MailboxType = mailboxType,
-            // extensionAttribute5 stores the Entra "Notes" field (AD `info` attribute),
-            // which is not available via Graph API. Populated by Exchange PowerShell:
-            // Get-User | % { Set-User $_.Identity -CustomAttribute5 $_.Notes }
-            Notes = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute5,
             ExtensionAttr1 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute1,
             ExtensionAttr2 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute2,
             ExtensionAttr3 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute3,
