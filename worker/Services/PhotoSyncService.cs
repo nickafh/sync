@@ -380,6 +380,35 @@ public class PhotoSyncService : IPhotoSyncService
     /// </summary>
     protected virtual async Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
     {
+        // Try 240x240 thumbnail first — full-size profile photos (50-200KB+) are too
+        // large for Exchange ActiveSync to include in the contact sync payload. The
+        // 240x240 JPEG thumbnail is typically 5-20KB, well within EAS limits.
+        try
+        {
+            var stream = await _graphClientFactory!.Client
+                .Users[entraId]
+                .Photos["240x240"]
+                .Content
+                .GetAsync(cancellationToken: ct);
+
+            if (stream is not null)
+            {
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms, ct);
+                _logger.LogDebug("Fetched 240x240 photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
+                return (ms.ToArray(), false);
+            }
+        }
+        catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+        {
+            // 240x240 size not available, fall through to full-size fetch
+        }
+        catch (ODataError)
+        {
+            // Non-404 error on thumbnail, fall through to full-size fetch
+        }
+
+        // Fall back to full-size photo
         try
         {
             var stream = await _graphClientFactory!.Client
@@ -395,17 +424,15 @@ public class PhotoSyncService : IPhotoSyncService
 
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms, ct);
-            _logger.LogDebug("Fetched photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
+            _logger.LogDebug("Fetched full-size photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
             return (ms.ToArray(), false);
         }
         catch (ODataError ex) when (ex.ResponseStatusCode == 404)
         {
-            // User has no photo -- expected, not an error
             return (null, true);
         }
         catch (ODataError ex)
         {
-            // Non-404 OData error (e.g., 403 Forbidden = missing permission)
             _logger.LogWarning("Graph photo error for user {EntraId}: {StatusCode} {Message}",
                 entraId, ex.ResponseStatusCode, ex.Message);
             return (null, false);
