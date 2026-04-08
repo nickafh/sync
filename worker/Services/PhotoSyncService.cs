@@ -99,11 +99,14 @@ public class PhotoSyncService : IPhotoSyncService
         // Step b: Fetch source photos with fetch-once pattern (D-06)
         var sourcePhotos = new Dictionary<int, (byte[]? bytes, string? hash)>();
 
+        // Diagnostic counters to identify photo fetch bottleneck
+        int fetchSuccess = 0, fetchNotFound = 0, fetchError = 0, fetchOversized = 0;
+
         foreach (var sourceUser in sourceUsers)
         {
             try
             {
-                var photoBytes = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
+                var (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
 
                 if (photoBytes != null)
                 {
@@ -114,11 +117,13 @@ public class PhotoSyncService : IPhotoSyncService
                             "Photo for user {EntraId} exceeds 4MB limit ({Size} bytes), skipping",
                             sourceUser.EntraId, photoBytes.Length);
                         sourcePhotos[sourceUser.Id] = (null, null);
+                        fetchOversized++;
                         continue;
                     }
 
                     var hash = ComputePhotoHash(photoBytes);
                     sourcePhotos[sourceUser.Id] = (photoBytes, hash);
+                    fetchSuccess++;
 
                     // Update source user photo hash if changed
                     if (sourceUser.PhotoHash != hash)
@@ -130,6 +135,11 @@ public class PhotoSyncService : IPhotoSyncService
                 else
                 {
                     sourcePhotos[sourceUser.Id] = (null, null);
+
+                    if (wasNotFound)
+                        fetchNotFound++;
+                    else
+                        fetchError++;
 
                     // Source user removed their photo
                     if (sourceUser.PhotoHash != null)
@@ -144,6 +154,7 @@ public class PhotoSyncService : IPhotoSyncService
                 _logger.LogError(ex,
                     "Failed to fetch photo for source user {EntraId}", sourceUser.EntraId);
                 sourcePhotos[sourceUser.Id] = (null, null);
+                fetchError++;
             }
         }
 
@@ -151,6 +162,11 @@ public class PhotoSyncService : IPhotoSyncService
         _logger.LogInformation(
             "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Found} with photos, {Missing} without",
             tunnel.Id, sourcePhotos.Count, photosFound, sourcePhotos.Count - photosFound);
+
+        // Diagnostic breakdown: identifies WHY photos are missing
+        _logger.LogWarning(
+            "Photo fetch diagnostics for tunnel {TunnelId}: Success={Success}, NotFound404={NotFound}, Error={Error}, Oversized={Oversized}, SourceUsersInput={InputCount}",
+            tunnel.Id, fetchSuccess, fetchNotFound, fetchError, fetchOversized, sourceUsers.Count);
 
         // Step c: Load ContactSyncState records for this tunnel where GraphContactId is not null
         // (contact must exist before photo write per D-01)
@@ -167,6 +183,15 @@ public class PhotoSyncService : IPhotoSyncService
                 tunnel.Id);
             return (0, 0);
         }
+
+        // Diagnostic: log ContactSyncState counts and hash state
+        var nullPhotoHashCount = contactStates.Count(s => s.PhotoHash == null);
+        var distinctMailboxes = contactStates.Select(s => s.TargetMailboxId).Distinct().Count();
+        var distinctSourceUsers = contactStates.Select(s => s.SourceUserId).Distinct().Count();
+        _logger.LogWarning(
+            "Photo sync state diagnostics for tunnel {TunnelId}: ContactSyncStates={Total}, NullPhotoHash={NullHash}, NonNullPhotoHash={NonNullHash}, DistinctMailboxes={Mailboxes}, DistinctSourceUsers={SourceUsers}",
+            tunnel.Id, contactStates.Count, nullPhotoHashCount, contactStates.Count - nullPhotoHashCount,
+            distinctMailboxes, distinctSourceUsers);
 
         // Step d: Group by target mailbox for semaphore-bounded parallel processing (D-04)
         var byMailbox = contactStates
@@ -347,10 +372,12 @@ public class PhotoSyncService : IPhotoSyncService
 
     /// <summary>
     /// Fetches a user's profile photo bytes from Microsoft Graph.
-    /// Returns null if the user has no photo (404 is expected, not an error).
+    /// Returns (bytes, wasNotFound) where wasNotFound distinguishes 404 (user has no photo)
+    /// from other errors. This diagnostic information identifies whether photo sync bottlenecks
+    /// are caused by missing photos vs. API errors.
     /// Protected virtual for test subclassing (following ContactFolderManager pattern).
     /// </summary>
-    protected virtual async Task<byte[]?> FetchUserPhotoAsync(string entraId, CancellationToken ct)
+    protected virtual async Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
     {
         try
         {
@@ -362,25 +389,25 @@ public class PhotoSyncService : IPhotoSyncService
             if (stream is null)
             {
                 _logger.LogDebug("Photo stream null for user {EntraId}", entraId);
-                return null;
+                return (null, true);
             }
 
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms, ct);
             _logger.LogDebug("Fetched photo for user {EntraId}: {Size} bytes", entraId, ms.Length);
-            return ms.ToArray();
+            return (ms.ToArray(), false);
         }
         catch (ODataError ex) when (ex.ResponseStatusCode == 404)
         {
             // User has no photo -- expected, not an error
-            return null;
+            return (null, true);
         }
         catch (ODataError ex)
         {
             // Non-404 OData error (e.g., 403 Forbidden = missing permission)
             _logger.LogWarning("Graph photo error for user {EntraId}: {StatusCode} {Message}",
                 entraId, ex.ResponseStatusCode, ex.Message);
-            return null;
+            return (null, false);
         }
     }
 
@@ -429,6 +456,9 @@ public class PhotoSyncService : IPhotoSyncService
     {
         int updated = 0, failed = 0;
 
+        // Diagnostic counters for this mailbox
+        int skipNoSourcePhoto = 0, skipNoPhotoBytes = 0, skipHashMatch = 0, skipRemoval = 0, attempted = 0;
+
         // Step e: Batched processing for backfill (D-12)
         for (int i = 0; i < states.Count; i += BatchSize)
         {
@@ -437,7 +467,10 @@ public class PhotoSyncService : IPhotoSyncService
             foreach (var state in batch)
             {
                 if (!sourcePhotos.TryGetValue(state.SourceUserId, out var photoData))
+                {
+                    skipNoSourcePhoto++;
                     continue;
+                }
 
                 var (photoBytes, sourceHash) = photoData;
 
@@ -461,16 +494,25 @@ public class PhotoSyncService : IPhotoSyncService
                             "Photo removal skipped for contact {GraphContactId} -- no Graph DELETE endpoint",
                             state.GraphContactId);
                     }
+                    skipRemoval++;
                     continue;
                 }
 
                 // Skip if no photo to write
                 if (photoBytes == null)
+                {
+                    skipNoPhotoBytes++;
                     continue;
+                }
 
                 // Skip if hash matches (no change)
                 if (sourceHash == state.PhotoHash)
+                {
+                    skipHashMatch++;
                     continue;
+                }
+
+                attempted++;
 
                 // Write photo to target contact
                 try
@@ -522,6 +564,11 @@ public class PhotoSyncService : IPhotoSyncService
                 await Task.Delay(BatchPauseMs, ct);
             }
         }
+
+        // Diagnostic summary for this mailbox (log first 5 mailboxes at Warning, rest at Debug)
+        _logger.LogDebug(
+            "Photo mailbox diagnostics: Mailbox={MailboxId}, States={Total}, NoSourcePhoto={NoSource}, NoPhotoBytes={NoBytes}, HashMatch={HashMatch}, Removal={Removal}, Attempted={Attempted}, Updated={Updated}, Failed={Failed}",
+            mailboxEntraId, states.Count, skipNoSourcePhoto, skipNoPhotoBytes, skipHashMatch, skipRemoval, attempted, updated, failed);
 
         return (updated, failed);
     }

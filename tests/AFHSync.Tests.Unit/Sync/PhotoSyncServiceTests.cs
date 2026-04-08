@@ -526,10 +526,12 @@ public class PhotoSyncServiceTests
 
         public void SetPhoto(string entraId, byte[] photoBytes) => _photos[entraId] = photoBytes;
 
-        protected override Task<byte[]?> FetchUserPhotoAsync(string entraId, CancellationToken ct)
+        protected override Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
         {
             PhotoFetchCount++;
-            return Task.FromResult(_photos.TryGetValue(entraId, out var bytes) ? bytes : null);
+            if (_photos.TryGetValue(entraId, out var bytes))
+                return Task.FromResult<(byte[]? bytes, bool wasNotFound)>((bytes, false));
+            return Task.FromResult<(byte[]? bytes, bool wasNotFound)>((null, true));
         }
 
         protected override Task WriteContactPhotoAsync(
