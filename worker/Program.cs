@@ -67,9 +67,6 @@ try
         return new GraphClientFactory(config, new DelegatingHandler[] { resilienceHandler });
     });
 
-    // Exchange PowerShell — singleton (reuses runspace across sync runs)
-    services.AddSingleton<IExchangeNotesResolver, ExchangeNotesResolver>();
-
     // Sync pipeline services — scoped per sync run invocation
     services.AddScoped<ISourceResolver, SourceResolver>();
     services.AddScoped<IContactPayloadBuilder, ContactPayloadBuilder>();
