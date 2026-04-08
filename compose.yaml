@@ -60,6 +60,11 @@ services:
       - Graph__TenantId=${GRAPH_TENANT_ID}
       - Graph__ClientId=${GRAPH_CLIENT_ID}
       - Graph__ClientSecret=${GRAPH_CLIENT_SECRET}
+      - Exchange__CertificatePath=/app/certs/exchange-cert.pfx
+      - Exchange__AppId=${GRAPH_CLIENT_ID}
+      - Exchange__Organization=appriver3651000721.onmicrosoft.com
+    volumes:
+      - ./exchange-cert.pfx:/app/certs/exchange-cert.pfx:ro
     depends_on:
       postgres:
         condition: service_healthy
