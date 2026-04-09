@@ -4,6 +4,7 @@ using AFHSync.Shared.Data;
 using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AFHSync.Api.Migrations
 {
     [DbContext(typeof(AFHSyncDbContext))]
-    partial class AFHSyncDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409235501_AddTunnelContactExclusions")]
+    partial class AddTunnelContactExclusions
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

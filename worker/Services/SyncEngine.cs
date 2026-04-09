@@ -284,6 +284,17 @@ public sealed class SyncEngine(
             return (0, 0, 0, 0, 0);
         }
 
+        // Step 5b: Filter out excluded contacts.
+        var exclusions = await LoadContactExclusionsAsync(tunnel.Id, ct);
+        if (exclusions.Count > 0)
+        {
+            var before = sourceUsers.Count;
+            sourceUsers = sourceUsers.Where(u => !exclusions.Contains(u.EntraId)).ToList();
+            logger.LogInformation(
+                "Tunnel {TunnelName}: filtered {ExcludedCount} excluded contacts ({Before} -> {After})",
+                tunnel.Name, before - sourceUsers.Count, before, sourceUsers.Count);
+        }
+
         // Step 5c: Load field profile settings.
         var fieldSettings = tunnel.FieldProfile?.FieldProfileFields?.ToList()
             ?? await LoadDefaultFieldProfileAsync(ct);
@@ -854,6 +865,16 @@ public sealed class SyncEngine(
         }
 
         return memberIds;
+    }
+
+    private async Task<HashSet<string>> LoadContactExclusionsAsync(int tunnelId, CancellationToken ct)
+    {
+        await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+        var entraIds = await db.TunnelContactExclusions
+            .Where(e => e.TunnelId == tunnelId)
+            .Select(e => e.EntraId)
+            .ToListAsync(ct);
+        return entraIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private async Task<int> ReadParallelismSettingAsync(CancellationToken ct)

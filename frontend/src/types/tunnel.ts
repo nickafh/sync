@@ -139,3 +139,20 @@ export interface UserSearchResult {
   email: string;
   jobTitle: string | null;
 }
+
+export interface SourceContactDto {
+  id: number;
+  entraId: string;
+  displayName: string | null;
+  email: string | null;
+  companyName: string | null;
+  jobTitle: string | null;
+  department: string | null;
+  isExcluded: boolean;
+}
+
+export interface ContactExclusionInput {
+  entraId: string;
+  displayName: string | null;
+  email: string | null;
+}

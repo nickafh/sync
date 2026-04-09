@@ -20,7 +20,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ImpactPreviewDialog } from '@/components/ImpactPreviewDialog';
 import { DDGRefreshButton } from '@/components/DDGRefreshButton';
 import { DDGPicker } from '@/components/DDGPicker';
-import { OrgContactManager } from '@/components/OrgContactManager';
+import { ContactExclusionManager } from '@/components/ContactExclusionManager';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -804,19 +804,17 @@ export default function TunnelDetailPage() {
         </Card>
       </div>
 
-      {/* Org Contact Filters (only for org_contacts tunnels) */}
-      {tunnel.sources.some((s) => s.sourceType === 'org_contacts') && (
-        <div className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Contact Filters</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <OrgContactManager tunnelId={tunnelId} />
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      {/* Contact Exclusions — available for all tunnel types */}
+      <div className="mt-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Contact Filters</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ContactExclusionManager tunnelId={tunnelId} />
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Maintenance */}
       <div className="mt-6">

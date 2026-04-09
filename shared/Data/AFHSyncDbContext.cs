@@ -20,6 +20,7 @@ public class AFHSyncDbContext : DbContext
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
     public DbSet<SyncRunItem> SyncRunItems => Set<SyncRunItem>();
     public DbSet<OrgContactFilter> OrgContactFilters => Set<OrgContactFilter>();
+    public DbSet<TunnelContactExclusion> TunnelContactExclusions => Set<TunnelContactExclusion>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

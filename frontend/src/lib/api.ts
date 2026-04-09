@@ -5,7 +5,7 @@ import type { PhoneListDto, PhoneListDetailDto, ContactDto, CreatePhoneListReque
 import type { FieldProfileDto, FieldProfileDetailDto, UpdateFieldProfileRequest } from '@/types/field-profile';
 import type { SettingsDto, SettingsUpdateRequest } from '@/types/settings';
 import type { DdgDto, DdgMemberDto } from '@/types/ddg';
-import type { SecurityGroupDto, OrgContactDto, OrgContactFilterInput, UserSearchResult } from '@/types/tunnel';
+import type { SecurityGroupDto, OrgContactDto, OrgContactFilterInput, UserSearchResult, SourceContactDto, ContactExclusionInput } from '@/types/tunnel';
 
 const API_BASE = '/api';
 
@@ -130,6 +130,18 @@ export const api = {
 
   users: {
     search: (q: string) => fetchApi<UserSearchResult[]>(`/graph/users/search?q=${encodeURIComponent(q)}`),
+  },
+
+  contactExclusions: {
+    sourceContacts: (tunnelId: number) =>
+      fetchApi<SourceContactDto[]>(`/tunnels/${tunnelId}/contact-exclusions/source-contacts`),
+    getExclusions: (tunnelId: number) =>
+      fetchApi<ContactExclusionInput[]>(`/tunnels/${tunnelId}/contact-exclusions`),
+    updateExclusions: (tunnelId: number, exclusions: ContactExclusionInput[]) =>
+      fetchApi<{ message: string }>(`/tunnels/${tunnelId}/contact-exclusions`, {
+        method: 'PUT',
+        body: JSON.stringify({ exclusions }),
+      }),
   },
 
   orgContacts: {

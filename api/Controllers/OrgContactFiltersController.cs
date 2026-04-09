@@ -56,8 +56,17 @@ public class OrgContactFiltersController : ControllerBase
         if (!exists)
             return NotFound(new { message = $"Tunnel {tunnelId} not found." });
 
-        if (request.Filters is null || request.Filters.Length == 0)
+        if (request.Filters is null)
             return BadRequest(new { message = "Filters array is required." });
+
+        // Allow empty array — clears all filters for this tunnel
+        if (request.Filters.Length == 0)
+        {
+            var cleared = await _db.OrgContactFilters
+                .Where(f => f.TunnelId == tunnelId)
+                .ExecuteDeleteAsync();
+            return Ok(new { message = $"Cleared {cleared} filters." });
+        }
 
         var now = DateTime.UtcNow;
 
