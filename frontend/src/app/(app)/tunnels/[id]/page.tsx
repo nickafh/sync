@@ -89,11 +89,6 @@ export default function TunnelDetailPage() {
   const deleteTunnel = useDeleteTunnel();
   const previewImpact = usePreviewTunnelImpact();
 
-  const { data: phoneLists } = useQuery({
-    queryKey: ['phone-lists'],
-    queryFn: () => api.phoneLists.list(),
-    staleTime: 5 * 60 * 1000,
-  });
 
   const { data: fieldProfiles } = useQuery({
     queryKey: ['field-profiles'],
@@ -345,14 +340,6 @@ export default function TunnelDetailPage() {
     });
   };
 
-  const toggleTargetList = (listId: number) => {
-    setEditForm((prev) => ({
-      ...prev,
-      targetListIds: prev.targetListIds.includes(listId)
-        ? prev.targetListIds.filter((id) => id !== listId)
-        : [...prev.targetListIds, listId],
-    }));
-  };
 
   if (!isValidId) {
     return <div className="p-8 text-text-muted">Invalid tunnel ID</div>;
@@ -657,65 +644,6 @@ export default function TunnelDetailPage() {
                 {tunnel.sources.length === 0 && (
                   <p className="text-sm text-text-muted">No sources configured.</p>
                 )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Targets Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Targets</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isEditing ? (
-              <div className="space-y-2">
-                <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                  Targets
-                </label>
-                <div className="space-y-2 mt-1">
-                  {phoneLists?.map((list) => (
-                    <label
-                      key={list.id}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={editForm.targetListIds.includes(list.id)}
-                        onChange={() => toggleTargetList(list.id)}
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-sm">{list.name}</span>
-                    </label>
-                  ))}
-                  {!phoneLists?.length && (
-                    <p className="text-sm text-text-muted">
-                      No targets available.
-                    </p>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                  Targets
-                </label>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {tunnel.targetLists.length > 0 ? (
-                    tunnel.targetLists.map((list) => (
-                      <span
-                        key={list.id}
-                        className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700"
-                      >
-                        {list.name}
-                      </span>
-                    ))
-                  ) : (
-                    <p className="text-sm text-text-muted">
-                      No target lists assigned.
-                    </p>
-                  )}
-                </div>
               </div>
             )}
           </CardContent>
