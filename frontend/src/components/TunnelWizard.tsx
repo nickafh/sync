@@ -290,19 +290,6 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 onSelectAll={handleSelectAll}
                 onDeselectAll={handleDeselectAll}
                 error={errors.targets || null}
-                targetGroupId={formData.targetGroupId}
-                targetGroupName={formData.targetGroupName}
-                onTargetScopeChange={(groupId, groupName) =>
-                  setFormData((prev) => ({
-                    ...prev,
-                    targetGroupId: groupId,
-                    targetGroupName: groupName,
-                  }))
-                }
-                targetUserEmails={formData.targetUserEmails}
-                onTargetUserEmailsChange={(emails) =>
-                  setFormData((prev) => ({ ...prev, targetUserEmails: emails }))
-                }
               />
             )}
             {step === 3 && (
@@ -313,8 +300,6 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 mailboxEmail={formData.sourceMailboxEmail}
                 targetListIds={formData.targetListIds}
                 onEdit={goToStep}
-                targetGroupName={formData.targetGroupName}
-                targetUserEmails={formData.targetUserEmails}
               />
             )}
           </div>

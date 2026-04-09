@@ -12,8 +12,6 @@ interface StepReviewProps {
   mailboxEmail: string;
   targetListIds: number[];
   onEdit: (step: number) => void;
-  targetGroupName?: string | null;
-  targetUserEmails?: string[];
 }
 
 export function StepReview({
@@ -23,8 +21,6 @@ export function StepReview({
   mailboxEmail,
   targetListIds,
   onEdit,
-  targetGroupName,
-  targetUserEmails = [],
 }: StepReviewProps) {
   const { data: phoneLists } = usePhoneLists();
 
@@ -95,10 +91,10 @@ export function StepReview({
 
           <Separator />
 
-          {/* Targets */}
+          {/* Target */}
           <div className="flex items-start justify-between px-4 py-3">
             <div>
-              <p className="text-xs text-text-muted">Targets</p>
+              <p className="text-xs text-text-muted">Target</p>
               <div className="flex flex-wrap gap-2 mt-1.5">
                 {selectedListNames.map((listName) => (
                   <span
@@ -109,45 +105,6 @@ export function StepReview({
                   </span>
                 ))}
               </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => onEdit(2)}
-              className="text-sm text-gold hover:underline cursor-pointer"
-            >
-              Edit
-            </button>
-          </div>
-
-          <Separator />
-
-          {/* Target Users */}
-          <div className="flex items-start justify-between px-4 py-3">
-            <div>
-              <p className="text-xs text-text-muted">Target Users</p>
-              {targetUserEmails.length > 0 ? (
-                <>
-                  <p className="text-sm font-medium mt-0.5">
-                    {targetUserEmails.length} specific user{targetUserEmails.length !== 1 ? 's' : ''}
-                  </p>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {targetUserEmails.map((email) => (
-                      <span key={email} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">
-                        {email}
-                      </span>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-medium mt-0.5">
-                    {targetGroupName ? targetGroupName : 'All users'}
-                  </p>
-                  {targetGroupName && (
-                    <p className="text-xs text-text-muted">Security group members only</p>
-                  )}
-                </>
-              )}
             </div>
             <button
               type="button"
