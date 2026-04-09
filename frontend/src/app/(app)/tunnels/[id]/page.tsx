@@ -141,7 +141,7 @@ export default function TunnelDetailPage() {
     : [];
 
   const editScopeMode: 'all' | 'group' | 'specific' =
-    editTargetUserEmails.length > 0 ? 'specific' :
+    editForm.targetUserEmails != null ? 'specific' :
     editForm.targetGroupId ? 'group' : 'all';
 
   // Debounced user search for specific-users mode
