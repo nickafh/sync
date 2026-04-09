@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -41,11 +41,8 @@ import type {
   TunnelDetailDto,
   ImpactPreviewResponse,
   SourceInput,
-  SecurityGroupDto,
-  UserSearchResult,
 } from '@/types/tunnel';
 import type { StalePolicy } from '@/types/common';
-import { X } from 'lucide-react';
 
 const stalePolicyOptions = [
   { value: 'auto_remove', label: 'Auto Remove' },
@@ -96,14 +93,14 @@ export default function TunnelDetailPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: phoneLists } = useQuery({
+    queryKey: ['phone-lists'],
+    queryFn: () => api.phoneLists.list(),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const [isEditing, setIsEditing] = useState(false);
 
-  const { data: securityGroups, isLoading: groupsLoading } = useQuery({
-    queryKey: ['security-groups'],
-    queryFn: () => api.securityGroups.list(),
-    staleTime: 10 * 60 * 1000,
-    enabled: isEditing,
-  });
   const [ddgPickerOpen, setDdgPickerOpen] = useState(false);
   const [addSourceType, setAddSourceType] = useState<'ddg' | 'mailbox_contacts' | 'org_contacts'>('ddg');
   const [mailboxEmailInput, setMailboxEmailInput] = useState('');
@@ -129,43 +126,6 @@ export default function TunnelDetailPage() {
     targetGroupName: null,
     targetUserEmails: null,
   });
-
-  // User search state for "Specific users" mode
-  const [userSearchQuery, setUserSearchQuery] = useState('');
-  const [userSearchResults, setUserSearchResults] = useState<UserSearchResult[]>([]);
-  const [userSearching, setUserSearching] = useState(false);
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const editTargetUserEmails: string[] = editForm.targetUserEmails
-    ? (() => { try { return JSON.parse(editForm.targetUserEmails); } catch { return []; } })()
-    : [];
-
-  const editScopeMode: 'all' | 'group' | 'specific' =
-    editForm.targetUserEmails != null ? 'specific' :
-    editForm.targetGroupId ? 'group' : 'all';
-
-  // Debounced user search for specific-users mode
-  useEffect(() => {
-    if (userSearchQuery.length < 2) {
-      setUserSearchResults([]);
-      return;
-    }
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-    searchTimeoutRef.current = setTimeout(async () => {
-      setUserSearching(true);
-      try {
-        const results = await api.users.search(userSearchQuery);
-        setUserSearchResults(
-          results.filter((u) => !editTargetUserEmails.includes(u.email))
-        );
-      } catch {
-        setUserSearchResults([]);
-      } finally {
-        setUserSearching(false);
-      }
-    }, 300);
-    return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
-  }, [userSearchQuery, editTargetUserEmails]);
 
   useEffect(() => {
     if (tunnel && !isEditing) {
@@ -649,217 +609,65 @@ export default function TunnelDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Target Users Card */}
+        {/* Target Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Target Users</CardTitle>
+            <CardTitle>Target</CardTitle>
           </CardHeader>
           <CardContent>
             {isEditing ? (
-              <div className="space-y-4">
+              <div className="space-y-2">
                 <p className="text-sm text-text-muted">
-                  Choose which users receive contacts from this tunnel.
+                  Select which target receives contacts from this tunnel. Manage targets on the{' '}
+                  <a href="/lists" className="text-gold hover:underline">Targets page</a>.
                 </p>
-                <div className="space-y-3">
-                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-                    <input
-                      type="radio"
-                      name="targetScope"
-                      checked={editScopeMode === 'all'}
-                      onChange={() =>
-                        setEditForm((prev) => ({
-                          ...prev,
-                          targetGroupId: null,
-                          targetGroupName: null,
-                          targetUserEmails: null,
-                        }))
-                      }
-                      className="mt-0.5"
-                    />
-                    <div>
-                      <p className="font-medium">All users</p>
-                      <p className="text-sm text-text-muted">
-                        Contacts sync to every active mailbox in the tenant.
-                      </p>
-                    </div>
-                  </label>
-                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-                    <input
-                      type="radio"
-                      name="targetScope"
-                      checked={editScopeMode === 'group'}
-                      onChange={() => {
-                        const first = securityGroups?.[0];
-                        if (first) {
+                <div className="space-y-2 mt-1">
+                  {phoneLists?.map((list) => (
+                    <label
+                      key={list.id}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={editForm.targetListIds.includes(list.id)}
+                        onChange={() =>
                           setEditForm((prev) => ({
                             ...prev,
-                            targetGroupId: first.id,
-                            targetGroupName: first.displayName,
-                            targetUserEmails: null,
-                          }));
+                            targetListIds: prev.targetListIds.includes(list.id)
+                              ? prev.targetListIds.filter((id) => id !== list.id)
+                              : [...prev.targetListIds, list.id],
+                          }))
                         }
-                      }}
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1">
-                      <p className="font-medium">Members of a security group</p>
-                      <p className="text-sm text-text-muted">
-                        Contacts only sync to users who are members of the selected Entra security group.
-                      </p>
-                    </div>
-                  </label>
-                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-                    <input
-                      type="radio"
-                      name="targetScope"
-                      checked={editScopeMode === 'specific'}
-                      onChange={() =>
-                        setEditForm((prev) => ({
-                          ...prev,
-                          targetGroupId: null,
-                          targetGroupName: null,
-                          targetUserEmails: prev.targetUserEmails || '[]',
-                        }))
-                      }
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1">
-                      <p className="font-medium">Specific users</p>
-                      <p className="text-sm text-text-muted">
-                        Contacts sync only to the users you specify. Useful for assistant or executive patterns.
-                      </p>
-                    </div>
-                  </label>
-                </div>
-                {editScopeMode === 'group' && (
-                  <div className="ml-7">
-                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                      Security Group
-                    </label>
-                    <Select
-                      value={editForm.targetGroupId ?? undefined}
-                      onValueChange={(val: string | null) => {
-                        const group = securityGroups?.find((g) => g.id === val);
-                        setEditForm((prev) => ({
-                          ...prev,
-                          targetGroupId: val,
-                          targetGroupName: group?.displayName ?? null,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger className="w-full mt-1">
-                        <SelectValue placeholder={groupsLoading ? 'Loading groups...' : 'Select a security group'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {securityGroups?.map((group) => (
-                          <SelectItem key={group.id} value={group.id}>
-                            {group.displayName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {securityGroups?.find((g) => g.id === editForm.targetGroupId)?.description && (
-                      <p className="text-xs text-text-muted mt-1">
-                        {securityGroups.find((g) => g.id === editForm.targetGroupId)?.description}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {editScopeMode === 'specific' && (
-                  <div className="ml-7 space-y-3">
-                    <div className="relative">
-                      <Input
-                        placeholder="Search by name or email..."
-                        value={userSearchQuery}
-                        onChange={(e) => setUserSearchQuery(e.target.value)}
+                        className="rounded border-gray-300"
                       />
-                      {userSearching && (
-                        <p className="text-xs text-text-muted mt-1">Searching...</p>
-                      )}
-                      {userSearchResults.length > 0 && (
-                        <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                          {userSearchResults.map((user) => (
-                            <button
-                              key={user.id}
-                              type="button"
-                              className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
-                              onClick={() => {
-                                const updated = [...editTargetUserEmails, user.email];
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  targetUserEmails: JSON.stringify(updated),
-                                }));
-                                setUserSearchQuery('');
-                                setUserSearchResults([]);
-                              }}
-                            >
-                              <span className="font-medium">{user.displayName}</span>
-                              <span className="text-text-muted ml-2">{user.email}</span>
-                              {user.jobTitle && (
-                                <span className="text-text-muted ml-2 text-xs">({user.jobTitle})</span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {editTargetUserEmails.length > 0 && (
-                      <div className="space-y-1">
-                        {editTargetUserEmails.map((email) => (
-                          <div
-                            key={email}
-                            className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
-                          >
-                            <span className="text-sm">{email}</span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = editTargetUserEmails.filter((e) => e !== email);
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  targetUserEmails: updated.length > 0 ? JSON.stringify(updated) : null,
-                                }));
-                              }}
-                              className="text-text-muted hover:text-destructive"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {editTargetUserEmails.length === 0 && !userSearchQuery && (
-                      <p className="text-xs text-text-muted">
-                        Search and add at least one user above.
-                      </p>
-                    )}
-                  </div>
-                )}
+                      <span className="text-sm">{list.name}</span>
+                    </label>
+                  ))}
+                  {!phoneLists?.length && (
+                    <p className="text-sm text-text-muted">
+                      No targets available. <a href="/lists" className="text-gold hover:underline">Create one</a>.
+                    </p>
+                  )}
+                </div>
               </div>
             ) : (
               <div>
-                <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                  Scope
-                </label>
-                {tunnel.targetUserEmails ? (
-                  <div className="mt-1">
-                    <p className="text-sm font-medium">Specific users</p>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {(() => { try { return JSON.parse(tunnel.targetUserEmails) as string[]; } catch { return []; } })().map((email: string) => (
-                        <span key={email} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">
-                          {email}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : tunnel.targetGroupId ? (
-                  <div className="mt-1">
-                    <p className="text-sm font-medium">{tunnel.targetGroupName}</p>
-                    <p className="text-xs text-text-muted">Security group — only members receive contacts</p>
-                  </div>
-                ) : (
-                  <p className="mt-1 text-sm">All users</p>
-                )}
+                <div className="flex flex-wrap gap-2">
+                  {tunnel.targetLists.length > 0 ? (
+                    tunnel.targetLists.map((list) => (
+                      <span
+                        key={list.id}
+                        className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm text-gray-700"
+                      >
+                        {list.name}
+                      </span>
+                    ))
+                  ) : (
+                    <p className="text-sm text-text-muted">
+                      No targets assigned.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </CardContent>

@@ -27,7 +27,7 @@ export function Sidebar() {
   const { username, logout } = useAuth();
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-navy flex flex-col">
+    <aside className="fixed left-0 top-0 h-screen w-64 bg-navy flex flex-col z-50">
       <div className="h-16 flex items-center px-4 border-b border-white/10">
         <span className="font-heading text-xl font-bold text-white">
           AFH Sync
