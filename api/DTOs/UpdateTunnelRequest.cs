@@ -9,5 +9,8 @@ public record UpdateTunnelRequest(
     int? FieldProfileId,
     string StalePolicy,
     int StaleDays = 14,
-    bool PhotoSyncEnabled = true
+    bool PhotoSyncEnabled = true,
+    string? TargetGroupId = null,
+    string? TargetGroupName = null,
+    string? TargetUserEmails = null
 );

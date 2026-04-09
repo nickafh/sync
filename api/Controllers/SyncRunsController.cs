@@ -177,6 +177,18 @@ public class SyncRunsController : ControllerBase
     }
 
     /// <summary>
+    /// POST /api/sync/reset-hashes — Reset all data and photo hashes to force full re-sync.
+    /// </summary>
+    [HttpPost("/api/sync/reset-hashes")]
+    public async Task<IActionResult> ResetAllHashes([FromServices] AFHSyncDbContext db)
+    {
+        var count = await db.Database.ExecuteSqlRawAsync(
+            "UPDATE contact_sync_state SET data_hash = NULL, previous_data_hash = NULL, photo_hash = NULL WHERE data_hash IS NOT NULL OR photo_hash IS NOT NULL");
+
+        return Ok(new { count, message = $"Reset {count} contact states." });
+    }
+
+    /// <summary>
     /// GET /api/sync-runs/{id}/items?page=1&amp;pageSize=50&amp;action= — Per-item log.
     /// </summary>
     [HttpGet("{id:int}/items")]

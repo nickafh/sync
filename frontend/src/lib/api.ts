@@ -5,6 +5,7 @@ import type { PhoneListDto, PhoneListDetailDto, ContactDto, CreatePhoneListReque
 import type { FieldProfileDto, FieldProfileDetailDto, UpdateFieldProfileRequest } from '@/types/field-profile';
 import type { SettingsDto, SettingsUpdateRequest } from '@/types/settings';
 import type { DdgDto, DdgMemberDto } from '@/types/ddg';
+import type { SecurityGroupDto, OrgContactDto, OrgContactFilterInput, UserSearchResult } from '@/types/tunnel';
 
 const API_BASE = '/api';
 
@@ -69,6 +70,8 @@ export const api = {
       fetchApi<ImpactPreviewResponse>(`/tunnels/${id}/preview`, { method: 'POST', body: JSON.stringify(data) }),
     refreshDdg: (id: number, sourceId: number) =>
       fetchApi<RefreshDdgResponse>(`/tunnels/${id}/sources/${sourceId}/refresh-ddg`, { method: 'POST' }),
+    resetHashes: (id: number) =>
+      fetchApi<{ count: number; message: string }>(`/tunnels/${id}/reset-hashes`, { method: 'POST' }),
   },
 
   syncRuns: {
@@ -103,6 +106,11 @@ export const api = {
       fetchApi<{ message: string }>(`/field-profiles/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   },
 
+  sync: {
+    resetAllHashes: () =>
+      fetchApi<{ count: number; message: string }>('/sync/reset-hashes', { method: 'POST' }),
+  },
+
   settings: {
     list: () => fetchApi<SettingsDto[]>('/settings'),
     update: (data: SettingsUpdateRequest) =>
@@ -114,5 +122,29 @@ export const api = {
     get: (id: string) => fetchApi<DdgDto>(`/graph/ddgs/${id}`),
     getMembers: (id: string, page: number, pageSize: number) =>
       fetchApi<DdgMemberDto[]>(`/graph/ddgs/${id}/members?page=${page}&pageSize=${pageSize}`),
+  },
+
+  securityGroups: {
+    list: () => fetchApi<SecurityGroupDto[]>('/graph/security-groups'),
+  },
+
+  users: {
+    search: (q: string) => fetchApi<UserSearchResult[]>(`/graph/users/search?q=${encodeURIComponent(q)}`),
+  },
+
+  orgContacts: {
+    list: () => fetchApi<OrgContactDto[]>('/graph/org-contacts'),
+    getFilters: (tunnelId: number) =>
+      fetchApi<OrgContactFilterInput[]>(`/tunnels/${tunnelId}/org-contact-filters`),
+    updateFilters: (tunnelId: number, filters: OrgContactFilterInput[]) =>
+      fetchApi<{ message: string }>(`/tunnels/${tunnelId}/org-contact-filters`, {
+        method: 'PUT',
+        body: JSON.stringify({ filters }),
+      }),
+    bulkExclude: (tunnelId: number, companyName: string, isExcluded: boolean) =>
+      fetchApi<{ count: number; message: string }>(`/tunnels/${tunnelId}/org-contact-filters/bulk-exclude`, {
+        method: 'PATCH',
+        body: JSON.stringify({ companyName, isExcluded }),
+      }),
   },
 };

@@ -12,5 +12,8 @@ public record TunnelDetailDto(
     TunnelTargetListDto[] TargetLists,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    bool PhotoSyncEnabled
+    bool PhotoSyncEnabled,
+    string? TargetGroupId,
+    string? TargetGroupName,
+    string? TargetUserEmails
 );

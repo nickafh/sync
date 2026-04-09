@@ -50,7 +50,7 @@ public class FieldProfileFieldConfiguration : IEntityTypeConfiguration<FieldProf
             new FieldProfileField { Id = 16, FieldProfileId = 1, FieldName = "Department", FieldSection = "Organization", DisplayName = "Department", Behavior = SyncBehavior.AddMissing, DisplayOrder = 31 },
             new FieldProfileField { Id = 17, FieldProfileId = 1, FieldName = "Manager", FieldSection = "Organization", DisplayName = "Manager", Behavior = SyncBehavior.Nosync, DisplayOrder = 32 },
             // Extras
-            new FieldProfileField { Id = 18, FieldProfileId = 1, FieldName = "PersonalNotes", FieldSection = "Extras", DisplayName = "Notes", Behavior = SyncBehavior.AddMissing, DisplayOrder = 40 },
+            new FieldProfileField { Id = 18, FieldProfileId = 1, FieldName = "PersonalNotes", FieldSection = "Extras", DisplayName = "Notes", Behavior = SyncBehavior.Always, DisplayOrder = 40 },
             new FieldProfileField { Id = 19, FieldProfileId = 1, FieldName = "Birthday", FieldSection = "Extras", DisplayName = "Birthday", Behavior = SyncBehavior.Nosync, DisplayOrder = 41 },
             new FieldProfileField { Id = 20, FieldProfileId = 1, FieldName = "NickName", FieldSection = "Extras", DisplayName = "Nickname", Behavior = SyncBehavior.Nosync, DisplayOrder = 42 },
             // Photo

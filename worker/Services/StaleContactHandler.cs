@@ -42,27 +42,28 @@ public sealed class StaleContactHandler(
         int removed = 0;
         int staleDetected = 0;
 
+        // Collect contacts to delete via batch for AutoRemove and expired FlagHold.
+        var pendingDeletes = new List<(string key, string graphContactId, ContactSyncState state)>();
+
         foreach (var state in staleStates)
         {
             switch (tunnel.StalePolicy)
             {
                 case StalePolicy.AutoRemove:
-                    // Delete from Graph immediately, then remove the sync state record.
                     if (!string.IsNullOrEmpty(state.GraphContactId))
                     {
-                        await contactWriter.DeleteContactAsync(mailboxEntraId, state.GraphContactId, ct);
-                        logger.LogInformation(
-                            "AutoRemove: deleted contact {GraphContactId} for SourceUserId={SourceUserId} in mailbox {MailboxId}",
-                            state.GraphContactId, state.SourceUserId, targetMailboxId);
+                        pendingDeletes.Add((state.Id.ToString(), state.GraphContactId, state));
                     }
-                    db.ContactSyncStates.Remove(state);
-                    removed++;
+                    else
+                    {
+                        db.ContactSyncStates.Remove(state);
+                        removed++;
+                    }
                     break;
 
                 case StalePolicy.FlagHold:
                     if (!state.IsStale)
                     {
-                        // First time we've detected this contact as stale — flag it.
                         state.IsStale = true;
                         state.StaleDetectedAt = DateTime.UtcNow;
                         staleDetected++;
@@ -73,26 +74,23 @@ public sealed class StaleContactHandler(
                     else if (state.StaleDetectedAt.HasValue
                              && state.StaleDetectedAt.Value.AddDays(tunnel.StaleHoldDays) < DateTime.UtcNow)
                     {
-                        // Hold period has expired — delete from Graph and remove record.
                         if (!string.IsNullOrEmpty(state.GraphContactId))
                         {
-                            await contactWriter.DeleteContactAsync(mailboxEntraId, state.GraphContactId, ct);
+                            pendingDeletes.Add((state.Id.ToString(), state.GraphContactId, state));
                         }
-                        db.ContactSyncStates.Remove(state);
-                        removed++;
-                        logger.LogInformation(
-                            "FlagHold: hold expired, deleted contact {GraphContactId} for SourceUserId={SourceUserId}",
-                            state.GraphContactId, state.SourceUserId);
+                        else
+                        {
+                            db.ContactSyncStates.Remove(state);
+                            removed++;
+                        }
                     }
                     else
                     {
-                        // Still in hold period — report as stale-detected but do not delete.
                         staleDetected++;
                     }
                     break;
 
                 case StalePolicy.Leave:
-                    // Mark as stale but never delete.
                     state.IsStale = true;
                     state.StaleDetectedAt ??= DateTime.UtcNow;
                     staleDetected++;
@@ -100,6 +98,35 @@ public sealed class StaleContactHandler(
                         "Leave: flagged SourceUserId={SourceUserId} as stale in mailbox {MailboxId} (no deletion)",
                         state.SourceUserId, targetMailboxId);
                     break;
+            }
+        }
+
+        // Execute batch deletes.
+        if (pendingDeletes.Count > 0)
+        {
+            var batchOps = pendingDeletes
+                .Select(d => (d.key, d.graphContactId))
+                .ToList();
+
+            var batchResults = await contactWriter.DeleteContactsBatchAsync(
+                mailboxEntraId, batchOps, ct);
+
+            foreach (var (key, graphContactId, state) in pendingDeletes)
+            {
+                if (batchResults.TryGetValue(key, out var result) && result.Success)
+                {
+                    logger.LogInformation(
+                        "{Policy}: deleted contact {GraphContactId} for SourceUserId={SourceUserId} in mailbox {MailboxId}",
+                        tunnel.StalePolicy, graphContactId, state.SourceUserId, targetMailboxId);
+                    db.ContactSyncStates.Remove(state);
+                    removed++;
+                }
+                else
+                {
+                    logger.LogWarning(
+                        "Batch delete failed for contact {GraphContactId} (SourceUserId={SourceUserId}): {Error}",
+                        graphContactId, state.SourceUserId, result?.Error ?? "Unknown");
+                }
             }
         }
 

@@ -140,6 +140,145 @@ public class GraphController : ControllerBase
     }
 
     /// <summary>
+    /// GET /api/graph/security-groups - List security groups from Entra for target scope selection.
+    /// Returns groups with id, displayName, and memberCount.
+    /// </summary>
+    [HttpGet("security-groups")]
+    public async Task<IActionResult> ListSecurityGroups(CancellationToken ct)
+    {
+        try
+        {
+            var groups = await _graphClient.Groups.GetAsync(config =>
+            {
+                config.QueryParameters.Filter = "securityEnabled eq true and mailEnabled eq false";
+                config.QueryParameters.Select = ["id", "displayName", "description", "membershipRule"];
+                config.QueryParameters.Top = 200;
+                config.QueryParameters.Orderby = ["displayName"];
+                config.QueryParameters.Count = true;
+                config.Headers.Add("ConsistencyLevel", "eventual");
+            }, ct);
+
+            var result = (groups?.Value ?? []).Select(g => new SecurityGroupDto(
+                g.Id ?? string.Empty,
+                g.DisplayName ?? string.Empty,
+                g.Description,
+                g.MembershipRule
+            )).ToArray();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list security groups from Graph");
+            return StatusCode(503, new { message = "Unable to fetch security groups from Microsoft Graph." });
+        }
+    }
+
+    /// <summary>
+    /// GET /api/graph/org-contacts - List all tenant organizational contacts from Microsoft Graph.
+    /// These are external contacts (vendors, attorneys, service providers) managed in Exchange Admin Center.
+    /// Used by the OrgContacts tunnel source type for select/exclude management.
+    /// </summary>
+    [HttpGet("org-contacts")]
+    public async Task<IActionResult> ListOrgContacts(CancellationToken ct)
+    {
+        try
+        {
+            var contacts = new List<OrgContactDto>();
+            var response = await _graphClient.Contacts.GetAsync(config =>
+            {
+                config.QueryParameters.Select =
+                [
+                    "id", "displayName", "givenName", "surname", "mail",
+                    "phones", "companyName", "department", "jobTitle"
+                ];
+                config.QueryParameters.Top = 999;
+                config.QueryParameters.Orderby = ["displayName"];
+            }, ct);
+
+            if (response?.Value != null)
+            {
+                var pageIterator = Microsoft.Graph.PageIterator<
+                    Microsoft.Graph.Models.OrgContact,
+                    Microsoft.Graph.Models.OrgContactCollectionResponse>
+                    .CreatePageIterator(
+                        _graphClient,
+                        response,
+                        orgContact =>
+                        {
+                            var businessPhone = orgContact.Phones?
+                                .FirstOrDefault(p => string.Equals(p.Type?.ToString(), "business", StringComparison.OrdinalIgnoreCase))?.Number
+                                ?? orgContact.Phones?.FirstOrDefault()?.Number;
+
+                            contacts.Add(new OrgContactDto(
+                                orgContact.Id ?? string.Empty,
+                                orgContact.DisplayName,
+                                orgContact.Mail,
+                                orgContact.CompanyName,
+                                orgContact.Department,
+                                orgContact.JobTitle,
+                                businessPhone,
+                                false
+                            ));
+                            return true;
+                        });
+
+                await pageIterator.IterateAsync(ct);
+            }
+
+            return Ok(contacts);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list org contacts from Graph");
+            return StatusCode(503, new { message = "Unable to fetch organizational contacts from Microsoft Graph." });
+        }
+    }
+
+    /// <summary>
+    /// GET /api/graph/users/search?q=... - Search Entra users by display name or email for autocomplete.
+    /// Used by the "Specific users" target scope picker.
+    /// </summary>
+    [HttpGet("users/search")]
+    public async Task<IActionResult> SearchUsers([FromQuery] string q, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Length < 2)
+            return Ok(Array.Empty<object>());
+
+        try
+        {
+            var users = await _graphClient.Users.GetAsync(config =>
+            {
+                config.QueryParameters.Filter =
+                    $"startsWith(displayName,'{q}') or startsWith(mail,'{q}')";
+                config.QueryParameters.Select = ["id", "displayName", "mail", "jobTitle"];
+                config.QueryParameters.Top = 10;
+                config.QueryParameters.Orderby = ["displayName"];
+                config.QueryParameters.Count = true;
+                config.Headers.Add("ConsistencyLevel", "eventual");
+            }, ct);
+
+            var result = (users?.Value ?? [])
+                .Where(u => !string.IsNullOrEmpty(u.Mail))
+                .Select(u => new
+                {
+                    id = u.Id,
+                    displayName = u.DisplayName,
+                    email = u.Mail,
+                    jobTitle = u.JobTitle
+                })
+                .ToArray();
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to search users from Graph with query: {Query}", q);
+            return StatusCode(503, new { message = "Unable to search users." });
+        }
+    }
+
+    /// <summary>
     /// Enriches a DdgInfo from Exchange with filter conversion and Graph member count.
     /// </summary>
     private async Task<DdgDto> EnrichDdgAsync(DdgInfo ddg, CancellationToken ct)

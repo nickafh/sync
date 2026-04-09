@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -20,6 +20,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ImpactPreviewDialog } from '@/components/ImpactPreviewDialog';
 import { DDGRefreshButton } from '@/components/DDGRefreshButton';
 import { DDGPicker } from '@/components/DDGPicker';
+import { OrgContactManager } from '@/components/OrgContactManager';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,8 +41,11 @@ import type {
   TunnelDetailDto,
   ImpactPreviewResponse,
   SourceInput,
+  SecurityGroupDto,
+  UserSearchResult,
 } from '@/types/tunnel';
 import type { StalePolicy } from '@/types/common';
+import { X } from 'lucide-react';
 
 const stalePolicyOptions = [
   { value: 'auto_remove', label: 'Auto Remove' },
@@ -98,7 +102,16 @@ export default function TunnelDetailPage() {
   });
 
   const [isEditing, setIsEditing] = useState(false);
+
+  const { data: securityGroups, isLoading: groupsLoading } = useQuery({
+    queryKey: ['security-groups'],
+    queryFn: () => api.securityGroups.list(),
+    staleTime: 10 * 60 * 1000,
+    enabled: isEditing,
+  });
   const [ddgPickerOpen, setDdgPickerOpen] = useState(false);
+  const [addSourceType, setAddSourceType] = useState<'ddg' | 'mailbox_contacts' | 'org_contacts'>('ddg');
+  const [mailboxEmailInput, setMailboxEmailInput] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [impactDialogOpen, setImpactDialogOpen] = useState(false);
@@ -106,6 +119,8 @@ export default function TunnelDetailPage() {
     null,
   );
   const [fallbackConfirmOpen, setFallbackConfirmOpen] = useState(false);
+  const [resetHashesDialogOpen, setResetHashesDialogOpen] = useState(false);
+  const [resettingHashes, setResettingHashes] = useState(false);
 
   const [editForm, setEditForm] = useState<UpdateTunnelRequest>({
     name: '',
@@ -115,7 +130,47 @@ export default function TunnelDetailPage() {
     stalePolicy: 'auto_remove' as const,
     staleDays: 14,
     photoSyncEnabled: true,
+    targetGroupId: null,
+    targetGroupName: null,
+    targetUserEmails: null,
   });
+
+  // User search state for "Specific users" mode
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSearchResults, setUserSearchResults] = useState<UserSearchResult[]>([]);
+  const [userSearching, setUserSearching] = useState(false);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const editTargetUserEmails: string[] = editForm.targetUserEmails
+    ? (() => { try { return JSON.parse(editForm.targetUserEmails); } catch { return []; } })()
+    : [];
+
+  const editScopeMode: 'all' | 'group' | 'specific' =
+    editTargetUserEmails.length > 0 ? 'specific' :
+    editForm.targetGroupId ? 'group' : 'all';
+
+  // Debounced user search for specific-users mode
+  useEffect(() => {
+    if (userSearchQuery.length < 2) {
+      setUserSearchResults([]);
+      return;
+    }
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(async () => {
+      setUserSearching(true);
+      try {
+        const results = await api.users.search(userSearchQuery);
+        setUserSearchResults(
+          results.filter((u) => !editTargetUserEmails.includes(u.email))
+        );
+      } catch {
+        setUserSearchResults([]);
+      } finally {
+        setUserSearching(false);
+      }
+    }, 300);
+    return () => { if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current); };
+  }, [userSearchQuery, editTargetUserEmails]);
 
   useEffect(() => {
     if (tunnel && !isEditing) {
@@ -133,6 +188,9 @@ export default function TunnelDetailPage() {
         stalePolicy: tunnel.stalePolicy,
         staleDays: tunnel.staleHoldDays,
         photoSyncEnabled: tunnel.photoSyncEnabled,
+        targetGroupId: tunnel.targetGroupId,
+        targetGroupName: tunnel.targetGroupName,
+        targetUserEmails: tunnel.targetUserEmails,
       });
     }
   }, [tunnel, isEditing]);
@@ -153,6 +211,8 @@ export default function TunnelDetailPage() {
       stalePolicy: tunnel.stalePolicy,
       staleDays: tunnel.staleHoldDays,
       photoSyncEnabled: tunnel.photoSyncEnabled,
+      targetGroupId: tunnel.targetGroupId,
+      targetGroupName: tunnel.targetGroupName,
     });
     setIsEditing(true);
   };
@@ -173,6 +233,8 @@ export default function TunnelDetailPage() {
       stalePolicy: tunnel.stalePolicy,
       staleDays: tunnel.staleHoldDays,
       photoSyncEnabled: tunnel.photoSyncEnabled,
+      targetGroupId: tunnel.targetGroupId,
+      targetGroupName: tunnel.targetGroupName,
     });
     setIsEditing(false);
   };
@@ -214,6 +276,19 @@ export default function TunnelDetailPage() {
     } else {
       // Low-impact: save directly (existing behavior)
       doSave();
+    }
+  };
+
+  const handleResetHashes = async () => {
+    setResettingHashes(true);
+    try {
+      const result = await api.tunnels.resetHashes(tunnelId);
+      toast.success(`Reset ${result.count} contact states. Run a sync to apply changes.`);
+      setResetHashesDialogOpen(false);
+    } catch {
+      toast.error('Failed to reset hashes. Please try again.');
+    } finally {
+      setResettingHashes(false);
     }
   };
 
@@ -394,13 +469,50 @@ export default function TunnelDetailPage() {
             <div className="flex items-center justify-between">
               <CardTitle>Sources</CardTitle>
               {isEditing && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setDdgPickerOpen(true)}
-                >
-                  Add Source
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={addSourceType}
+                    onValueChange={(val) => { if (val) setAddSourceType(val as 'ddg' | 'mailbox_contacts' | 'org_contacts'); }}
+                  >
+                    <SelectTrigger className="w-[180px] h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ddg">DDG</SelectItem>
+                      <SelectItem value="mailbox_contacts">Shared Mailbox</SelectItem>
+                      <SelectItem value="org_contacts">Org Contacts</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (addSourceType === 'org_contacts') {
+                        // Org contacts don't need a picker — add directly
+                        setEditForm((prev) => ({
+                          ...prev,
+                          sources: [
+                            ...prev.sources,
+                            {
+                              sourceType: 'org_contacts',
+                              sourceIdentifier: 'all',
+                              sourceDisplayName: 'Organization Contacts',
+                              sourceSmtpAddress: null,
+                              sourceFilterPlain: null,
+                            },
+                          ],
+                        }));
+                        return;
+                      }
+                      if (addSourceType === 'mailbox_contacts') {
+                        setMailboxEmailInput('');
+                      }
+                      setDdgPickerOpen(true);
+                    }}
+                  >
+                    Add Source
+                  </Button>
+                </div>
               )}
             </div>
           </CardHeader>
@@ -423,9 +535,14 @@ export default function TunnelDetailPage() {
                 {editForm.sources.map((src, idx) => (
                   <div key={idx} className="space-y-2 border rounded-md p-3">
                     <div className="flex items-center justify-between">
-                      <p className="font-medium">
-                        {src.sourceDisplayName || src.sourceIdentifier}
-                      </p>
+                      <div>
+                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600 mr-2">
+                          {src.sourceType === 'mailbox_contacts' ? 'Shared Mailbox' : src.sourceType === 'org_contacts' ? 'Org Contacts' : 'DDG'}
+                        </span>
+                        <span className="font-medium">
+                          {src.sourceDisplayName || src.sourceIdentifier}
+                        </span>
+                      </div>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -441,60 +558,99 @@ export default function TunnelDetailPage() {
                         Remove
                       </Button>
                     </div>
-                    {src.sourceSmtpAddress && (
-                      <p className="text-sm text-text-muted">{src.sourceSmtpAddress}</p>
+                    {src.sourceType === 'mailbox_contacts' ? (
+                      <p className="text-sm text-text-muted">{src.sourceIdentifier}</p>
+                    ) : (
+                      <>
+                        {src.sourceSmtpAddress && (
+                          <p className="text-sm text-text-muted">{src.sourceSmtpAddress}</p>
+                        )}
+                        {src.sourceFilterPlain && (
+                          <p className="text-sm text-text-muted">{src.sourceFilterPlain}</p>
+                        )}
+                        <p className="text-sm text-text-muted font-mono text-xs break-all">
+                          {src.sourceIdentifier}
+                        </p>
+                      </>
                     )}
-                    {src.sourceFilterPlain && (
-                      <p className="text-sm text-text-muted">{src.sourceFilterPlain}</p>
-                    )}
-                    <p className="text-sm text-text-muted font-mono text-xs break-all">
-                      {src.sourceIdentifier}
-                    </p>
                   </div>
                 ))}
                 {editForm.sources.length === 0 && (
-                  <p className="text-sm text-text-muted">No sources. Add at least one DDG source.</p>
+                  <p className="text-sm text-text-muted">No sources. Add at least one source.</p>
                 )}
               </div>
             ) : (
               <div className="space-y-4">
                 {tunnel.sources.map((src) => (
                   <div key={src.id} className="space-y-2">
-                    <div className="flex items-center justify-between">
+                    {src.sourceType === 'mailbox_contacts' ? (
+                      <>
+                        <div>
+                          <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                            Shared Mailbox
+                          </label>
+                          <p className="mt-1 font-medium">
+                            {src.sourceDisplayName || src.sourceIdentifier}
+                          </p>
+                        </div>
+                        <div>
+                          <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                            Mailbox Address
+                          </label>
+                          <p className="mt-1 text-sm">{src.sourceIdentifier}</p>
+                        </div>
+                      </>
+                    ) : src.sourceType === 'org_contacts' ? (
                       <div>
                         <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                          DDG Name
+                          Organization Contacts
                         </label>
                         <p className="mt-1 font-medium">
-                          {src.sourceDisplayName || src.sourceIdentifier}
+                          Tenant external contacts from Exchange Admin Center
+                        </p>
+                        <p className="text-xs text-text-muted mt-1">
+                          Manage included/excluded contacts below.
                         </p>
                       </div>
-                      <DDGRefreshButton tunnelId={tunnelId} sourceId={src.id} />
-                    </div>
-                    {src.sourceSmtpAddress && (
-                      <div>
-                        <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                          SMTP Address
-                        </label>
-                        <p className="mt-1 text-sm">{src.sourceSmtpAddress}</p>
-                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                              DDG Name
+                            </label>
+                            <p className="mt-1 font-medium">
+                              {src.sourceDisplayName || src.sourceIdentifier}
+                            </p>
+                          </div>
+                          <DDGRefreshButton tunnelId={tunnelId} sourceId={src.id} />
+                        </div>
+                        {src.sourceSmtpAddress && (
+                          <div>
+                            <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                              SMTP Address
+                            </label>
+                            <p className="mt-1 text-sm">{src.sourceSmtpAddress}</p>
+                          </div>
+                        )}
+                        {src.sourceFilterPlain && (
+                          <div>
+                            <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                              Filter Description
+                            </label>
+                            <p className="mt-1 text-sm">{src.sourceFilterPlain}</p>
+                          </div>
+                        )}
+                        <div>
+                          <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                            Graph Filter
+                          </label>
+                          <p className="mt-1 text-sm font-mono text-xs text-text-muted break-all">
+                            {src.sourceIdentifier}
+                          </p>
+                        </div>
+                      </>
                     )}
-                    {src.sourceFilterPlain && (
-                      <div>
-                        <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                          Filter Description
-                        </label>
-                        <p className="mt-1 text-sm">{src.sourceFilterPlain}</p>
-                      </div>
-                    )}
-                    <div>
-                      <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
-                        Graph Filter
-                      </label>
-                      <p className="mt-1 text-sm font-mono text-xs text-text-muted break-all">
-                        {src.sourceIdentifier}
-                      </p>
-                    </div>
                     {tunnel.sources.length > 1 && <Separator />}
                   </div>
                 ))}
@@ -560,6 +716,222 @@ export default function TunnelDetailPage() {
                     </p>
                   )}
                 </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Target Users Card */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Target Users</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isEditing ? (
+              <div className="space-y-4">
+                <p className="text-sm text-text-muted">
+                  Choose which users receive contacts from this tunnel.
+                </p>
+                <div className="space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
+                    <input
+                      type="radio"
+                      name="targetScope"
+                      checked={editScopeMode === 'all'}
+                      onChange={() =>
+                        setEditForm((prev) => ({
+                          ...prev,
+                          targetGroupId: null,
+                          targetGroupName: null,
+                          targetUserEmails: null,
+                        }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <p className="font-medium">All users</p>
+                      <p className="text-sm text-text-muted">
+                        Contacts sync to every active mailbox in the tenant.
+                      </p>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
+                    <input
+                      type="radio"
+                      name="targetScope"
+                      checked={editScopeMode === 'group'}
+                      onChange={() => {
+                        const first = securityGroups?.[0];
+                        if (first) {
+                          setEditForm((prev) => ({
+                            ...prev,
+                            targetGroupId: first.id,
+                            targetGroupName: first.displayName,
+                            targetUserEmails: null,
+                          }));
+                        }
+                      }}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className="font-medium">Members of a security group</p>
+                      <p className="text-sm text-text-muted">
+                        Contacts only sync to users who are members of the selected Entra security group.
+                      </p>
+                    </div>
+                  </label>
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
+                    <input
+                      type="radio"
+                      name="targetScope"
+                      checked={editScopeMode === 'specific'}
+                      onChange={() =>
+                        setEditForm((prev) => ({
+                          ...prev,
+                          targetGroupId: null,
+                          targetGroupName: null,
+                          targetUserEmails: prev.targetUserEmails || '[]',
+                        }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1">
+                      <p className="font-medium">Specific users</p>
+                      <p className="text-sm text-text-muted">
+                        Contacts sync only to the users you specify. Useful for assistant or executive patterns.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+                {editScopeMode === 'group' && (
+                  <div className="ml-7">
+                    <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                      Security Group
+                    </label>
+                    <Select
+                      value={editForm.targetGroupId ?? undefined}
+                      onValueChange={(val: string | null) => {
+                        const group = securityGroups?.find((g) => g.id === val);
+                        setEditForm((prev) => ({
+                          ...prev,
+                          targetGroupId: val,
+                          targetGroupName: group?.displayName ?? null,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger className="w-full mt-1">
+                        <SelectValue placeholder={groupsLoading ? 'Loading groups...' : 'Select a security group'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {securityGroups?.map((group) => (
+                          <SelectItem key={group.id} value={group.id}>
+                            {group.displayName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {securityGroups?.find((g) => g.id === editForm.targetGroupId)?.description && (
+                      <p className="text-xs text-text-muted mt-1">
+                        {securityGroups.find((g) => g.id === editForm.targetGroupId)?.description}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {editScopeMode === 'specific' && (
+                  <div className="ml-7 space-y-3">
+                    <div className="relative">
+                      <Input
+                        placeholder="Search by name or email..."
+                        value={userSearchQuery}
+                        onChange={(e) => setUserSearchQuery(e.target.value)}
+                      />
+                      {userSearching && (
+                        <p className="text-xs text-text-muted mt-1">Searching...</p>
+                      )}
+                      {userSearchResults.length > 0 && (
+                        <div className="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                          {userSearchResults.map((user) => (
+                            <button
+                              key={user.id}
+                              type="button"
+                              className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                              onClick={() => {
+                                const updated = [...editTargetUserEmails, user.email];
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  targetUserEmails: JSON.stringify(updated),
+                                }));
+                                setUserSearchQuery('');
+                                setUserSearchResults([]);
+                              }}
+                            >
+                              <span className="font-medium">{user.displayName}</span>
+                              <span className="text-text-muted ml-2">{user.email}</span>
+                              {user.jobTitle && (
+                                <span className="text-text-muted ml-2 text-xs">({user.jobTitle})</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {editTargetUserEmails.length > 0 && (
+                      <div className="space-y-1">
+                        {editTargetUserEmails.map((email) => (
+                          <div
+                            key={email}
+                            className="flex items-center justify-between rounded-md bg-gray-50 px-3 py-2"
+                          >
+                            <span className="text-sm">{email}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = editTargetUserEmails.filter((e) => e !== email);
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  targetUserEmails: updated.length > 0 ? JSON.stringify(updated) : null,
+                                }));
+                              }}
+                              className="text-text-muted hover:text-destructive"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {editTargetUserEmails.length === 0 && !userSearchQuery && (
+                      <p className="text-xs text-text-muted">
+                        Search and add at least one user above.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                  Scope
+                </label>
+                {tunnel.targetUserEmails ? (
+                  <div className="mt-1">
+                    <p className="text-sm font-medium">Specific users</p>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {(() => { try { return JSON.parse(tunnel.targetUserEmails) as string[]; } catch { return []; } })().map((email: string) => (
+                        <span key={email} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">
+                          {email}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : tunnel.targetGroupId ? (
+                  <div className="mt-1">
+                    <p className="text-sm font-medium">{tunnel.targetGroupName}</p>
+                    <p className="text-xs text-text-muted">Security group — only members receive contacts</p>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm">All users</p>
+                )}
               </div>
             )}
           </CardContent>
@@ -696,12 +1068,105 @@ export default function TunnelDetailPage() {
         </Card>
       </div>
 
-      {/* DDG Picker Dialog */}
-      <DDGPicker
-        open={ddgPickerOpen}
-        onOpenChange={setDdgPickerOpen}
-        onSelect={handleDdgSelect}
+      {/* Org Contact Filters (only for org_contacts tunnels) */}
+      {tunnel.sources.some((s) => s.sourceType === 'org_contacts') && (
+        <div className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Contact Filters</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrgContactManager tunnelId={tunnelId} />
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Maintenance */}
+      <div className="mt-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Maintenance</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <Label>Force Full Re-Sync</Label>
+              <p className="text-sm text-text-muted">
+                Clears cached data for this tunnel so the next sync re-writes every contact.
+              </p>
+              <Button
+                variant="destructive"
+                onClick={() => setResetHashesDialogOpen(true)}
+                className="mt-2"
+              >
+                Force Full Re-Sync
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Reset Hashes Confirmation Dialog */}
+      <ConfirmDialog
+        open={resetHashesDialogOpen}
+        onOpenChange={setResetHashesDialogOpen}
+        title="Force full re-sync"
+        description={<>This will cause the next sync run to re-write all contacts for <strong>{tunnel.name}</strong>. This may take longer than usual. Continue?</>}
+        confirmLabel="Reset Hashes"
+        dismissLabel="Cancel"
+        variant="destructive"
+        onConfirm={handleResetHashes}
+        isLoading={resettingHashes}
       />
+
+      {/* DDG Picker Dialog */}
+      {addSourceType === 'ddg' ? (
+        <DDGPicker
+          open={ddgPickerOpen}
+          onOpenChange={setDdgPickerOpen}
+          onSelect={handleDdgSelect}
+        />
+      ) : (
+        <ConfirmDialog
+          open={ddgPickerOpen}
+          onOpenChange={setDdgPickerOpen}
+          title="Add Shared Mailbox Source"
+          description={
+            <div className="space-y-3 mt-2">
+              <p className="text-sm text-text-muted">
+                Enter the email address of the shared mailbox whose contacts will be synced.
+              </p>
+              <Input
+                placeholder="e.g. afhstaffgal@atlantafinehomes.com"
+                value={mailboxEmailInput}
+                onChange={(e) => setMailboxEmailInput(e.target.value)}
+              />
+            </div>
+          }
+          confirmLabel="Add Mailbox"
+          dismissLabel="Cancel"
+          variant="default"
+          onConfirm={() => {
+            const email = mailboxEmailInput.trim();
+            if (!email) return;
+            setEditForm((prev) => ({
+              ...prev,
+              sources: [
+                ...prev.sources,
+                {
+                  sourceType: 'mailbox_contacts',
+                  sourceIdentifier: email,
+                  sourceDisplayName: email,
+                  sourceSmtpAddress: email,
+                  sourceFilterPlain: null,
+                },
+              ],
+            }));
+            setMailboxEmailInput('');
+            setDdgPickerOpen(false);
+          }}
+        />
+      )}
 
       {/* Deactivate Confirmation Dialog */}
       <ConfirmDialog

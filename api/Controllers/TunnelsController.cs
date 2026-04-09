@@ -83,7 +83,10 @@ public class TunnelsController : ControllerBase
                 estimatedContacts,
                 estimatedTargetUsers,
                 lastSync,
-                t.PhotoSyncEnabled
+                t.PhotoSyncEnabled,
+                t.TargetGroupId,
+                t.TargetGroupName,
+                t.TargetUserEmails
             ));
         }
 
@@ -119,7 +122,10 @@ public class TunnelsController : ControllerBase
             tunnel.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
             tunnel.CreatedAt,
             tunnel.UpdatedAt,
-            tunnel.PhotoSyncEnabled
+            tunnel.PhotoSyncEnabled,
+            tunnel.TargetGroupId,
+            tunnel.TargetGroupName,
+            tunnel.TargetUserEmails
         );
 
         return Ok(dto);
@@ -144,6 +150,9 @@ public class TunnelsController : ControllerBase
             StalePolicy = stalePolicy,
             StaleHoldDays = request.StaleDays,
             PhotoSyncEnabled = request.PhotoSyncEnabled,
+            TargetGroupId = request.TargetGroupId,
+            TargetGroupName = request.TargetGroupName,
+            TargetUserEmails = request.TargetUserEmails,
             Status = TunnelStatus.Active,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -206,6 +215,9 @@ public class TunnelsController : ControllerBase
         tunnel.StalePolicy = stalePolicy;
         tunnel.StaleHoldDays = request.StaleDays;
         tunnel.PhotoSyncEnabled = request.PhotoSyncEnabled;
+        tunnel.TargetGroupId = request.TargetGroupId;
+        tunnel.TargetGroupName = request.TargetGroupName;
+        tunnel.TargetUserEmails = request.TargetUserEmails;
         tunnel.UpdatedAt = DateTime.UtcNow;
 
         // Replace TunnelSource records
@@ -326,15 +338,44 @@ public class TunnelsController : ControllerBase
                 var totalNewCount = 0;
                 foreach (var src in request.Sources)
                 {
-                    var usersPage = await _graphClient.Users.GetAsync(cfg =>
+                    if (src.SourceType == "mailbox_contacts")
                     {
-                        cfg.QueryParameters.Filter = src.SourceIdentifier;
-                        cfg.QueryParameters.Select = new[] { "id" };
-                        cfg.QueryParameters.Top = 999;
-                        cfg.QueryParameters.Count = true;
-                        cfg.Headers.Add("ConsistencyLevel", "eventual");
-                    });
-                    totalNewCount += usersPage?.Value?.Count ?? 0;
+                        // Count contacts in the shared mailbox
+                        var contactsPage = await _graphClient.Users[src.SourceIdentifier].Contacts.GetAsync(cfg =>
+                        {
+                            cfg.QueryParameters.Select = ["id"];
+                            cfg.QueryParameters.Top = 999;
+                        });
+                        totalNewCount += contactsPage?.Value?.Count ?? 0;
+                    }
+                    else if (src.SourceType == "org_contacts")
+                    {
+                        // Count tenant org contacts
+                        var orgContactsPage = await _graphClient.Contacts.GetAsync(cfg =>
+                        {
+                            cfg.QueryParameters.Select = ["id"];
+                            cfg.QueryParameters.Top = 999;
+                            cfg.QueryParameters.Count = true;
+                            cfg.Headers.Add("ConsistencyLevel", "eventual");
+                        });
+                        var orgCount = (int?)orgContactsPage?.OdataCount ?? orgContactsPage?.Value?.Count ?? 0;
+                        // Subtract excluded contacts
+                        var excludedCount = await _db.OrgContactFilters
+                            .CountAsync(f => f.TunnelId == id && f.IsExcluded);
+                        totalNewCount += Math.Max(0, orgCount - excludedCount);
+                    }
+                    else
+                    {
+                        var usersPage = await _graphClient.Users.GetAsync(cfg =>
+                        {
+                            cfg.QueryParameters.Filter = src.SourceIdentifier;
+                            cfg.QueryParameters.Select = ["id"];
+                            cfg.QueryParameters.Top = 999;
+                            cfg.QueryParameters.Count = true;
+                            cfg.Headers.Add("ConsistencyLevel", "eventual");
+                        });
+                        totalNewCount += usersPage?.Value?.Count ?? 0;
+                    }
                 }
 
                 estimatedCreates = Math.Max(0, totalNewCount - currentCount);
@@ -371,6 +412,22 @@ public class TunnelsController : ControllerBase
         }
 
         return Ok(new ImpactPreviewResponse(estimatedCreates, estimatedUpdates, estimatedRemovals));
+    }
+
+    /// <summary>
+    /// POST /api/tunnels/{id}/reset-hashes — Reset data and photo hashes for a single tunnel.
+    /// </summary>
+    [HttpPost("{id:int}/reset-hashes")]
+    public async Task<IActionResult> ResetHashes(int id)
+    {
+        var exists = await _db.Tunnels.AnyAsync(t => t.Id == id);
+        if (!exists)
+            return NotFound(new { message = $"Tunnel {id} not found." });
+
+        var count = await _db.Database.ExecuteSqlRawAsync(
+            "UPDATE contact_sync_state SET data_hash = NULL, previous_data_hash = NULL, photo_hash = NULL WHERE tunnel_id = {0} AND (data_hash IS NOT NULL OR photo_hash IS NOT NULL)", id);
+
+        return Ok(new { count, message = $"Reset {count} contact states for tunnel {id}." });
     }
 
     /// <summary>

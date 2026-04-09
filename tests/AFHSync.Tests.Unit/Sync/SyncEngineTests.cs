@@ -58,6 +58,7 @@ public class SyncEngineTests
             runLogger ?? new FakeRunLogger(),
             throttleCounter ?? new ThrottleCounter(),
             photoSyncService ?? new FakePhotoSyncService(),
+            null!, // GraphClientFactory — not used in unit tests
             CreateEmptyConfig(),
             NullLogger<SyncEngine>.Instance);
     }
@@ -481,6 +482,46 @@ public class SyncEngineTests
         {
             DeletedContactIds.Add(graphContactId);
             return Task.CompletedTask;
+        }
+
+        public Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
+            string mailboxEntraId, string folderId,
+            List<(string key, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+        {
+            var results = new Dictionary<string, BatchOperationResult>();
+            foreach (var (key, _) in operations)
+            {
+                var id = Guid.NewGuid().ToString();
+                CreatedContactIds.Add(id);
+                results[key] = new BatchOperationResult(true, id);
+            }
+            return Task.FromResult(results);
+        }
+
+        public Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
+            string mailboxEntraId,
+            List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+        {
+            var results = new Dictionary<string, BatchOperationResult>();
+            foreach (var (key, graphContactId, _) in operations)
+            {
+                UpdatedContactIds.Add(graphContactId);
+                results[key] = new BatchOperationResult(true);
+            }
+            return Task.FromResult(results);
+        }
+
+        public Task<Dictionary<string, BatchOperationResult>> DeleteContactsBatchAsync(
+            string mailboxEntraId,
+            List<(string key, string graphContactId)> operations, CancellationToken ct)
+        {
+            var results = new Dictionary<string, BatchOperationResult>();
+            foreach (var (key, graphContactId) in operations)
+            {
+                DeletedContactIds.Add(graphContactId);
+                results[key] = new BatchOperationResult(true);
+            }
+            return Task.FromResult(results);
         }
     }
 

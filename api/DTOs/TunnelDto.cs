@@ -13,7 +13,10 @@ public record TunnelDto(
     int EstimatedContacts,
     int EstimatedTargetUsers,
     TunnelLastSyncDto? LastSync,
-    bool PhotoSyncEnabled
+    bool PhotoSyncEnabled,
+    string? TargetGroupId,
+    string? TargetGroupName,
+    string? TargetUserEmails
 );
 
 public record TunnelSourceDto(

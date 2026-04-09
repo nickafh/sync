@@ -6,6 +6,7 @@ using AFHSync.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Graph;
 
 namespace AFHSync.Worker.Services;
 
@@ -34,6 +35,7 @@ public sealed class SyncEngine(
     IRunLogger runLogger,
     ThrottleCounter throttleCounter,
     IPhotoSyncService photoSyncService,
+    AFHSync.Worker.Graph.GraphClientFactory graphClientFactory,
     IConfiguration configuration,
     ILogger<SyncEngine> logger) : ISyncEngine
 {
@@ -433,23 +435,28 @@ public sealed class SyncEngine(
                 "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
                 duplicateStates.Count, tunnel.Id, mailbox.Id);
 
-            // Delete duplicate Graph contacts and sync state records.
-            await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
-            foreach (var dupe in duplicateStates)
+            // Batch delete duplicate Graph contacts.
+            if (!isDryRun)
             {
-                if (!isDryRun && !string.IsNullOrEmpty(dupe.GraphContactId))
+                var dupeOps = duplicateStates
+                    .Where(d => !string.IsNullOrEmpty(d.GraphContactId))
+                    .Select(d => (d.Id.ToString(), d.GraphContactId!))
+                    .ToList();
+
+                if (dupeOps.Count > 0)
                 {
-                    try
+                    var dupeResults = await contactWriter.DeleteContactsBatchAsync(
+                        mailbox.EntraId, dupeOps, ct);
+
+                    foreach (var (key, result) in dupeResults)
                     {
-                        await contactWriter.DeleteContactAsync(mailbox.EntraId, dupe.GraphContactId, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Failed to delete duplicate Graph contact {GraphContactId}", dupe.GraphContactId);
+                        if (!result.Success)
+                            logger.LogWarning("Failed to delete duplicate Graph contact (key={Key}): {Error}", key, result.Error);
                     }
                 }
             }
 
+            await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
             var dupeIds = duplicateStates.Select(d => d.Id).ToList();
             await dupeDb.ContactSyncStates
                 .Where(s => dupeIds.Contains(s.Id))
@@ -457,12 +464,11 @@ public sealed class SyncEngine(
             removed += duplicateStates.Count;
         }
 
-        // Track new/modified states to save at the end.
-        var statesToAdd = new List<ContactSyncState>();
-        var statesToUpdate = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
+        // Phase 1: Compute payloads and classify each source user as create, update, or skip.
+        // No Graph calls happen here — just delta hash comparison.
+        var pendingCreates = new List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)>();
+        var pendingUpdates = new List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)>();
 
-        // Process each source user.
-        int contactsProcessed = 0;
         foreach (var sourceUser in sourceUsers)
         {
             try
@@ -472,76 +478,21 @@ public sealed class SyncEngine(
 
                 if (existingState == null)
                 {
-                    // New contact (SYNC-05).
-                    string? graphContactId = null;
-                    if (!isDryRun)
-                    {
-                        graphContactId = await contactWriter.CreateContactAsync(
-                            mailbox.EntraId, folderId, result.Payload, ct);
-                    }
-
-                    statesToAdd.Add(new ContactSyncState
-                    {
-                        SourceUserId = sourceUser.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        TunnelId = tunnel.Id,
-                        GraphContactId = graphContactId,
-                        DataHash = result.DataHash,
-                        LastSyncedAt = DateTime.UtcNow,
-                        LastResult = "created",
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
-                    });
-
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = sourceUser.Id,
-                        Action = "created",
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    created++;
+                    pendingCreates.Add((sourceUser.Id.ToString(), sourceUser.Id, result.Payload, result.DataHash));
                 }
                 else if (existingState.DataHash != result.DataHash)
                 {
-                    // Changed contact (SYNC-06) — hash mismatch.
-                    if (!isDryRun)
-                    {
-                        await contactWriter.UpdateContactAsync(
-                            mailbox.EntraId, existingState.GraphContactId!, result.Payload, ct);
-                    }
-
-                    // Compute field-level changes for audit trail (LOGS-03).
-                    var fieldChangesJson = BuildFieldChangesJson(result.Payload, existingState.DataHash);
-
-                    statesToUpdate.Add((existingState.Id, result.DataHash, existingState.DataHash, "updated"));
-
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = sourceUser.Id,
-                        Action = "updated",
-                        FieldChanges = fieldChangesJson,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    updated++;
+                    pendingUpdates.Add((sourceUser.Id.ToString(), sourceUser.Id, existingState.GraphContactId!,
+                        existingState.Id, result.Payload, result.DataHash, existingState.DataHash));
                 }
                 else
                 {
-                    // Hash match — unchanged contact (SYNC-07). Zero Graph API calls.
                     skipped++;
                 }
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to process contact for SourceUserId={SourceUserId} in mailbox {MailboxId}",
+                logger.LogError(ex, "Failed to build payload for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     sourceUser.Id, mailbox.Id);
 
                 runLogger.AddItem(new SyncRunItem
@@ -556,16 +507,185 @@ public sealed class SyncEngine(
                     CreatedAt = DateTime.UtcNow
                 });
                 failed++;
-                // Continue to next contact (D-17).
             }
+        }
 
-            // Update live progress every 25 contacts
-            contactsProcessed++;
-            if (contactsProcessed % 25 == 0)
+        // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
+        var statesToAdd = new List<ContactSyncState>();
+        var statesToUpdate = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
+
+        if (!isDryRun && pendingCreates.Count > 0)
+        {
+            var batchOps = pendingCreates
+                .Select(c => (c.key, c.payload))
+                .ToList();
+
+            var batchResults = await contactWriter.CreateContactsBatchAsync(
+                mailbox.EntraId, folderId, batchOps, ct);
+
+            foreach (var pending in pendingCreates)
             {
-                await UpdateRunProgressAsync(run.Id, created, updated, skipped,
-                    failed, removed, 0, 0, 0, 0, 0);
+                if (batchResults.TryGetValue(pending.key, out var result) && result.Success)
+                {
+                    statesToAdd.Add(new ContactSyncState
+                    {
+                        SourceUserId = pending.sourceUserId,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        TunnelId = tunnel.Id,
+                        GraphContactId = result.GraphContactId,
+                        DataHash = pending.dataHash,
+                        LastSyncedAt = DateTime.UtcNow,
+                        LastResult = "created",
+                        CreatedAt = DateTime.UtcNow,
+                        UpdatedAt = DateTime.UtcNow
+                    });
+
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        SourceUserId = pending.sourceUserId,
+                        Action = "created",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    created++;
+                }
+                else
+                {
+                    var error = result?.Error ?? "No batch result returned";
+                    logger.LogError("Batch create failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
+                        pending.sourceUserId, mailbox.Id, error);
+
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        SourceUserId = pending.sourceUserId,
+                        Action = "failed",
+                        ErrorMessage = error,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    failed++;
+                }
             }
+        }
+        else if (isDryRun)
+        {
+            // Dry-run: record creates without Graph calls.
+            foreach (var pending in pendingCreates)
+            {
+                statesToAdd.Add(new ContactSyncState
+                {
+                    SourceUserId = pending.sourceUserId,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    TunnelId = tunnel.Id,
+                    DataHash = pending.dataHash,
+                    LastSyncedAt = DateTime.UtcNow,
+                    LastResult = "created",
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                });
+
+                runLogger.AddItem(new SyncRunItem
+                {
+                    SyncRunId = run.Id,
+                    TunnelId = tunnel.Id,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    SourceUserId = pending.sourceUserId,
+                    Action = "created",
+                    CreatedAt = DateTime.UtcNow
+                });
+                created++;
+            }
+        }
+
+        if (!isDryRun && pendingUpdates.Count > 0)
+        {
+            var batchOps = pendingUpdates
+                .Select(u => (u.key, u.graphContactId, u.payload))
+                .ToList();
+
+            var batchResults = await contactWriter.UpdateContactsBatchAsync(
+                mailbox.EntraId, batchOps, ct);
+
+            foreach (var pending in pendingUpdates)
+            {
+                if (batchResults.TryGetValue(pending.key, out var result) && result.Success)
+                {
+                    var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
+
+                    statesToUpdate.Add((pending.stateId, pending.dataHash, pending.previousHash, "updated"));
+
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        SourceUserId = pending.sourceUserId,
+                        Action = "updated",
+                        FieldChanges = fieldChangesJson,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    updated++;
+                }
+                else
+                {
+                    var error = result?.Error ?? "No batch result returned";
+                    logger.LogError("Batch update failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
+                        pending.sourceUserId, mailbox.Id, error);
+
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        SourceUserId = pending.sourceUserId,
+                        Action = "failed",
+                        ErrorMessage = error,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    failed++;
+                }
+            }
+        }
+        else if (isDryRun)
+        {
+            // Dry-run: record updates without Graph calls.
+            foreach (var pending in pendingUpdates)
+            {
+                var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
+
+                statesToUpdate.Add((pending.stateId, pending.dataHash, pending.previousHash, "updated"));
+
+                runLogger.AddItem(new SyncRunItem
+                {
+                    SyncRunId = run.Id,
+                    TunnelId = tunnel.Id,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    SourceUserId = pending.sourceUserId,
+                    Action = "updated",
+                    FieldChanges = fieldChangesJson,
+                    CreatedAt = DateTime.UtcNow
+                });
+                updated++;
+            }
+        }
+
+        // Update live progress after batch execution.
+        if (pendingCreates.Count + pendingUpdates.Count > 0)
+        {
+            await UpdateRunProgressAsync(run.Id, created, updated, skipped,
+                failed, removed, 0, 0, 0, 0, 0);
         }
 
         // Save new/updated ContactSyncState records using a fresh tracked context.
@@ -660,12 +780,80 @@ public sealed class SyncEngine(
 
     private async Task<List<TargetMailbox>> LoadTargetMailboxesAsync(Tunnel tunnel, CancellationToken ct)
     {
-        // Target scope is now per phone list, not per tunnel.
-        // Load all active mailboxes; per-list scope filtering is handled downstream.
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
-        return await db.TargetMailboxes
+        var allMailboxes = await db.TargetMailboxes
             .Where(m => m.IsActive)
             .ToListAsync(ct);
+
+        // If tunnel targets specific users by email, filter to those mailboxes only.
+        if (!string.IsNullOrEmpty(tunnel.TargetUserEmails))
+        {
+            var targetEmails = System.Text.Json.JsonSerializer
+                .Deserialize<string[]>(tunnel.TargetUserEmails) ?? [];
+            var emailSet = new HashSet<string>(targetEmails, StringComparer.OrdinalIgnoreCase);
+            var filtered = allMailboxes.Where(m => emailSet.Contains(m.Email)).ToList();
+            logger.LogInformation(
+                "Tunnel {TunnelName}: scoped to {EmailCount} specific user(s) — {Filtered}/{Total} mailboxes matched",
+                tunnel.Name, emailSet.Count, filtered.Count, allMailboxes.Count);
+            return filtered;
+        }
+
+        // If tunnel is scoped to a security group, filter mailboxes to group members only.
+        if (!string.IsNullOrEmpty(tunnel.TargetGroupId))
+        {
+            var groupMemberIds = await ResolveGroupMemberIdsAsync(tunnel.TargetGroupId, ct);
+            var filtered = allMailboxes.Where(m => groupMemberIds.Contains(m.EntraId)).ToList();
+            logger.LogInformation(
+                "Tunnel {TunnelName}: scoped to group {GroupName} ({GroupId}) — {Filtered}/{Total} mailboxes matched",
+                tunnel.Name, tunnel.TargetGroupName, tunnel.TargetGroupId, filtered.Count, allMailboxes.Count);
+            return filtered;
+        }
+
+        return allMailboxes;
+    }
+
+    /// <summary>
+    /// Resolves all member Entra IDs from a security group via Graph API, handling pagination.
+    /// </summary>
+    private async Task<HashSet<string>> ResolveGroupMemberIdsAsync(string groupId, CancellationToken ct)
+    {
+        var memberIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var membersPage = await graphClientFactory.Client.Groups[groupId].Members
+                .GetAsync(config =>
+                {
+                    config.QueryParameters.Select = ["id"];
+                    config.QueryParameters.Top = 999;
+                }, ct);
+
+            while (membersPage?.Value != null)
+            {
+                foreach (var member in membersPage.Value)
+                {
+                    if (member.Id != null)
+                        memberIds.Add(member.Id);
+                }
+
+                // Follow next page link if present
+                if (!string.IsNullOrEmpty(membersPage.OdataNextLink))
+                {
+                    membersPage = await graphClientFactory.Client.Groups[groupId].Members
+                        .WithUrl(membersPage.OdataNextLink)
+                        .GetAsync(cancellationToken: ct);
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to resolve members for security group {GroupId}", groupId);
+        }
+
+        return memberIds;
     }
 
     private async Task<int> ReadParallelismSettingAsync(CancellationToken ct)

@@ -21,6 +21,9 @@ public class TunnelConfiguration : IEntityTypeConfiguration<Tunnel>
             .HasColumnName("photo_sync_enabled")
             .HasDefaultValue(true)
             .IsRequired();
+        builder.Property(e => e.TargetGroupId).HasColumnName("target_group_id").HasMaxLength(100);
+        builder.Property(e => e.TargetGroupName).HasColumnName("target_group_name").HasMaxLength(200);
+        builder.Property(e => e.TargetUserEmails).HasColumnName("target_user_emails");
         builder.Property(e => e.Status).HasColumnName("status").IsRequired();
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");

@@ -4,6 +4,7 @@ using AFHSync.Shared.Data;
 using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AFHSync.Api.Migrations
 {
     [DbContext(typeof(AFHSyncDbContext))]
-    partial class AFHSyncDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409172635_ChangePersonalNotesToAlways")]
+    partial class ChangePersonalNotesToAlways
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -22,7 +25,7 @@ namespace AFHSync.Api.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "run_type", new[] { "dry_run", "manual", "scheduled" });
-            NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "source_type", new[] { "ddg", "mailbox_contacts", "org_contacts" });
+            NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "source_type", new[] { "ddg", "mailbox_contacts" });
             NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "stale_policy", new[] { "auto_remove", "flag_hold", "leave" });
             NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "sync_behavior", new[] { "add_missing", "always", "nosync", "remove_blank" });
             NpgsqlModelBuilderExtensions.HasPostgresEnum(modelBuilder, "sync_status", new[] { "cancelled", "failed", "pending", "running", "success", "warning" });
@@ -579,67 +582,6 @@ namespace AFHSync.Api.Migrations
                             FieldProfileId = 1,
                             FieldSection = "Photo"
                         });
-                });
-
-            modelBuilder.Entity("AFHSync.Shared.Entities.OrgContactFilter", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("CompanyName")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("company_name");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at")
-                        .HasDefaultValueSql("NOW()");
-
-                    b.Property<string>("DisplayName")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("display_name");
-
-                    b.Property<string>("Email")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)")
-                        .HasColumnName("email");
-
-                    b.Property<bool>("IsExcluded")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("is_excluded");
-
-                    b.Property<string>("OrgContactId")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)")
-                        .HasColumnName("org_contact_id");
-
-                    b.Property<int>("TunnelId")
-                        .HasColumnType("integer")
-                        .HasColumnName("tunnel_id");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at")
-                        .HasDefaultValueSql("NOW()");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TunnelId", "OrgContactId")
-                        .IsUnique()
-                        .HasDatabaseName("idx_org_contact_filters_tunnel_contact");
-
-                    b.ToTable("org_contact_filters", (string)null);
                 });
 
             modelBuilder.Entity("AFHSync.Shared.Entities.PhoneList", b =>
@@ -1207,20 +1149,6 @@ namespace AFHSync.Api.Migrations
                         .HasColumnType("tunnel_status")
                         .HasColumnName("status");
 
-                    b.Property<string>("TargetGroupId")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)")
-                        .HasColumnName("target_group_id");
-
-                    b.Property<string>("TargetGroupName")
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("target_group_name");
-
-                    b.Property<string>("TargetUserEmails")
-                        .HasColumnType("text")
-                        .HasColumnName("target_user_emails");
-
                     b.Property<DateTime>("UpdatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -1451,17 +1379,6 @@ namespace AFHSync.Api.Migrations
                         .IsRequired();
 
                     b.Navigation("FieldProfile");
-                });
-
-            modelBuilder.Entity("AFHSync.Shared.Entities.OrgContactFilter", b =>
-                {
-                    b.HasOne("AFHSync.Shared.Entities.Tunnel", "Tunnel")
-                        .WithMany()
-                        .HasForeignKey("TunnelId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Tunnel");
                 });
 
             modelBuilder.Entity("AFHSync.Shared.Entities.SyncRunItem", b =>

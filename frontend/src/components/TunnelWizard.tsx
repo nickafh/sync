@@ -30,14 +30,24 @@ interface TunnelWizardProps {
 
 interface FormData {
   name: string;
+  sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
   sourceDdg: DdgDto | null;
+  sourceMailboxEmail: string;
   targetListIds: number[];
+  targetGroupId: string | null;
+  targetGroupName: string | null;
+  targetUserEmails: string[];
 }
 
 const initialFormData: FormData = {
   name: '',
+  sourceType: 'ddg',
   sourceDdg: null,
+  sourceMailboxEmail: '',
   targetListIds: [],
+  targetGroupId: null,
+  targetGroupName: null,
+  targetUserEmails: [],
 };
 
 export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
@@ -53,6 +63,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   const hasData =
     formData.name.trim() !== '' ||
     formData.sourceDdg !== null ||
+    formData.sourceMailboxEmail.trim() !== '' ||
     formData.targetListIds.length > 0;
 
   const resetForm = useCallback(() => {
@@ -76,9 +87,12 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
           }
           break;
         case 1:
-          if (!formData.sourceDdg) {
+          if (formData.sourceType === 'ddg' && !formData.sourceDdg) {
             newErrors.source = 'Select a source DDG to continue.';
+          } else if (formData.sourceType === 'mailbox_contacts' && !formData.sourceMailboxEmail.trim()) {
+            newErrors.source = 'Enter a mailbox email address to continue.';
           }
+          // org_contacts needs no additional input — always valid
           break;
         case 2:
           if (formData.targetListIds.length === 0) {
@@ -113,22 +127,50 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   );
 
   const handleSubmit = useCallback(() => {
-    if (!formData.sourceDdg) return;
+    const sources: CreateTunnelRequest['sources'] = [];
 
-    const request: CreateTunnelRequest = {
-      name: formData.name.trim(),
-      sources: [{
+    if (formData.sourceType === 'ddg') {
+      if (!formData.sourceDdg) return;
+      sources.push({
         sourceType: 'ddg',
         sourceIdentifier:
           formData.sourceDdg.graphFilter ?? formData.sourceDdg.recipientFilter,
         sourceDisplayName: formData.sourceDdg.displayName,
         sourceSmtpAddress: formData.sourceDdg.primarySmtpAddress,
         sourceFilterPlain: formData.sourceDdg.recipientFilterPlain,
-      }],
+      });
+    } else if (formData.sourceType === 'mailbox_contacts') {
+      const email = formData.sourceMailboxEmail.trim();
+      if (!email) return;
+      sources.push({
+        sourceType: 'mailbox_contacts',
+        sourceIdentifier: email,
+        sourceDisplayName: email,
+        sourceSmtpAddress: email,
+        sourceFilterPlain: null,
+      });
+    } else if (formData.sourceType === 'org_contacts') {
+      sources.push({
+        sourceType: 'org_contacts',
+        sourceIdentifier: 'all',
+        sourceDisplayName: 'Organization Contacts',
+        sourceSmtpAddress: null,
+        sourceFilterPlain: null,
+      });
+    }
+
+    const request: CreateTunnelRequest = {
+      name: formData.name.trim(),
+      sources,
       targetListIds: formData.targetListIds,
       fieldProfileId: null,
       stalePolicy: 'auto_remove',
       staleDays: 14,
+      targetGroupId: formData.targetGroupId,
+      targetGroupName: formData.targetGroupName,
+      targetUserEmails: formData.targetUserEmails.length > 0
+        ? JSON.stringify(formData.targetUserEmails)
+        : null,
     };
 
     createTunnel.mutate(request, {
@@ -215,9 +257,26 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             )}
             {step === 1 && (
               <StepSource
+                sourceType={formData.sourceType}
+                onSourceTypeChange={(type: 'ddg' | 'mailbox_contacts' | 'org_contacts') => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    sourceType: type,
+                    sourceDdg: null,
+                    sourceMailboxEmail: '',
+                  }));
+                  if (errors.source)
+                    setErrors((prev) => ({ ...prev, source: '' }));
+                }}
                 selectedDdg={formData.sourceDdg}
                 onSelect={(ddg) => {
                   setFormData((prev) => ({ ...prev, sourceDdg: ddg }));
+                  if (errors.source)
+                    setErrors((prev) => ({ ...prev, source: '' }));
+                }}
+                mailboxEmail={formData.sourceMailboxEmail}
+                onMailboxEmailChange={(email) => {
+                  setFormData((prev) => ({ ...prev, sourceMailboxEmail: email }));
                   if (errors.source)
                     setErrors((prev) => ({ ...prev, source: '' }));
                 }}
@@ -231,14 +290,31 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 onSelectAll={handleSelectAll}
                 onDeselectAll={handleDeselectAll}
                 error={errors.targets || null}
+                targetGroupId={formData.targetGroupId}
+                targetGroupName={formData.targetGroupName}
+                onTargetScopeChange={(groupId, groupName) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    targetGroupId: groupId,
+                    targetGroupName: groupName,
+                  }))
+                }
+                targetUserEmails={formData.targetUserEmails}
+                onTargetUserEmailsChange={(emails) =>
+                  setFormData((prev) => ({ ...prev, targetUserEmails: emails }))
+                }
               />
             )}
             {step === 3 && (
               <StepReview
                 name={formData.name}
+                sourceType={formData.sourceType}
                 ddg={formData.sourceDdg}
+                mailboxEmail={formData.sourceMailboxEmail}
                 targetListIds={formData.targetListIds}
                 onEdit={goToStep}
+                targetGroupName={formData.targetGroupName}
+                targetUserEmails={formData.targetUserEmails}
               />
             )}
           </div>

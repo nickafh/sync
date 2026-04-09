@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 interface SettingsCardProps {
   title: string;
   description: string;
-  onSave: () => void;
+  onSave?: () => void;
   isSaving?: boolean;
   children: ReactNode;
 }
@@ -37,15 +37,17 @@ export function SettingsCard({
         </CardDescription>
       </CardHeader>
       <CardContent>{children}</CardContent>
-      <CardFooter className="justify-end">
-        <Button
-          className="bg-gold text-white hover:bg-gold/90"
-          onClick={onSave}
-          disabled={isSaving}
-        >
-          {isSaving ? 'Saving...' : 'Save Settings'}
-        </Button>
-      </CardFooter>
+      {onSave && (
+        <CardFooter className="justify-end">
+          <Button
+            className="bg-gold text-white hover:bg-gold/90"
+            onClick={onSave}
+            disabled={isSaving}
+          >
+            {isSaving ? 'Saving...' : 'Save Settings'}
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   );
 }

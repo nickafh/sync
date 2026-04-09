@@ -3,10 +3,13 @@
 import { useState, useEffect } from 'react';
 import { useSettings, useUpdateSettings } from '@/hooks/use-settings';
 import { toast } from 'sonner';
+import { api } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
 import { SettingsCard } from '@/components/SettingsCard';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -18,26 +21,36 @@ import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 
-const cronPresets = [
+const scheduleOptions = [
   { label: 'Every 2 hours', value: '0 */2 * * *' },
   { label: 'Every 4 hours', value: '0 */4 * * *' },
   { label: 'Every 6 hours', value: '0 */6 * * *' },
+  { label: 'Every 8 hours', value: '0 */8 * * *' },
+  { label: 'Every 12 hours', value: '0 */12 * * *' },
   { label: 'Daily at midnight', value: '0 0 * * *' },
   { label: 'Daily at 6 AM', value: '0 6 * * *' },
 ];
 
-function describeCron(cron: string): string {
-  const map: Record<string, string> = {
-    '0 */2 * * *': 'Runs every 2 hours',
-    '0 */4 * * *': 'Runs every 4 hours',
-    '0 */6 * * *': 'Runs every 6 hours',
-    '0 0 * * *': 'Runs daily at midnight',
-    '0 6 * * *': 'Runs daily at 6 AM',
-    '0 */1 * * *': 'Runs every hour',
-    '0 */8 * * *': 'Runs every 8 hours',
-    '0 */12 * * *': 'Runs every 12 hours',
-  };
-  return map[cron] ?? `Custom schedule: ${cron}`;
+const photoSyncOptions = [
+  {
+    value: 'included',
+    label: 'Sync with contacts',
+    description: 'Photos are synced as part of the regular contact sync. Each run processes both contact data and photos together.',
+  },
+  {
+    value: 'separate_pass',
+    label: 'Separate photo pass',
+    description: 'Photos are synced in a separate pass after contact data. Reduces sync time when only contact fields changed.',
+  },
+  {
+    value: 'disabled',
+    label: 'Photos off',
+    description: 'Contact photos are not synced. Contacts will show initials only on phones.',
+  },
+];
+
+function isKnownSchedule(cron: string): boolean {
+  return scheduleOptions.some((opt) => opt.value === cron);
 }
 
 export default function SettingsPage() {
@@ -63,6 +76,10 @@ export default function SettingsPage() {
   const [stalePolicy, setStalePolicy] = useState('');
   const [staleHoldDays, setStaleHoldDays] = useState('');
   const [savingStale, setSavingStale] = useState(false);
+
+  // Maintenance
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   // Initialize from settings
   useEffect(() => {
@@ -133,6 +150,19 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleResetAllHashes() {
+    setResetting(true);
+    try {
+      const result = await api.sync.resetAllHashes();
+      toast.success(`Reset ${result.count} contact states. Run a sync to apply changes.`);
+      setResetDialogOpen(false);
+    } catch {
+      toast.error('Failed to reset hashes. Please try again.');
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function saveStalePolicy() {
     setSavingStale(true);
     try {
@@ -186,28 +216,50 @@ export default function SettingsPage() {
           isSaving={savingSchedule}
         >
           <div className="space-y-3">
-            <Label htmlFor="cron-expression">Cron Expression</Label>
-            <Input
-              id="cron-expression"
-              value={cronExpression}
-              onChange={(e) => setCronExpression(e.target.value)}
-              placeholder="0 */4 * * *"
-            />
-            <p className="text-sm text-text-muted">
-              {describeCron(cronExpression)}
-            </p>
-            <div className="flex flex-wrap gap-2 pt-1">
-              {cronPresets.map((preset) => (
+            <Label>Schedule</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {scheduleOptions.map((opt) => (
                 <button
-                  key={preset.value}
+                  key={opt.value}
                   type="button"
-                  className="text-xs text-gold hover:underline"
-                  onClick={() => setCronExpression(preset.value)}
+                  onClick={() => setCronExpression(opt.value)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                    cronExpression === opt.value
+                      ? 'border-gold bg-gold/10 text-navy font-medium'
+                      : 'border-input hover:border-gold/50'
+                  }`}
                 >
-                  {preset.label}
+                  {opt.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => {
+                  if (isKnownSchedule(cronExpression)) setCronExpression('');
+                }}
+                className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  !isKnownSchedule(cronExpression)
+                    ? 'border-gold bg-gold/10 text-navy font-medium'
+                    : 'border-input hover:border-gold/50'
+                }`}
+              >
+                Custom
+              </button>
             </div>
+            {!isKnownSchedule(cronExpression) && (
+              <div className="space-y-1">
+                <Label htmlFor="cron-expression">Cron Expression</Label>
+                <Input
+                  id="cron-expression"
+                  value={cronExpression}
+                  onChange={(e) => setCronExpression(e.target.value)}
+                  placeholder="0 */4 * * *"
+                />
+                <p className="text-xs text-text-muted">
+                  Standard cron format: minute hour day month weekday
+                </p>
+              </div>
+            )}
           </div>
         </SettingsCard>
 
@@ -220,21 +272,27 @@ export default function SettingsPage() {
         >
           <div className="space-y-3">
             <Label>Photo Sync Mode</Label>
-            <Select
-              value={photoSyncMode}
-              onValueChange={(val) => setPhotoSyncMode(val as string)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select mode" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="included">
-                  Included with Contact Sync
-                </SelectItem>
-                <SelectItem value="separate_pass">Separate Pass</SelectItem>
-                <SelectItem value="disabled">Disabled</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="space-y-2">
+              {photoSyncOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setPhotoSyncMode(opt.value)}
+                  className={`w-full rounded-lg border px-4 py-3 text-left transition-colors ${
+                    photoSyncMode === opt.value
+                      ? 'border-gold bg-gold/10'
+                      : 'border-input hover:border-gold/50'
+                  }`}
+                >
+                  <div className={`text-sm font-medium ${photoSyncMode === opt.value ? 'text-navy' : ''}`}>
+                    {opt.label}
+                  </div>
+                  <div className="text-xs text-text-muted mt-0.5">
+                    {opt.description}
+                  </div>
+                </button>
+              ))}
+            </div>
             {photoSyncMode === 'separate_pass' && (
               <div className="space-y-4 mt-4">
                 <Separator />
@@ -286,6 +344,9 @@ export default function SettingsPage() {
                   value={batchSize}
                   onChange={(e) => setBatchSize(e.target.value)}
                 />
+                <p className="text-xs text-text-muted">
+                  Number of contacts processed per Graph API call. Higher values are faster but increase memory usage. Recommended: 50.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="parallelism">Parallelism</Label>
@@ -297,12 +358,11 @@ export default function SettingsPage() {
                   value={parallelism}
                   onChange={(e) => setParallelism(e.target.value)}
                 />
+                <p className="text-xs text-text-muted">
+                  Number of user mailboxes processed simultaneously. Higher values are faster but increase Graph API load. Recommended: 4–8.
+                </p>
               </div>
             </div>
-            <p className="text-sm text-text-muted">
-              Batch size controls items per API batch. Parallelism controls
-              concurrent mailbox processing.
-            </p>
           </div>
         </SettingsCard>
 
@@ -372,7 +432,39 @@ export default function SettingsPage() {
             )}
           </div>
         </SettingsCard>
+
+        {/* Card 5: Maintenance */}
+        <SettingsCard
+          title="Maintenance"
+          description="System maintenance and troubleshooting tools."
+        >
+          <div className="space-y-2">
+            <Label>Force Full Re-Sync</Label>
+            <p className="text-sm text-text-muted">
+              Clears all cached data so the next sync re-writes every contact. Use after changing field behaviors or fixing data issues.
+            </p>
+            <Button
+              variant="destructive"
+              onClick={() => setResetDialogOpen(true)}
+              className="mt-2"
+            >
+              Force Full Re-Sync
+            </Button>
+          </div>
+        </SettingsCard>
       </div>
+
+      <ConfirmDialog
+        open={resetDialogOpen}
+        onOpenChange={setResetDialogOpen}
+        title="Force full re-sync"
+        description="This will cause the next sync run to re-write all contacts across all tunnels. This may take longer than usual. Continue?"
+        confirmLabel="Reset All Hashes"
+        dismissLabel="Cancel"
+        variant="destructive"
+        onConfirm={handleResetAllHashes}
+        isLoading={resetting}
+      />
     </div>
   );
 }

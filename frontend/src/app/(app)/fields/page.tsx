@@ -28,10 +28,26 @@ import { ContactCardPreview } from '@/components/ContactCardPreview';
 import type { FieldProfileDetailDto } from '@/types/field-profile';
 
 const behaviorOptions = [
-  { value: 'always', label: 'Always' },
-  { value: 'add_missing', label: 'Add if Missing' },
-  { value: 'nosync', label: 'Do Not Sync' },
-  { value: 'remove_blank', label: 'Remove if Blank' },
+  {
+    value: 'always',
+    label: 'Always keep updated',
+    description: 'This field is always synced. If the source value changes, the contact on the phone is updated.',
+  },
+  {
+    value: 'add_missing',
+    label: 'Set once, then leave alone',
+    description: 'This field is written when the contact is first created. After that, changes in the source are ignored.',
+  },
+  {
+    value: 'nosync',
+    label: "Don't sync this field",
+    description: 'This field is never written to the phone. If the contact already has a value, it will be cleared on next sync.',
+  },
+  {
+    value: 'remove_blank',
+    label: 'Sync, and clear if empty',
+    description: 'This field is always synced. If the source value becomes empty, the field is actively cleared on the phone.',
+  },
 ];
 
 export default function FieldProfilesPage() {
@@ -191,12 +207,20 @@ export default function FieldProfilesPage() {
                               )
                             }
                           >
-                            <SelectTrigger size="sm" className="w-[160px]">
+                            <SelectTrigger size="sm" className="w-[210px]">
                               <SelectValue />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent
+                              className="w-[340px]"
+                              align="end"
+                              alignItemWithTrigger={false}
+                            >
                               {behaviorOptions.map((opt) => (
-                                <SelectItem key={opt.value} value={opt.value}>
+                                <SelectItem
+                                  key={opt.value}
+                                  value={opt.value}
+                                  description={opt.description}
+                                >
                                   {opt.label}
                                 </SelectItem>
                               ))}

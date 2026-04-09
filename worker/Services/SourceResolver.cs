@@ -1,8 +1,11 @@
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
+using AFHSync.Shared.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using GraphContact = Microsoft.Graph.Models.Contact;
+using OrgContact = Microsoft.Graph.Models.OrgContact;
 
 namespace AFHSync.Worker.Services;
 
@@ -37,44 +40,80 @@ public class SourceResolver : ISourceResolver
     /// <summary>
     /// Resolves source members for the given tunnel: queries Graph for each source,
     /// combines results, applies post-query filtering, upserts to the database, and returns the filtered list.
+    /// Routes to different Graph endpoints based on SourceType (DDG vs MailboxContacts).
     /// </summary>
     public async Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
     {
         _logger.LogInformation("Resolving source members for tunnel {TunnelId} ({TunnelName}) with {SourceCount} source(s)",
             tunnel.Id, tunnel.Name, tunnel.TunnelSources.Count);
 
-        var allGraphUsers = new List<Microsoft.Graph.Models.User>();
+        var allSourceUsers = new List<SourceUser>();
+
         foreach (var source in tunnel.TunnelSources)
         {
-            var graphUsers = await FetchGraphUsersAsync(source.SourceIdentifier, ct);
-            _logger.LogDebug("Fetched {Count} users from Graph for source {SourceId} ({SourceName})",
-                graphUsers.Count, source.Id, source.SourceDisplayName);
-            allGraphUsers.AddRange(graphUsers);
+            switch (source.SourceType)
+            {
+                case SourceType.Ddg:
+                {
+                    var graphUsers = await FetchGraphUsersAsync(source.SourceIdentifier, ct);
+                    _logger.LogDebug("Fetched {Count} users from Graph for DDG source {SourceId} ({SourceName})",
+                        graphUsers.Count, source.Id, source.SourceDisplayName);
+
+                    var mapped = graphUsers.Select(MapGraphUserToSourceUser).ToList();
+                    var filtered = ApplySourceFiltersWithLogging(mapped);
+
+                    _logger.LogInformation(
+                        "DDG source {SourceId}: {TotalCount} Graph users -> {FilteredCount} after source filtering",
+                        source.Id, mapped.Count, filtered.Count);
+
+                    allSourceUsers.AddRange(filtered);
+                    break;
+                }
+
+                case SourceType.MailboxContacts:
+                {
+                    var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, ct);
+                    _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} for source {SourceId}",
+                        contacts.Count, source.SourceIdentifier, source.Id);
+                    allSourceUsers.AddRange(contacts);
+                    break;
+                }
+
+                case SourceType.OrgContacts:
+                {
+                    var orgContacts = await FetchOrgContactsAsync(ct);
+                    _logger.LogDebug("Fetched {Count} org contacts from Graph for source {SourceId}",
+                        orgContacts.Count, source.Id);
+
+                    // Apply exclusion filters from the org_contact_filters table
+                    var excludedIds = await GetExcludedOrgContactIdsAsync(tunnel.Id, ct);
+                    var filtered = excludedIds.Count > 0
+                        ? orgContacts.Where(c => !excludedIds.Contains(c.EntraId)).ToList()
+                        : orgContacts;
+
+                    _logger.LogInformation(
+                        "OrgContacts source {SourceId}: {TotalCount} org contacts -> {FilteredCount} after exclusion filters",
+                        source.Id, orgContacts.Count, filtered.Count);
+
+                    allSourceUsers.AddRange(filtered);
+                    break;
+                }
+            }
         }
 
-        // Deduplicate by Graph user ID across multiple sources
-        var deduped = allGraphUsers
-            .GroupBy(u => u.Id)
+        // Deduplicate by EntraId across multiple sources
+        var deduped = allSourceUsers
+            .GroupBy(u => u.EntraId)
             .Select(g => g.First())
             .ToList();
 
-        _logger.LogDebug("Total {RawCount} users from all sources, {DedupedCount} after dedup",
-            allGraphUsers.Count, deduped.Count);
+        _logger.LogDebug("Total {RawCount} source users from all sources, {DedupedCount} after dedup",
+            allSourceUsers.Count, deduped.Count);
 
-        var sourceUsers = deduped
-            .Select(MapGraphUserToSourceUser)
-            .ToList();
-
-        var filtered = ApplySourceFiltersWithLogging(sourceUsers);
-
-        _logger.LogInformation(
-            "Tunnel {TunnelId}: {TotalCount} Graph users -> {FilteredCount} after source filtering",
-            tunnel.Id, sourceUsers.Count, filtered.Count);
-
-        await UpsertSourceUsersAsync(filtered, ct);
+        await UpsertSourceUsersAsync(deduped, ct);
 
         // Reload from DB to get actual IDs (raw SQL upsert doesn't populate in-memory IDs)
-        var entraIds = filtered.Select(u => u.EntraId).ToList();
+        var entraIds = deduped.Select(u => u.EntraId).ToList();
         await using var reloadDb = await _dbContextFactory.CreateDbContextAsync(ct);
         var reloaded = await reloadDb.SourceUsers
             .Where(u => entraIds.Contains(u.EntraId))
@@ -136,6 +175,82 @@ public class SourceResolver : ISourceResolver
 
         await pageIterator.IterateAsync(ct);
         return users;
+    }
+
+    /// <summary>
+    /// Queries Graph /users/{mailboxEmail}/contacts to read contacts from a shared mailbox's
+    /// Contacts folder, handling pagination via PageIterator.
+    /// Returns already-mapped SourceUser entities (no DDG-specific filtering applied).
+    /// </summary>
+    private async Task<List<SourceUser>> FetchMailboxContactsAsync(string mailboxEmail, CancellationToken ct)
+    {
+        var sourceUsers = new List<SourceUser>();
+        var client = _graphClientFactory.Client;
+
+        var response = await client.Users[mailboxEmail].Contacts.GetAsync(config =>
+        {
+            config.QueryParameters.Select =
+            [
+                "id", "displayName", "givenName", "surname", "emailAddresses",
+                "businessPhones", "mobilePhone", "jobTitle", "department",
+                "companyName", "businessAddress", "personalNotes"
+            ];
+            config.QueryParameters.Top = 999;
+        }, ct);
+
+        if (response == null)
+            return sourceUsers;
+
+        var pageIterator = PageIterator<GraphContact, ContactCollectionResponse>
+            .CreatePageIterator(
+                client,
+                response,
+                contact =>
+                {
+                    sourceUsers.Add(MapGraphContactToSourceUser(contact));
+                    return true;
+                });
+
+        await pageIterator.IterateAsync(ct);
+        return sourceUsers;
+    }
+
+    /// <summary>
+    /// Maps a Graph Contact object (from a shared mailbox) to a SourceUser entity.
+    /// Graph Contacts have different properties than User objects:
+    /// - emailAddresses (array) instead of mail/proxyAddresses
+    /// - businessAddress (object) instead of flat street/city/state fields
+    /// - personalNotes maps directly to Notes (not via extensionAttribute5)
+    /// - No accountEnabled, userType, showInAddressList, or extensionAttributes
+    /// </summary>
+    public static SourceUser MapGraphContactToSourceUser(GraphContact contact)
+    {
+        var email = contact.EmailAddresses?.FirstOrDefault()?.Address;
+
+        return new SourceUser
+        {
+            EntraId = contact.Id ?? string.Empty,
+            DisplayName = contact.DisplayName,
+            FirstName = contact.GivenName,
+            LastName = contact.Surname,
+            Email = email,
+            BusinessPhone = contact.BusinessPhones?.FirstOrDefault(),
+            MobilePhone = contact.MobilePhone,
+            JobTitle = contact.JobTitle,
+            Department = contact.Department,
+            CompanyName = contact.CompanyName,
+            StreetAddress = contact.BusinessAddress?.Street,
+            City = contact.BusinessAddress?.City,
+            State = contact.BusinessAddress?.State,
+            PostalCode = contact.BusinessAddress?.PostalCode,
+            Country = contact.BusinessAddress?.CountryOrRegion,
+            Notes = contact.PersonalNotes,
+            IsEnabled = true,
+            MailboxType = "MailboxContact",
+            LastFetchedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
     }
 
     /// <summary>
@@ -267,6 +382,100 @@ public class SourceResolver : ISourceResolver
         var localPart = email.Split('@')[0];
         return ServiceAccountPrefixes.Any(prefix =>
             localPart.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Queries Graph /contacts to fetch all tenant organizational contacts (external contacts
+    /// managed in Exchange Admin Center). These are NOT user accounts — they are MailContact
+    /// objects with different properties than Entra users.
+    /// No profile photos, no extensionAttributes, no officeLocation, no accountEnabled.
+    /// </summary>
+    private async Task<List<SourceUser>> FetchOrgContactsAsync(CancellationToken ct)
+    {
+        var sourceUsers = new List<SourceUser>();
+        var client = _graphClientFactory.Client;
+
+        var response = await client.Contacts.GetAsync(config =>
+        {
+            config.QueryParameters.Select =
+            [
+                "id", "displayName", "givenName", "surname", "mail",
+                "phones", "addresses", "companyName", "department", "jobTitle"
+            ];
+            config.QueryParameters.Top = 999;
+        }, ct);
+
+        if (response == null)
+            return sourceUsers;
+
+        var pageIterator = PageIterator<OrgContact, OrgContactCollectionResponse>
+            .CreatePageIterator(
+                client,
+                response,
+                orgContact =>
+                {
+                    sourceUsers.Add(MapOrgContactToSourceUser(orgContact));
+                    return true;
+                });
+
+        await pageIterator.IterateAsync(ct);
+        return sourceUsers;
+    }
+
+    /// <summary>
+    /// Maps a Graph OrgContact object to a SourceUser entity.
+    /// OrgContacts have different property shapes than Users or mailbox Contacts:
+    /// - phones (collection of Phone with type/number) instead of businessPhones/mobilePhone
+    /// - addresses (collection of PhysicalOfficeAddress) instead of flat street/city/state
+    /// - No extensionAttributes, officeLocation, accountEnabled, or photos
+    /// </summary>
+    public static SourceUser MapOrgContactToSourceUser(OrgContact orgContact)
+    {
+        var businessPhone = orgContact.Phones?
+            .FirstOrDefault(p => string.Equals(p.Type?.ToString(), "business", StringComparison.OrdinalIgnoreCase))?.Number;
+        var mobilePhone = orgContact.Phones?
+            .FirstOrDefault(p => string.Equals(p.Type?.ToString(), "mobile", StringComparison.OrdinalIgnoreCase))?.Number;
+        // Fall back to first available phone if no business phone
+        businessPhone ??= orgContact.Phones?.FirstOrDefault()?.Number;
+
+        var address = orgContact.Addresses?.FirstOrDefault();
+
+        return new SourceUser
+        {
+            EntraId = orgContact.Id ?? string.Empty,
+            DisplayName = orgContact.DisplayName,
+            FirstName = orgContact.GivenName,
+            LastName = orgContact.Surname,
+            Email = orgContact.Mail,
+            BusinessPhone = businessPhone,
+            MobilePhone = mobilePhone,
+            JobTitle = orgContact.JobTitle,
+            Department = orgContact.Department,
+            CompanyName = orgContact.CompanyName,
+            StreetAddress = address?.Street,
+            City = address?.City,
+            State = address?.State,
+            PostalCode = address?.PostalCode,
+            Country = address?.CountryOrRegion,
+            IsEnabled = true,
+            MailboxType = "OrgContact",
+            LastFetchedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+    }
+
+    /// <summary>
+    /// Returns the set of org contact IDs that are excluded for a given tunnel.
+    /// </summary>
+    private async Task<HashSet<string>> GetExcludedOrgContactIdsAsync(int tunnelId, CancellationToken ct)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
+        var excludedIds = await db.OrgContactFilters
+            .Where(f => f.TunnelId == tunnelId && f.IsExcluded)
+            .Select(f => f.OrgContactId)
+            .ToListAsync(ct);
+        return excludedIds.ToHashSet();
     }
 
     /// <summary>

@@ -31,6 +31,9 @@ export interface TunnelDto {
   estimatedTargetUsers: number;
   lastSync: TunnelLastSyncDto | null;
   photoSyncEnabled: boolean;
+  targetGroupId: string | null;
+  targetGroupName: string | null;
+  targetUserEmails: string | null;
 }
 
 export interface TunnelDetailDto {
@@ -46,6 +49,9 @@ export interface TunnelDetailDto {
   createdAt: string;
   updatedAt: string;
   photoSyncEnabled: boolean;
+  targetGroupId: string | null;
+  targetGroupName: string | null;
+  targetUserEmails: string | null;
 }
 
 export interface TunnelTargetListDto {
@@ -67,6 +73,9 @@ export interface UpdateTunnelRequest {
   stalePolicy: StalePolicy;
   staleDays: number;
   photoSyncEnabled?: boolean;
+  targetGroupId?: string | null;
+  targetGroupName?: string | null;
+  targetUserEmails?: string | null;
 }
 
 export interface StatusUpdateRequest {
@@ -81,6 +90,16 @@ export interface CreateTunnelRequest {
   stalePolicy: StalePolicy;
   staleDays: number;
   photoSyncEnabled?: boolean;
+  targetGroupId?: string | null;
+  targetGroupName?: string | null;
+  targetUserEmails?: string | null;
+}
+
+export interface SecurityGroupDto {
+  id: string;
+  displayName: string;
+  description: string | null;
+  membershipRule: string | null;
 }
 
 export interface ImpactPreviewResponse {
@@ -93,4 +112,30 @@ export interface RefreshDdgResponse {
   message: string;
   graphFilter: string | null;
   filterPlain: string | null;
+}
+
+export interface OrgContactDto {
+  id: string;
+  displayName: string | null;
+  email: string | null;
+  companyName: string | null;
+  department: string | null;
+  jobTitle: string | null;
+  businessPhone: string | null;
+  isExcluded: boolean;
+}
+
+export interface OrgContactFilterInput {
+  orgContactId: string;
+  displayName: string | null;
+  email: string | null;
+  companyName: string | null;
+  isExcluded: boolean;
+}
+
+export interface UserSearchResult {
+  id: string;
+  displayName: string;
+  email: string;
+  jobTitle: string | null;
 }

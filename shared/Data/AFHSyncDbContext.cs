@@ -19,6 +19,7 @@ public class AFHSyncDbContext : DbContext
     public DbSet<ContactSyncState> ContactSyncStates => Set<ContactSyncState>();
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
     public DbSet<SyncRunItem> SyncRunItems => Set<SyncRunItem>();
+    public DbSet<OrgContactFilter> OrgContactFilters => Set<OrgContactFilter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

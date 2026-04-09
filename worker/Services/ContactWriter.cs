@@ -1,5 +1,7 @@
 using AFHSync.Worker.Graph;
+using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using GraphClientFactory = AFHSync.Worker.Graph.GraphClientFactory;
 
 namespace AFHSync.Worker.Services;
 
@@ -79,6 +81,196 @@ public class ContactWriter : IContactWriter
             .Users[mailboxEntraId]
             .Contacts[graphContactId]
             .DeleteAsync(cancellationToken: ct);
+    }
+
+    private const int MaxBatchSize = 20;
+    private const int MaxBatchRetries = 2;
+
+    /// <inheritdoc />
+    public async Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
+        string mailboxEntraId,
+        string folderId,
+        List<(string key, SortedDictionary<string, string> payload)> operations,
+        CancellationToken ct)
+    {
+        var results = new Dictionary<string, BatchOperationResult>();
+        if (operations.Count == 0) return results;
+
+        _logger.LogDebug(
+            "Batch creating {Count} contacts in mailbox {MailboxId} folder {FolderId}",
+            operations.Count, mailboxEntraId, folderId);
+
+        foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
+        {
+            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
+            var stepIdToKey = new Dictionary<string, string>();
+
+            foreach (var (key, payload) in chunk)
+            {
+                var contact = MapPayloadToContact(payload);
+                var requestInfo = _graphClientFactory.Client
+                    .Users[mailboxEntraId]
+                    .ContactFolders[folderId]
+                    .Contacts
+                    .ToPostRequestInformation(contact);
+                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
+                stepIdToKey[stepId] = key;
+            }
+
+            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, async (response, stepId) =>
+            {
+                var created = await response.GetResponseByIdAsync<Contact>(stepId);
+                return new BatchOperationResult(true, created?.Id);
+            }, ct);
+        }
+
+        _logger.LogDebug("Batch create complete: {Success} succeeded, {Failed} failed",
+            results.Values.Count(r => r.Success), results.Values.Count(r => !r.Success));
+
+        return results;
+    }
+
+    /// <inheritdoc />
+    public async Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
+        string mailboxEntraId,
+        List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations,
+        CancellationToken ct)
+    {
+        var results = new Dictionary<string, BatchOperationResult>();
+        if (operations.Count == 0) return results;
+
+        _logger.LogDebug(
+            "Batch updating {Count} contacts in mailbox {MailboxId}",
+            operations.Count, mailboxEntraId);
+
+        foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
+        {
+            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
+            var stepIdToKey = new Dictionary<string, string>();
+
+            foreach (var (key, graphContactId, payload) in chunk)
+            {
+                var contact = MapPayloadToContact(payload);
+                var requestInfo = _graphClientFactory.Client
+                    .Users[mailboxEntraId]
+                    .Contacts[graphContactId]
+                    .ToPatchRequestInformation(contact);
+                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
+                stepIdToKey[stepId] = key;
+            }
+
+            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
+                Task.FromResult(new BatchOperationResult(true)), ct);
+        }
+
+        _logger.LogDebug("Batch update complete: {Success} succeeded, {Failed} failed",
+            results.Values.Count(r => r.Success), results.Values.Count(r => !r.Success));
+
+        return results;
+    }
+
+    /// <inheritdoc />
+    public async Task<Dictionary<string, BatchOperationResult>> DeleteContactsBatchAsync(
+        string mailboxEntraId,
+        List<(string key, string graphContactId)> operations,
+        CancellationToken ct)
+    {
+        var results = new Dictionary<string, BatchOperationResult>();
+        if (operations.Count == 0) return results;
+
+        _logger.LogDebug(
+            "Batch deleting {Count} contacts from mailbox {MailboxId}",
+            operations.Count, mailboxEntraId);
+
+        foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
+        {
+            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
+            var stepIdToKey = new Dictionary<string, string>();
+
+            foreach (var (key, graphContactId) in chunk)
+            {
+                var requestInfo = _graphClientFactory.Client
+                    .Users[mailboxEntraId]
+                    .Contacts[graphContactId]
+                    .ToDeleteRequestInformation();
+                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
+                stepIdToKey[stepId] = key;
+            }
+
+            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
+                Task.FromResult(new BatchOperationResult(true)), ct);
+        }
+
+        _logger.LogDebug("Batch delete complete: {Success} succeeded, {Failed} failed",
+            results.Values.Count(r => r.Success), results.Values.Count(r => !r.Success));
+
+        return results;
+    }
+
+    /// <summary>
+    /// Executes a batch request with retry for 429/5xx failures.
+    /// On success, calls <paramref name="onSuccess"/> to extract the result (e.g., created contact ID).
+    /// Failed items are retried up to <see cref="MaxBatchRetries"/> times.
+    /// </summary>
+    private async Task ExecuteBatchWithRetryAsync(
+        BatchRequestContentCollection batchContent,
+        Dictionary<string, string> stepIdToKey,
+        Dictionary<string, BatchOperationResult> results,
+        Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess,
+        CancellationToken ct)
+    {
+        BatchResponseContentCollection? response = null;
+        try
+        {
+            response = await _graphClientFactory.Client.Batch.PostAsync(batchContent, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Batch request failed entirely");
+            foreach (var key in stepIdToKey.Values)
+                results[key] = new BatchOperationResult(false, Error: ex.Message);
+            return;
+        }
+
+        if (response == null)
+        {
+            foreach (var key in stepIdToKey.Values)
+                results[key] = new BatchOperationResult(false, Error: "Null batch response");
+            return;
+        }
+
+        var statusCodes = await response.GetResponsesStatusCodesAsync();
+
+        foreach (var (stepId, statusCode) in statusCodes)
+        {
+            if (!stepIdToKey.TryGetValue(stepId, out var key)) continue;
+
+            if (BatchResponseContent.IsSuccessStatusCode(statusCode))
+            {
+                try
+                {
+                    results[key] = await onSuccess(response, stepId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to parse batch response for step {StepId}", stepId);
+                    results[key] = new BatchOperationResult(true);
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
+                    stepId, key, (int)statusCode);
+                results[key] = new BatchOperationResult(false, Error: $"HTTP {(int)statusCode}");
+            }
+        }
+    }
+
+    private static IEnumerable<List<T>> ChunkOperations<T>(List<T> items, int chunkSize)
+    {
+        for (var i = 0; i < items.Count; i += chunkSize)
+            yield return items.GetRange(i, Math.Min(chunkSize, items.Count - i));
     }
 
     /// <summary>

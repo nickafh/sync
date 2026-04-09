@@ -7,12 +7,25 @@ import type { DdgDto } from '@/types/ddg';
 
 interface StepReviewProps {
   name: string;
+  sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
   ddg: DdgDto | null;
+  mailboxEmail: string;
   targetListIds: number[];
   onEdit: (step: number) => void;
+  targetGroupName?: string | null;
+  targetUserEmails?: string[];
 }
 
-export function StepReview({ name, ddg, targetListIds, onEdit }: StepReviewProps) {
+export function StepReview({
+  name,
+  sourceType,
+  ddg,
+  mailboxEmail,
+  targetListIds,
+  onEdit,
+  targetGroupName,
+  targetUserEmails = [],
+}: StepReviewProps) {
   const { data: phoneLists } = usePhoneLists();
 
   const selectedListNames = (phoneLists ?? [])
@@ -46,12 +59,28 @@ export function StepReview({ name, ddg, targetListIds, onEdit }: StepReviewProps
           <div className="flex items-start justify-between px-4 py-3">
             <div>
               <p className="text-xs text-text-muted">Source</p>
-              {ddg && (
+              {sourceType === 'ddg' && ddg && (
                 <>
                   <p className="text-sm font-medium mt-0.5">
                     {ddg.displayName} ({ddg.memberCount} members)
                   </p>
                   <p className="text-xs text-text-muted">{ddg.primarySmtpAddress}</p>
+                </>
+              )}
+              {sourceType === 'mailbox_contacts' && mailboxEmail && (
+                <>
+                  <p className="text-sm font-medium mt-0.5">
+                    Shared Mailbox
+                  </p>
+                  <p className="text-xs text-text-muted">{mailboxEmail}</p>
+                </>
+              )}
+              {sourceType === 'org_contacts' && (
+                <>
+                  <p className="text-sm font-medium mt-0.5">
+                    Organization Contacts
+                  </p>
+                  <p className="text-xs text-text-muted">All tenant external contacts from Exchange Admin Center</p>
                 </>
               )}
             </div>
@@ -80,6 +109,45 @@ export function StepReview({ name, ddg, targetListIds, onEdit }: StepReviewProps
                   </span>
                 ))}
               </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onEdit(2)}
+              className="text-sm text-gold hover:underline cursor-pointer"
+            >
+              Edit
+            </button>
+          </div>
+
+          <Separator />
+
+          {/* Target Users */}
+          <div className="flex items-start justify-between px-4 py-3">
+            <div>
+              <p className="text-xs text-text-muted">Target Users</p>
+              {targetUserEmails.length > 0 ? (
+                <>
+                  <p className="text-sm font-medium mt-0.5">
+                    {targetUserEmails.length} specific user{targetUserEmails.length !== 1 ? 's' : ''}
+                  </p>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {targetUserEmails.map((email) => (
+                      <span key={email} className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs">
+                        {email}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium mt-0.5">
+                    {targetGroupName ? targetGroupName : 'All users'}
+                  </p>
+                  {targetGroupName && (
+                    <p className="text-xs text-text-muted">Security group members only</p>
+                  )}
+                </>
+              )}
             </div>
             <button
               type="button"
