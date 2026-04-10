@@ -500,85 +500,65 @@ public class SourceResolver : ISourceResolver
         if (users.Count == 0)
             return;
 
-        const int batchSize = 25;
-        const int colCount = 26;
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
 
-        for (int offset = 0; offset < users.Count; offset += batchSize)
+        const string sql = """
+            INSERT INTO source_users (
+                entra_id, display_name, first_name, last_name, email,
+                business_phone, mobile_phone, job_title, department,
+                office_location, company_name, street_address, city,
+                state, postal_code, country, notes, is_enabled, mailbox_type,
+                extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
+                last_fetched_at, created_at, updated_at
+            ) VALUES (
+                {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12},
+                {13}, {14}, {15}, {16}, {17}, {18}, {19}, {20}, {21}, {22}, {23}, {24}, {25}
+            )
+            ON CONFLICT (entra_id) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                first_name = EXCLUDED.first_name,
+                last_name = EXCLUDED.last_name,
+                email = EXCLUDED.email,
+                business_phone = EXCLUDED.business_phone,
+                mobile_phone = EXCLUDED.mobile_phone,
+                job_title = EXCLUDED.job_title,
+                department = EXCLUDED.department,
+                office_location = EXCLUDED.office_location,
+                company_name = EXCLUDED.company_name,
+                street_address = EXCLUDED.street_address,
+                city = EXCLUDED.city,
+                state = EXCLUDED.state,
+                postal_code = EXCLUDED.postal_code,
+                country = EXCLUDED.country,
+                notes = EXCLUDED.notes,
+                is_enabled = EXCLUDED.is_enabled,
+                mailbox_type = EXCLUDED.mailbox_type,
+                extension_attr_1 = EXCLUDED.extension_attr_1,
+                extension_attr_2 = EXCLUDED.extension_attr_2,
+                extension_attr_3 = EXCLUDED.extension_attr_3,
+                extension_attr_4 = EXCLUDED.extension_attr_4,
+                last_fetched_at = EXCLUDED.last_fetched_at,
+                updated_at = EXCLUDED.updated_at
+            """;
+
+        foreach (var user in users)
         {
-            // Per-batch dedup: PostgreSQL rejects ON CONFLICT DO UPDATE hitting the same row twice
-            var batch = users.Skip(offset).Take(batchSize)
-                .GroupBy(u => u.EntraId, StringComparer.OrdinalIgnoreCase)
-                .Select(g => g.First())
-                .ToList();
-            var sql = new System.Text.StringBuilder();
-            sql.AppendLine("""
-                INSERT INTO source_users (
-                    entra_id, display_name, first_name, last_name, email,
-                    business_phone, mobile_phone, job_title, department,
-                    office_location, company_name, street_address, city,
-                    state, postal_code, country, notes, is_enabled, mailbox_type,
-                    extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
-                    last_fetched_at, created_at, updated_at
-                ) VALUES
-                """);
-
-            var parameters = new List<object?>();
-            for (int i = 0; i < batch.Count; i++)
-            {
-                if (i > 0) sql.AppendLine(",");
-                var p = i * colCount;
-                sql.Append($"({{{p}}}, {{{p+1}}}, {{{p+2}}}, {{{p+3}}}, {{{p+4}}}, {{{p+5}}}, {{{p+6}}}, {{{p+7}}}, {{{p+8}}}, {{{p+9}}}, {{{p+10}}}, {{{p+11}}}, {{{p+12}}}, {{{p+13}}}, {{{p+14}}}, {{{p+15}}}, {{{p+16}}}, {{{p+17}}}, {{{p+18}}}, {{{p+19}}}, {{{p+20}}}, {{{p+21}}}, {{{p+22}}}, {{{p+23}}}, {{{p+24}}}, {{{p+25}}})");
-
-                var user = batch[i];
-                parameters.AddRange([
-                    Trunc(user.EntraId, 100), (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
-                    (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
-                    (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
-                    (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
-                    (object?)Trunc(user.OfficeLocation, 100), (object?)Trunc(user.CompanyName, 200),
-                    (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
-                    (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
-                    (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
-                    (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
-                    (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
-                    user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
-                ]);
-            }
-
-            sql.AppendLine("""
-
-                ON CONFLICT (entra_id) DO UPDATE SET
-                    display_name = EXCLUDED.display_name,
-                    first_name = EXCLUDED.first_name,
-                    last_name = EXCLUDED.last_name,
-                    email = EXCLUDED.email,
-                    business_phone = EXCLUDED.business_phone,
-                    mobile_phone = EXCLUDED.mobile_phone,
-                    job_title = EXCLUDED.job_title,
-                    department = EXCLUDED.department,
-                    office_location = EXCLUDED.office_location,
-                    company_name = EXCLUDED.company_name,
-                    street_address = EXCLUDED.street_address,
-                    city = EXCLUDED.city,
-                    state = EXCLUDED.state,
-                    postal_code = EXCLUDED.postal_code,
-                    country = EXCLUDED.country,
-                    notes = EXCLUDED.notes,
-                    is_enabled = EXCLUDED.is_enabled,
-                    mailbox_type = EXCLUDED.mailbox_type,
-                    extension_attr_1 = EXCLUDED.extension_attr_1,
-                    extension_attr_2 = EXCLUDED.extension_attr_2,
-                    extension_attr_3 = EXCLUDED.extension_attr_3,
-                    extension_attr_4 = EXCLUDED.extension_attr_4,
-                    last_fetched_at = EXCLUDED.last_fetched_at,
-                    updated_at = EXCLUDED.updated_at
-                """);
-
-            await db.Database.ExecuteSqlRawAsync(sql.ToString(), parameters.ToArray()!, ct);
+            await db.Database.ExecuteSqlRawAsync(sql, [
+                Trunc(user.EntraId, 100)!, (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
+                (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
+                (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
+                (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
+                (object?)Trunc(user.OfficeLocation, 100), (object?)Trunc(user.CompanyName, 200),
+                (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
+                (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
+                (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
+                (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
+                (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
+                user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
+            ], ct);
         }
 
-        _logger.LogDebug("Upserted {Count} source users to database in batches of {BatchSize}", users.Count, batchSize);
+        _logger.LogDebug("Upserted {Count} source users to database", users.Count);
     }
 
     private static string? Trunc(string? value, int maxLength) =>
