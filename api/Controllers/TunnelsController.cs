@@ -464,6 +464,22 @@ public class TunnelsController : ControllerBase
             conversionResult.Filter,
             _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter)));
     }
+
+    /// <summary>
+    /// GET /api/tunnels/target-mailboxes — List all active target mailboxes for the mailbox picker.
+    /// </summary>
+    [HttpGet("target-mailboxes")]
+    public async Task<IActionResult> GetTargetMailboxes()
+    {
+        var mailboxes = await _db.TargetMailboxes
+            .Where(m => m.IsActive)
+            .OrderBy(m => m.DisplayName)
+            .Select(m => new TargetMailboxDto(m.Id, m.Email, m.DisplayName))
+            .ToListAsync();
+
+        return Ok(mailboxes);
+    }
 }
 
 public record StatusUpdateRequest(string Status);
+public record TargetMailboxDto(int Id, string Email, string? DisplayName);

@@ -72,6 +72,8 @@ export const api = {
       fetchApi<RefreshDdgResponse>(`/tunnels/${id}/sources/${sourceId}/refresh-ddg`, { method: 'POST' }),
     resetHashes: (id: number) =>
       fetchApi<{ count: number; message: string }>(`/tunnels/${id}/reset-hashes`, { method: 'POST' }),
+    targetMailboxes: () =>
+      fetchApi<{ id: number; email: string; displayName: string | null }[]>('/tunnels/target-mailboxes'),
   },
 
   syncRuns: {

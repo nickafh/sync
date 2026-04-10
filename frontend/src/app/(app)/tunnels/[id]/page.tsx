@@ -99,7 +99,14 @@ export default function TunnelDetailPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: targetMailboxes } = useQuery({
+    queryKey: ['target-mailboxes'],
+    queryFn: () => api.tunnels.targetMailboxes(),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const [isEditing, setIsEditing] = useState(false);
+  const [mailboxSearch, setMailboxSearch] = useState('');
 
   const [ddgPickerOpen, setDdgPickerOpen] = useState(false);
   const [addSourceType, setAddSourceType] = useState<'ddg' | 'mailbox_contacts' | 'org_contacts'>('ddg');
@@ -616,42 +623,135 @@ export default function TunnelDetailPage() {
           </CardHeader>
           <CardContent>
             {isEditing ? (
-              <div className="space-y-2">
-                <p className="text-sm text-text-muted">
-                  Select which target receives contacts from this tunnel. Manage targets on the{' '}
-                  <a href="/lists" className="text-gold hover:underline">Targets page</a>.
-                </p>
-                <div className="space-y-2 mt-1">
-                  {phoneLists?.map((list) => (
-                    <label
-                      key={list.id}
-                      className="flex items-center gap-2 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={editForm.targetListIds.includes(list.id)}
-                        onChange={() =>
-                          setEditForm((prev) => ({
-                            ...prev,
-                            targetListIds: prev.targetListIds.includes(list.id)
-                              ? prev.targetListIds.filter((id) => id !== list.id)
-                              : [...prev.targetListIds, list.id],
-                          }))
-                        }
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-sm">{list.name}</span>
-                    </label>
-                  ))}
-                  {!phoneLists?.length && (
-                    <p className="text-sm text-text-muted">
-                      No targets available. <a href="/lists" className="text-gold hover:underline">Create one</a>.
-                    </p>
-                  )}
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-text-muted">
+                    Select which target receives contacts from this tunnel. Manage targets on the{' '}
+                    <a href="/lists" className="text-gold hover:underline">Targets page</a>.
+                  </p>
+                  <div className="space-y-2 mt-2">
+                    {phoneLists?.map((list) => (
+                      <label
+                        key={list.id}
+                        className="flex items-center gap-2 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={editForm.targetListIds.includes(list.id)}
+                          onChange={() =>
+                            setEditForm((prev) => ({
+                              ...prev,
+                              targetListIds: prev.targetListIds.includes(list.id)
+                                ? prev.targetListIds.filter((id) => id !== list.id)
+                                : [...prev.targetListIds, list.id],
+                            }))
+                          }
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm">{list.name}</span>
+                      </label>
+                    ))}
+                    {!phoneLists?.length && (
+                      <p className="text-sm text-text-muted">
+                        No targets available. <a href="/lists" className="text-gold hover:underline">Create one</a>.
+                      </p>
+                    )}
+                  </div>
                 </div>
+
+                <Separator />
+
+                {/* Target Scope */}
+                <div>
+                  <label className="text-sm font-normal uppercase tracking-wide text-text-muted">
+                    Target Scope
+                  </label>
+                  <Select
+                    value={editForm.targetUserEmails ? 'specific' : 'all'}
+                    onValueChange={(val) => {
+                      if (val === 'all') {
+                        setEditForm((prev) => ({ ...prev, targetUserEmails: null }));
+                      } else {
+                        setEditForm((prev) => ({ ...prev, targetUserEmails: '[]' }));
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Users</SelectItem>
+                      <SelectItem value="specific">Specific Users</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {editForm.targetUserEmails !== null && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-text-muted">
+                      {(() => {
+                        const selected: string[] = JSON.parse(editForm.targetUserEmails || '[]');
+                        return `${selected.length} user(s) selected`;
+                      })()}
+                    </p>
+                    <Input
+                      placeholder="Search mailboxes..."
+                      value={mailboxSearch}
+                      onChange={(e) => setMailboxSearch(e.target.value)}
+                    />
+                    <div className="border rounded-lg divide-y max-h-[300px] overflow-y-auto">
+                      {targetMailboxes
+                        ?.filter((m) => {
+                          if (!mailboxSearch.trim()) return true;
+                          const q = mailboxSearch.toLowerCase();
+                          return (
+                            m.email.toLowerCase().includes(q) ||
+                            m.displayName?.toLowerCase().includes(q)
+                          );
+                        })
+                        .map((mailbox) => {
+                          const selected: string[] = JSON.parse(editForm.targetUserEmails || '[]');
+                          const isSelected = selected.some(
+                            (e) => e.toLowerCase() === mailbox.email.toLowerCase()
+                          );
+                          return (
+                            <label
+                              key={mailbox.id}
+                              className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors ${
+                                !isSelected ? 'opacity-50' : ''
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  setEditForm((prev) => {
+                                    const current: string[] = JSON.parse(prev.targetUserEmails || '[]');
+                                    const next = isSelected
+                                      ? current.filter((e) => e.toLowerCase() !== mailbox.email.toLowerCase())
+                                      : [...current, mailbox.email];
+                                    return { ...prev, targetUserEmails: JSON.stringify(next) };
+                                  });
+                                }}
+                                className="rounded"
+                              />
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">
+                                  {mailbox.displayName || mailbox.email}
+                                </p>
+                                {mailbox.displayName && (
+                                  <p className="text-xs text-text-muted truncate">{mailbox.email}</p>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <div>
+              <div className="space-y-3">
                 <div className="flex flex-wrap gap-2">
                   {tunnel.targetLists.length > 0 ? (
                     tunnel.targetLists.map((list) => (
@@ -668,6 +768,21 @@ export default function TunnelDetailPage() {
                     </p>
                   )}
                 </div>
+                {tunnel.targetUserEmails && (
+                  <div>
+                    <p className="text-xs font-normal uppercase tracking-wide text-text-muted mb-1">Scoped to</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(JSON.parse(tunnel.targetUserEmails) as string[]).map((email) => (
+                        <span
+                          key={email}
+                          className="inline-flex items-center rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold"
+                        >
+                          {email}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
