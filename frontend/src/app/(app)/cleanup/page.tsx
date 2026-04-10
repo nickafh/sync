@@ -69,14 +69,7 @@ export default function CleanupPage() {
     setScanResults(null);
     setSelectedFolders([]);
     try {
-      const res = await fetch('/api/cleanup/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ emails: scope === 'all' ? null : selectedEmails }),
-      });
-      if (!res.ok) throw new Error('Scan failed');
-      const data: UserFoldersDto[] = await res.json();
+      const data = await api.cleanup.scan(scope === 'all' ? null : selectedEmails);
       setScanResults(data);
       if (data.length === 0) toast.info('No contact folders found for selected users.');
     } catch {
@@ -92,21 +85,7 @@ export default function CleanupPage() {
 
     setDeleting(true);
     try {
-      const res = await fetch('/api/cleanup/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          items: selectedFolders.map((f) => ({
-            entraId: f.entraId,
-            email: f.email,
-            folderId: f.folderId,
-            folderName: f.folderName,
-          })),
-        }),
-      });
-      if (!res.ok) throw new Error('Delete failed');
-      const data = await res.json();
+      const data = await api.cleanup.delete(selectedFolders);
       toast.success(data.message);
       // Remove deleted folders from results
       setScanResults((prev) =>

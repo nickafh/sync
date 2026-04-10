@@ -143,6 +143,15 @@ export const api = {
       fetchApi<{ id: string; name: string }[]>(`/graph/contact-folders?email=${encodeURIComponent(email)}`),
   },
 
+  cleanup: {
+    scan: (emails: string[] | null) =>
+      fetchApi<{ email: string; displayName: string | null; entraId: string; folders: { id: string; name: string }[] }[]>(
+        '/cleanup/scan', { method: 'POST', body: JSON.stringify({ emails }) }),
+    delete: (items: { entraId: string; email: string; folderId: string; folderName: string }[]) =>
+      fetchApi<{ deleted: number; failed: number; message: string }>(
+        '/cleanup/delete', { method: 'POST', body: JSON.stringify({ items }) }),
+  },
+
   contactExclusions: {
     sourceContacts: (tunnelId: number) =>
       fetchApi<SourceContactDto[]>(`/tunnels/${tunnelId}/contact-exclusions/source-contacts`),

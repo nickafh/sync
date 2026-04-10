@@ -157,47 +157,36 @@ export default function TunnelDetailPage() {
     }
   }, [tunnel, isEditing]);
 
+  const buildEditForm = (t: TunnelDetailDto): UpdateTunnelRequest => ({
+    name: t.name,
+    sources: t.sources.map((s) => ({
+      sourceType: s.sourceType,
+      sourceIdentifier: s.sourceIdentifier,
+      sourceDisplayName: s.sourceDisplayName,
+      sourceSmtpAddress: s.sourceSmtpAddress,
+      sourceFilterPlain: s.sourceFilterPlain,
+      contactFolderId: s.contactFolderId,
+      contactFolderName: s.contactFolderName,
+    })),
+    targetListIds: t.targetLists.map((l) => l.id),
+    fieldProfileId: t.fieldProfileId,
+    stalePolicy: t.stalePolicy,
+    staleDays: t.staleHoldDays,
+    photoSyncEnabled: t.photoSyncEnabled,
+    targetGroupId: t.targetGroupId,
+    targetGroupName: t.targetGroupName,
+    targetUserEmails: t.targetUserEmails,
+  });
+
   const enterEditMode = () => {
     if (!tunnel) return;
-    setEditForm({
-      name: tunnel.name,
-      sources: tunnel.sources.map((s) => ({
-        sourceType: s.sourceType,
-        sourceIdentifier: s.sourceIdentifier,
-        sourceDisplayName: s.sourceDisplayName,
-        sourceSmtpAddress: s.sourceSmtpAddress,
-        sourceFilterPlain: s.sourceFilterPlain,
-      })),
-      targetListIds: tunnel.targetLists.map((l) => l.id),
-      fieldProfileId: tunnel.fieldProfileId,
-      stalePolicy: tunnel.stalePolicy,
-      staleDays: tunnel.staleHoldDays,
-      photoSyncEnabled: tunnel.photoSyncEnabled,
-      targetGroupId: tunnel.targetGroupId,
-      targetGroupName: tunnel.targetGroupName,
-    });
+    setEditForm(buildEditForm(tunnel));
     setIsEditing(true);
   };
 
   const discardChanges = () => {
     if (!tunnel) return;
-    setEditForm({
-      name: tunnel.name,
-      sources: tunnel.sources.map((s) => ({
-        sourceType: s.sourceType,
-        sourceIdentifier: s.sourceIdentifier,
-        sourceDisplayName: s.sourceDisplayName,
-        sourceSmtpAddress: s.sourceSmtpAddress,
-        sourceFilterPlain: s.sourceFilterPlain,
-      })),
-      targetListIds: tunnel.targetLists.map((l) => l.id),
-      fieldProfileId: tunnel.fieldProfileId,
-      stalePolicy: tunnel.stalePolicy,
-      staleDays: tunnel.staleHoldDays,
-      photoSyncEnabled: tunnel.photoSyncEnabled,
-      targetGroupId: tunnel.targetGroupId,
-      targetGroupName: tunnel.targetGroupName,
-    });
+    setEditForm(buildEditForm(tunnel));
     setIsEditing(false);
   };
 
