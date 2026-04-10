@@ -110,9 +110,11 @@ public class SourceResolver : ISourceResolver
             }
         }
 
-        // Deduplicate by EntraId across multiple sources
+        // Deduplicate by EntraId across multiple sources (case-insensitive to match DB collation).
+        // Also filter out empty EntraIds which would all conflict on the same row.
         var deduped = allSourceUsers
-            .GroupBy(u => u.EntraId)
+            .Where(u => !string.IsNullOrEmpty(u.EntraId))
+            .GroupBy(u => u.EntraId, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .ToList();
 
@@ -504,7 +506,11 @@ public class SourceResolver : ISourceResolver
 
         for (int offset = 0; offset < users.Count; offset += batchSize)
         {
-            var batch = users.Skip(offset).Take(batchSize).ToList();
+            // Per-batch dedup: PostgreSQL rejects ON CONFLICT DO UPDATE hitting the same row twice
+            var batch = users.Skip(offset).Take(batchSize)
+                .GroupBy(u => u.EntraId, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
             var sql = new System.Text.StringBuilder();
             sql.AppendLine("""
                 INSERT INTO source_users (
