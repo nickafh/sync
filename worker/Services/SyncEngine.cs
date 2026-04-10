@@ -692,12 +692,8 @@ public sealed class SyncEngine(
             }
         }
 
-        // Update live progress after batch execution.
-        if (pendingCreates.Count + pendingUpdates.Count > 0)
-        {
-            await UpdateRunProgressAsync(run.Id, created, updated, skipped,
-                failed, removed, 0, 0, 0, 0, 0);
-        }
+        // Note: live progress for the dashboard is updated in the per-tunnel loop
+        // (ProcessTunnelAsync caller) which has access to the overall totals.
 
         // Save new/updated ContactSyncState records using a fresh tracked context.
         if (statesToAdd.Count > 0 || statesToUpdate.Count > 0)

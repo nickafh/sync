@@ -26,14 +26,26 @@ function formatDuration(ms: number | null): string {
   return `${minutes}m ${seconds}s`;
 }
 
-const actionStatusMap: Record<string, string> = {
-  created: 'success',
-  updated: 'active',
-  failed: 'failed',
-  removed: 'warning',
-  skipped: 'inactive',
-  photo_updated: 'success',
-  photo_failed: 'failed',
+const actionColorMap: Record<string, string> = {
+  created: 'bg-green-100 text-green-800',
+  updated: 'bg-blue-100 text-blue-800',
+  failed: 'bg-red-100 text-red-800',
+  removed: 'bg-orange-100 text-orange-800',
+  skipped: 'bg-gray-100 text-gray-600',
+  stale_detected: 'bg-yellow-100 text-yellow-800',
+  photo_updated: 'bg-green-100 text-green-800',
+  photo_failed: 'bg-red-100 text-red-800',
+};
+
+const actionLabelMap: Record<string, string> = {
+  created: 'Created',
+  updated: 'Updated',
+  failed: 'Failed',
+  removed: 'Removed',
+  skipped: 'Skipped',
+  stale_detected: 'Stale',
+  photo_updated: 'Photo Updated',
+  photo_failed: 'Photo Failed',
 };
 
 const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
@@ -52,8 +64,13 @@ const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
     header: 'Action',
     cell: ({ getValue }) => {
       const action = getValue<string>();
-      const status = actionStatusMap[action.toLowerCase()] ?? action;
-      return <StatusBadge status={status} />;
+      const color = actionColorMap[action.toLowerCase()] ?? 'bg-gray-100 text-gray-600';
+      const label = actionLabelMap[action.toLowerCase()] ?? action;
+      return (
+        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${color}`}>
+          {label}
+        </span>
+      );
     },
   },
   {
