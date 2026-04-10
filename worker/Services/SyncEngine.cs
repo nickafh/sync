@@ -301,8 +301,77 @@ public sealed class SyncEngine(
         var fieldSettings = tunnel.FieldProfile?.FieldProfileFields?.ToList()
             ?? await LoadDefaultFieldProfileAsync(ct);
 
-        // Step 5d: Load target mailboxes (AllUsers scope — SpecificUsers deferred).
+        // Step 5d: Load target mailboxes, applying tunnel and phone list delivery scopes.
         var targetMailboxes = await LoadTargetMailboxesAsync(tunnel, ct);
+
+        // Step 5e: Apply phone list delivery scope if set (Targets page "Specific Users").
+        // This filters AFTER tunnel-level scope, so both work together.
+        var canonicalPl = tunnel.TunnelPhoneLists
+            .Select(tpl => tpl.PhoneList)
+            .FirstOrDefault();
+        if (canonicalPl?.TargetScope == TargetScope.SpecificUsers && !string.IsNullOrEmpty(canonicalPl.TargetUserFilter))
+        {
+            try
+            {
+                var filterData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(canonicalPl.TargetUserFilter);
+                if (filterData.TryGetProperty("emails", out var emailsArr))
+                {
+                    var plEmails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var el in emailsArr.EnumerateArray())
+                    {
+                        var email = el.GetString();
+                        if (!string.IsNullOrEmpty(email)) plEmails.Add(email);
+                    }
+                    if (plEmails.Count > 0)
+                    {
+                        // Auto-provision missing mailboxes (same as tunnel-level scope)
+                        var existingEmails = new HashSet<string>(targetMailboxes.Select(m => m.Email), StringComparer.OrdinalIgnoreCase);
+                        var missingPlEmails = plEmails.Where(e => !existingEmails.Contains(e)).ToList();
+                        foreach (var email in missingPlEmails)
+                        {
+                            try
+                            {
+                                var graphUser = await graphClientFactory.Client.Users[email]
+                                    .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
+                                if (graphUser?.Id != null)
+                                {
+                                    await using var provDb = await dbContextFactory.CreateDbContextAsync(ct);
+                                    if (!await provDb.TargetMailboxes.AnyAsync(m => m.EntraId == graphUser.Id, ct))
+                                    {
+                                        var mb = new TargetMailbox
+                                        {
+                                            EntraId = graphUser.Id,
+                                            Email = graphUser.Mail ?? email,
+                                            DisplayName = graphUser.DisplayName,
+                                            IsActive = true,
+                                            CreatedAt = DateTime.UtcNow,
+                                            UpdatedAt = DateTime.UtcNow
+                                        };
+                                        provDb.TargetMailboxes.Add(mb);
+                                        await provDb.SaveChangesAsync(ct);
+                                        targetMailboxes.Add(mb);
+                                        logger.LogInformation("Auto-provisioned target mailbox from phone list: {Email}", email);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogWarning(ex, "Failed to auto-provision target mailbox {Email}", email);
+                            }
+                        }
+
+                        targetMailboxes = targetMailboxes.Where(m => plEmails.Contains(m.Email)).ToList();
+                        logger.LogInformation(
+                            "Tunnel {TunnelName}: phone list '{PhoneList}' scoped to {Count} specific user(s)",
+                            tunnel.Name, canonicalPl.Name, targetMailboxes.Count);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to parse phone list targetUserFilter for tunnel {TunnelName}", tunnel.Name);
+            }
+        }
 
         // Step 5f: Read parallelism setting.
         var parallelism = await ReadParallelismSettingAsync(ct);

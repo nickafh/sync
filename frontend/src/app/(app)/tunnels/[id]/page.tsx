@@ -636,17 +636,16 @@ export default function TunnelDetailPage() {
                         className="flex items-center gap-2 cursor-pointer"
                       >
                         <input
-                          type="checkbox"
+                          type="radio"
+                          name="editTargetList"
                           checked={editForm.targetListIds.includes(list.id)}
                           onChange={() =>
                             setEditForm((prev) => ({
                               ...prev,
-                              targetListIds: prev.targetListIds.includes(list.id)
-                                ? prev.targetListIds.filter((id) => id !== list.id)
-                                : [...prev.targetListIds, list.id],
+                              targetListIds: [list.id],
                             }))
                           }
-                          className="rounded border-gray-300"
+                          className="accent-gold"
                         />
                         <span className="text-sm">{list.name}</span>
                       </label>

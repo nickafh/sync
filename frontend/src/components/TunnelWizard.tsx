@@ -202,9 +202,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   const handleToggleTarget = useCallback((listId: number) => {
     setFormData((prev) => ({
       ...prev,
-      targetListIds: prev.targetListIds.includes(listId)
-        ? prev.targetListIds.filter((id) => id !== listId)
-        : [...prev.targetListIds, listId],
+      targetListIds: [listId], // Single select — one target per tunnel
     }));
   }, []);
 

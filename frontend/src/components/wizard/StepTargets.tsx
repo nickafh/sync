@@ -72,7 +72,7 @@ export function StepTargets({
             Select which target receives contacts from this tunnel.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           <button
             type="button"
             onClick={() => setShowCreate(true)}
@@ -81,15 +81,7 @@ export function StepTargets({
             <Plus className="h-3 w-3" />
             New
           </button>
-          {phoneLists && phoneLists.length > 0 && (
-            <button
-              type="button"
-              onClick={allSelected ? onDeselectAll : onSelectAll}
-              className="text-sm text-navy underline cursor-pointer"
-            >
-              {allSelected ? 'Deselect All' : 'Select All'}
-            </button>
-          )}
+          {/* Single select only — one target per tunnel */}
         </div>
       </div>
 
@@ -139,9 +131,12 @@ export function StepTargets({
               key={list.id}
               className="flex items-center gap-3 cursor-pointer"
             >
-              <Checkbox
+              <input
+                type="radio"
+                name="targetList"
                 checked={selectedIds.includes(list.id)}
-                onCheckedChange={() => onToggle(list.id)}
+                onChange={() => onToggle(list.id)}
+                className="accent-gold"
               />
               <span className="text-sm font-medium">{list.name}</span>
               <span className="text-xs text-text-muted">
