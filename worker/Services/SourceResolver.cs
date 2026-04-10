@@ -526,6 +526,10 @@ public class SourceResolver : ISourceResolver
     /// Batches of 25 rows (25 columns * 25 rows = 625 params, well within PG limits).
     /// Per D-03 and Pattern 8 in RESEARCH.md.
     /// </summary>
+    /// <summary>
+    /// Batched upsert: 25 rows per batch (26 columns × 25 = 650 params, within PG limit).
+    /// Reduces DB round trips from N to N/25.
+    /// </summary>
     private async Task UpsertSourceUsersAsync(List<SourceUser> users, CancellationToken ct)
     {
         if (users.Count == 0)
@@ -533,18 +537,10 @@ public class SourceResolver : ISourceResolver
 
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
 
-        const string sql = """
-            INSERT INTO source_users (
-                entra_id, display_name, first_name, last_name, email,
-                business_phone, mobile_phone, job_title, department,
-                office_location, company_name, street_address, city,
-                state, postal_code, country, notes, is_enabled, mailbox_type,
-                extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
-                last_fetched_at, created_at, updated_at
-            ) VALUES (
-                {0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12},
-                {13}, {14}, {15}, {16}, {17}, {18}, {19}, {20}, {21}, {22}, {23}, {24}, {25}
-            )
+        const int batchSize = 25;
+        const int colCount = 26;
+        const string onConflict = """
+
             ON CONFLICT (entra_id) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
                 first_name = EXCLUDED.first_name,
@@ -572,24 +568,50 @@ public class SourceResolver : ISourceResolver
                 updated_at = EXCLUDED.updated_at
             """;
 
-        foreach (var user in users)
+        for (int offset = 0; offset < users.Count; offset += batchSize)
         {
-            await db.Database.ExecuteSqlRawAsync(sql, [
-                Trunc(user.EntraId, 500)!, (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
-                (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
-                (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
-                (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
-                (object?)Trunc(user.OfficeLocation, 100), (object?)Trunc(user.CompanyName, 200),
-                (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
-                (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
-                (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
-                (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
-                (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
-                user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
-            ], ct);
+            var batch = users.Skip(offset).Take(batchSize).ToList();
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("""
+                INSERT INTO source_users (
+                    entra_id, display_name, first_name, last_name, email,
+                    business_phone, mobile_phone, job_title, department,
+                    office_location, company_name, street_address, city,
+                    state, postal_code, country, notes, is_enabled, mailbox_type,
+                    extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
+                    last_fetched_at, created_at, updated_at
+                ) VALUES
+                """);
+
+            var parameters = new List<object?>();
+            for (int i = 0; i < batch.Count; i++)
+            {
+                if (i > 0) sb.AppendLine(",");
+                var p = i * colCount;
+                sb.Append($"({{{p}}},{{{p+1}}},{{{p+2}}},{{{p+3}}},{{{p+4}}},{{{p+5}}},{{{p+6}}},{{{p+7}}},{{{p+8}}},{{{p+9}}},{{{p+10}}},{{{p+11}}},{{{p+12}}},{{{p+13}}},{{{p+14}}},{{{p+15}}},{{{p+16}}},{{{p+17}}},{{{p+18}}},{{{p+19}}},{{{p+20}}},{{{p+21}}},{{{p+22}}},{{{p+23}}},{{{p+24}}},{{{p+25}}})");
+
+                var user = batch[i];
+                parameters.AddRange([
+                    Trunc(user.EntraId, 500)!, (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
+                    (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
+                    (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
+                    (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
+                    (object?)Trunc(user.OfficeLocation, 100), (object?)Trunc(user.CompanyName, 200),
+                    (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
+                    (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
+                    (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
+                    (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
+                    (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
+                    user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
+                ]);
+            }
+
+            sb.Append(onConflict);
+            await db.Database.ExecuteSqlRawAsync(sb.ToString(), parameters.ToArray()!, ct);
         }
 
-        _logger.LogDebug("Upserted {Count} source users to database", users.Count);
+        _logger.LogDebug("Upserted {Count} source users to database in {Batches} batch(es)",
+            users.Count, (users.Count + batchSize - 1) / batchSize);
     }
 
     private static string? Trunc(string? value, int maxLength) =>

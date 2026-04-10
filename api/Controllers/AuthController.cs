@@ -43,7 +43,7 @@ public class AuthController : ControllerBase
         {
             HttpOnly = true,
             SameSite = SameSiteMode.Strict,
-            Secure = false, // No HTTPS in v1
+            Secure = true, // TLS active via nginx
             Expires = DateTimeOffset.UtcNow.AddHours(24), // Per D-06: 24-hour lifetime
             Path = "/"
         });

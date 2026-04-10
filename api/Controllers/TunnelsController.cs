@@ -50,20 +50,21 @@ public class TunnelsController : ControllerBase
             .AsNoTracking()
             .ToListAsync();
 
+        // Single grouped query for all tunnels instead of 2 queries per tunnel (N+1 fix).
+        var syncStats = await _db.ContactSyncStates
+            .GroupBy(c => c.TunnelId)
+            .Select(g => new
+            {
+                TunnelId = g.Key,
+                ContactCount = g.Select(c => c.SourceUserId).Distinct().Count(),
+                TargetUserCount = g.Select(c => c.TargetMailboxId).Distinct().Count()
+            })
+            .ToDictionaryAsync(x => x.TunnelId ?? 0);
+
         var result = new List<TunnelDto>();
         foreach (var t in tunnels)
         {
-            var estimatedContacts = await _db.ContactSyncStates
-                .Where(c => c.TunnelId == t.Id)
-                .Select(c => c.SourceUserId)
-                .Distinct()
-                .CountAsync();
-
-            var estimatedTargetUsers = await _db.ContactSyncStates
-                .Where(c => c.TunnelId == t.Id)
-                .Select(c => c.TargetMailboxId)
-                .Distinct()
-                .CountAsync();
+            syncStats.TryGetValue(t.Id, out var stats);
 
             // Last sync: most recent completed SyncRun (tunnel-level aggregates are stored at SyncRun level for now)
             var lastRun = lastRuns.FirstOrDefault(r => r.Status == SyncStatus.Success || r.Status == SyncStatus.Warning);
@@ -84,8 +85,8 @@ public class TunnelsController : ControllerBase
                 t.FieldProfileId,
                 t.FieldProfile?.Name,
                 t.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
-                estimatedContacts,
-                estimatedTargetUsers,
+                stats?.ContactCount ?? 0,
+                stats?.TargetUserCount ?? 0,
                 lastSync,
                 t.PhotoSyncEnabled,
                 t.TargetGroupId,
@@ -420,9 +421,10 @@ public class TunnelsController : ControllerBase
                 estimatedRemovals = Math.Max(0, currentCount - totalNewCount);
                 estimatedUpdates = Math.Min(currentCount, totalNewCount);
             }
-            catch
+            catch (Exception ex)
             {
-                return StatusCode(503, new { message = "Unable to estimate impact." });
+                _ = ex; // Logged below for diagnostics
+                return StatusCode(503, new { message = $"Unable to estimate impact: {ex.Message}" });
             }
         }
         else

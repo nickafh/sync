@@ -56,5 +56,10 @@ public class ContactSyncStateConfiguration : IEntityTypeConfiguration<ContactSyn
         builder.HasIndex(e => e.PhoneListId).HasDatabaseName("idx_contact_sync_state_list");
         builder.HasIndex(e => e.IsStale).HasDatabaseName("idx_contact_sync_state_stale").HasFilter("is_stale = TRUE");
         builder.HasIndex(e => new { e.SourceUserId, e.PhoneListId, e.TargetMailboxId }).HasDatabaseName("idx_contact_sync_state_composite");
+
+        // Hot-path index for ProcessMailboxAsync: loads all sync state for a tunnel+mailbox
+        // filtered by phone list IDs. Covers the WHERE clause exactly.
+        builder.HasIndex(e => new { e.TunnelId, e.TargetMailboxId, e.PhoneListId })
+            .HasDatabaseName("idx_contact_sync_state_tunnel_mailbox_list");
     }
 }

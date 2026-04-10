@@ -84,7 +84,6 @@ public class ContactWriter : IContactWriter
     }
 
     private const int MaxBatchSize = 20;
-    private const int MaxBatchRetries = 2;
 
     /// <inheritdoc />
     public async Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
