@@ -109,6 +109,18 @@ public class CleanupController : ControllerBase
             await semaphore.WaitAsync(ct);
             try
             {
+                // Safety: verify this is a subfolder, not the user's root Contacts folder.
+                // Root folder has ParentFolderId == null. We must never delete it.
+                var folder = await _graphClient.Users[item.EntraId].ContactFolders[item.FolderId]
+                    .GetAsync(config => config.QueryParameters.Select = ["id", "parentFolderId", "displayName"], ct);
+
+                if (folder?.ParentFolderId is null)
+                {
+                    lock (counterLock) { failed++; }
+                    _logger.LogWarning("BLOCKED: refusing to delete root Contacts folder for {Email}", item.Email);
+                    return;
+                }
+
                 // Use permanentDelete — the regular DELETE fails when Exchange has
                 // retention policies because it tries to soft-delete to recoverable items.
                 // permanentDelete bypasses retention and removes the folder + contents immediately.
