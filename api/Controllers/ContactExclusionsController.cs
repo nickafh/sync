@@ -135,16 +135,19 @@ public class ContactExclusionsController : ControllerBase
 
                     case SourceType.OrgContacts:
                         var orgContacts = await ResolveOrgContactsAsync(ct);
-                        // Apply OrgContactFilters to match sync engine behavior
-                        var orgExcludedIds = await _db.OrgContactFilters
-                            .Where(f => f.TunnelId == tunnelId && f.IsExcluded)
-                            .Select(f => f.OrgContactId)
-                            .ToListAsync(ct);
-                        var orgExcludedSet = orgExcludedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                        var filteredOrg = orgExcludedSet.Count > 0
-                            ? orgContacts.Where(c => !orgExcludedSet.Contains(c.entraId)).ToList()
-                            : orgContacts;
-                        resolved.AddRange(filteredOrg.Select(c => new SourceContactDto(
+                        // Skip OrgContactFilters when tunnel uses Contact Filters (TunnelContactExclusions).
+                        // Contact Filters is the unified exclusion mechanism for all source types.
+                        if (exclusions.Count == 0)
+                        {
+                            var orgExcludedIds = await _db.OrgContactFilters
+                                .Where(f => f.TunnelId == tunnelId && f.IsExcluded)
+                                .Select(f => f.OrgContactId)
+                                .ToListAsync(ct);
+                            var orgExcludedSet = orgExcludedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            if (orgExcludedSet.Count > 0)
+                                orgContacts = orgContacts.Where(c => !orgExcludedSet.Contains(c.entraId)).ToList();
+                        }
+                        resolved.AddRange(orgContacts.Select(c => new SourceContactDto(
                             0, c.entraId, c.displayName, c.email, c.companyName, c.jobTitle, c.department,
                             excludedSet.Contains(c.entraId))));
                         break;

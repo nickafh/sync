@@ -87,15 +87,31 @@ public class SourceResolver : ISourceResolver
                         _logger.LogDebug("Fetched {Count} org contacts from Graph for source {SourceId}",
                             orgContacts.Count, source.Id);
 
-                        // Apply exclusion filters from the org_contact_filters table
-                        var excludedIds = await GetExcludedOrgContactIdsAsync(tunnel.Id, ct);
-                        var filtered = excludedIds.Count > 0
-                            ? orgContacts.Where(c => !excludedIds.Contains(c.EntraId)).ToList()
-                            : orgContacts;
+                        // Check if tunnel uses TunnelContactExclusions (Contact Filters UI).
+                        // If so, skip legacy OrgContactFilters — Contact Filters is the single
+                        // source of truth for include/exclude decisions across all source types.
+                        await using var checkDb = await _dbContextFactory.CreateDbContextAsync(ct);
+                        var hasTunnelExclusions = await checkDb.TunnelContactExclusions
+                            .AnyAsync(e => e.TunnelId == tunnel.Id, ct);
 
-                        _logger.LogInformation(
-                            "OrgContacts source {SourceId}: {TotalCount} org contacts -> {FilteredCount} after exclusion filters",
-                            source.Id, orgContacts.Count, filtered.Count);
+                        List<SourceUser> filtered;
+                        if (hasTunnelExclusions)
+                        {
+                            filtered = orgContacts;
+                            _logger.LogInformation(
+                                "OrgContacts source {SourceId}: {Count} org contacts (skipping OrgContactFilters — tunnel uses Contact Filters)",
+                                source.Id, orgContacts.Count);
+                        }
+                        else
+                        {
+                            var excludedIds = await GetExcludedOrgContactIdsAsync(tunnel.Id, ct);
+                            filtered = excludedIds.Count > 0
+                                ? orgContacts.Where(c => !excludedIds.Contains(c.EntraId)).ToList()
+                                : orgContacts;
+                            _logger.LogInformation(
+                                "OrgContacts source {SourceId}: {TotalCount} org contacts -> {FilteredCount} after OrgContactFilters",
+                                source.Id, orgContacts.Count, filtered.Count);
+                        }
 
                         allSourceUsers.AddRange(filtered);
                         break;
