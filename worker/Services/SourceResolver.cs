@@ -526,16 +526,16 @@ public class SourceResolver : ISourceResolver
 
                 var user = batch[i];
                 parameters.AddRange([
-                    user.EntraId, (object?)user.DisplayName, (object?)user.FirstName,
-                    (object?)user.LastName, (object?)user.Email,
-                    (object?)user.BusinessPhone, (object?)user.MobilePhone,
-                    (object?)user.JobTitle, (object?)user.Department,
-                    (object?)user.OfficeLocation, (object?)user.CompanyName,
-                    (object?)user.StreetAddress, (object?)user.City,
-                    (object?)user.State, (object?)user.PostalCode,
-                    (object?)user.Country, (object?)user.Notes, user.IsEnabled, (object?)user.MailboxType,
-                    (object?)user.ExtensionAttr1, (object?)user.ExtensionAttr2,
-                    (object?)user.ExtensionAttr3, (object?)user.ExtensionAttr4,
+                    Trunc(user.EntraId, 100), (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
+                    (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
+                    (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
+                    (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
+                    (object?)Trunc(user.OfficeLocation, 100), (object?)Trunc(user.CompanyName, 200),
+                    (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
+                    (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
+                    (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
+                    (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
+                    (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
                     user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
                 ]);
             }
@@ -574,4 +574,7 @@ public class SourceResolver : ISourceResolver
 
         _logger.LogDebug("Upserted {Count} source users to database in batches of {BatchSize}", users.Count, batchSize);
     }
+
+    private static string? Trunc(string? value, int maxLength) =>
+        value?.Length > maxLength ? value[..maxLength] : value;
 }
