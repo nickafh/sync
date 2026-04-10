@@ -134,8 +134,8 @@ public class SourceResolver : ISourceResolver
             .Select(g => g.First())
             .ToList();
 
-        _logger.LogDebug("Total {RawCount} source users from all sources, {DedupedCount} after dedup",
-            allSourceUsers.Count, deduped.Count);
+        _logger.LogInformation("Tunnel {TunnelName}: {RawCount} source users from all sources, {DedupedCount} after dedup",
+            tunnel.Name, allSourceUsers.Count, deduped.Count);
 
         await UpsertSourceUsersAsync(deduped, ct);
 
@@ -146,7 +146,8 @@ public class SourceResolver : ISourceResolver
             .Where(u => entraIds.Contains(u.EntraId))
             .ToListAsync(ct);
 
-        _logger.LogDebug("Reloaded {Count} source users with DB IDs", reloaded.Count);
+        _logger.LogInformation("Tunnel {TunnelName}: reloaded {ReloadedCount} source users from DB (expected {ExpectedCount})",
+            tunnel.Name, reloaded.Count, deduped.Count);
         return reloaded;
     }
 
