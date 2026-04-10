@@ -59,7 +59,11 @@ public class TunnelsController : ControllerBase
                 .Distinct()
                 .CountAsync();
 
-            var estimatedTargetUsers = await _db.TargetMailboxes.CountAsync(m => m.IsActive);
+            var estimatedTargetUsers = await _db.ContactSyncStates
+                .Where(c => c.TunnelId == t.Id)
+                .Select(c => c.TargetMailboxId)
+                .Distinct()
+                .CountAsync();
 
             // Last sync: most recent completed SyncRun (tunnel-level aggregates are stored at SyncRun level for now)
             var lastRun = lastRuns.FirstOrDefault(r => r.Status == SyncStatus.Success || r.Status == SyncStatus.Warning);

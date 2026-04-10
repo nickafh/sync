@@ -79,7 +79,13 @@ public sealed class RunLogger(
         else
         {
             // Production path: raw SQL batch insert (INSERT INTO sync_run_items ...).
-            await BatchInsertSqlAsync(db, items, ct);
+            // Filter out items referencing deleted tunnels to avoid FK violations.
+            var validTunnelIds = await db.Tunnels.Select(t => t.Id).ToListAsync(ct);
+            var validTunnelIdSet = new HashSet<int>(validTunnelIds);
+            var validItems = items.Where(i => i.TunnelId == null || validTunnelIdSet.Contains(i.TunnelId.Value)).ToList();
+            if (validItems.Count < items.Count)
+                logger.LogWarning("FlushItemsAsync: filtered out {Count} items referencing deleted tunnels", items.Count - validItems.Count);
+            await BatchInsertSqlAsync(db, validItems, ct);
         }
 
         // Clear the buffer after successful flush.
