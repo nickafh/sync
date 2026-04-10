@@ -3,22 +3,19 @@
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { usePhoneLists } from '@/hooks/use-phone-lists';
-import type { DdgDto } from '@/types/ddg';
+import type { SourceEntry } from '@/components/wizard/StepSource';
+import { Cable, Mail, Building2 } from 'lucide-react';
 
 interface StepReviewProps {
   name: string;
-  sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
-  ddgs: DdgDto[];
-  mailboxEmail: string;
+  sources: SourceEntry[];
   targetListIds: number[];
   onEdit: (step: number) => void;
 }
 
 export function StepReview({
   name,
-  sourceType,
-  ddgs,
-  mailboxEmail,
+  sources,
   targetListIds,
   onEdit,
 }: StepReviewProps) {
@@ -27,6 +24,15 @@ export function StepReview({
   const selectedListNames = (phoneLists ?? [])
     .filter((l) => targetListIds.includes(l.id))
     .map((l) => l.name);
+
+  const sourceIcon = (type: string) => {
+    switch (type) {
+      case 'ddg': return <Cable className="h-3.5 w-3.5 text-text-muted" />;
+      case 'mailbox_contacts': return <Mail className="h-3.5 w-3.5 text-text-muted" />;
+      case 'org_contacts': return <Building2 className="h-3.5 w-3.5 text-text-muted" />;
+      default: return null;
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -51,38 +57,25 @@ export function StepReview({
 
           <Separator />
 
-          {/* Source */}
+          {/* Sources */}
           <div className="flex items-start justify-between px-4 py-3">
-            <div>
-              <p className="text-xs text-text-muted">Source</p>
-              {sourceType === 'ddg' && ddgs.length > 0 && (
-                <div className="mt-0.5 space-y-1">
-                  {ddgs.map((ddg) => (
-                    <div key={ddg.id}>
-                      <p className="text-sm font-medium">
-                        {ddg.displayName} ({ddg.memberCount} members)
-                      </p>
-                      <p className="text-xs text-text-muted">{ddg.primarySmtpAddress}</p>
+            <div className="flex-1">
+              <p className="text-xs text-text-muted">
+                {sources.length === 1 ? 'Source' : `Sources (${sources.length})`}
+              </p>
+              <div className="mt-1 space-y-1.5">
+                {sources.map((source, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    {sourceIcon(source.type)}
+                    <div>
+                      <p className="text-sm font-medium">{source.label}</p>
+                      {source.sublabel && (
+                        <p className="text-xs text-text-muted">{source.sublabel}</p>
+                      )}
                     </div>
-                  ))}
-                </div>
-              )}
-              {sourceType === 'mailbox_contacts' && mailboxEmail && (
-                <>
-                  <p className="text-sm font-medium mt-0.5">
-                    Shared Mailbox
-                  </p>
-                  <p className="text-xs text-text-muted">{mailboxEmail}</p>
-                </>
-              )}
-              {sourceType === 'org_contacts' && (
-                <>
-                  <p className="text-sm font-medium mt-0.5">
-                    Organization Contacts
-                  </p>
-                  <p className="text-xs text-text-muted">All tenant external contacts from Exchange Admin Center</p>
-                </>
-              )}
+                  </div>
+                ))}
+              </div>
             </div>
             <button
               type="button"
@@ -103,7 +96,7 @@ export function StepReview({
                 {selectedListNames.map((listName) => (
                   <span
                     key={listName}
-                    className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm"
+                    className="inline-flex items-center rounded-full bg-muted px-3 py-1 text-sm"
                   >
                     {listName}
                   </span>

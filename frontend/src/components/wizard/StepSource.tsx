@@ -1,141 +1,207 @@
 'use client';
 
+import { useState } from 'react';
 import { DDGSearchList } from '@/components/DDGSearchList';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import type { DdgDto } from '@/types/ddg';
-import { X } from 'lucide-react';
+import { X, Plus, Cable, Mail, Building2 } from 'lucide-react';
+
+export interface SourceEntry {
+  type: 'ddg' | 'mailbox_contacts' | 'org_contacts';
+  ddg?: DdgDto;
+  mailboxEmail?: string;
+  label: string;
+  sublabel?: string;
+}
 
 interface StepSourceProps {
-  sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
-  onSourceTypeChange: (type: 'ddg' | 'mailbox_contacts' | 'org_contacts') => void;
-  selectedDdgs: DdgDto[];
-  onToggleDdg: (ddg: DdgDto) => void;
-  mailboxEmail: string;
-  onMailboxEmailChange: (email: string) => void;
+  sources: SourceEntry[];
+  onAddSource: (source: SourceEntry) => void;
+  onRemoveSource: (index: number) => void;
   error: string | null;
 }
 
+type AddMode = null | 'ddg' | 'mailbox_contacts' | 'org_contacts';
+
 export function StepSource({
-  sourceType,
-  onSourceTypeChange,
-  selectedDdgs,
-  onToggleDdg,
-  mailboxEmail,
-  onMailboxEmailChange,
+  sources,
+  onAddSource,
+  onRemoveSource,
   error,
 }: StepSourceProps) {
+  const [addMode, setAddMode] = useState<AddMode>(null);
+  const [mailboxInput, setMailboxInput] = useState('');
+
+  const hasOrgContacts = sources.some((s) => s.type === 'org_contacts');
+
+  const handleSelectDdg = (ddg: DdgDto) => {
+    // Don't add duplicates
+    if (sources.some((s) => s.type === 'ddg' && s.ddg?.id === ddg.id)) return;
+    onAddSource({
+      type: 'ddg',
+      ddg,
+      label: ddg.displayName,
+      sublabel: `${ddg.memberCount} members`,
+    });
+  };
+
+  const handleAddMailbox = () => {
+    const email = mailboxInput.trim();
+    if (!email) return;
+    if (sources.some((s) => s.type === 'mailbox_contacts' && s.mailboxEmail === email)) return;
+    onAddSource({
+      type: 'mailbox_contacts',
+      mailboxEmail: email,
+      label: email,
+      sublabel: 'Shared Mailbox',
+    });
+    setMailboxInput('');
+    setAddMode(null);
+  };
+
+  const handleAddOrgContacts = () => {
+    if (hasOrgContacts) return;
+    onAddSource({
+      type: 'org_contacts',
+      label: 'Organization Contacts',
+      sublabel: 'All tenant external contacts',
+    });
+    setAddMode(null);
+  };
+
+  const sourceIcon = (type: string) => {
+    switch (type) {
+      case 'ddg': return <Cable className="h-4 w-4 text-text-muted" />;
+      case 'mailbox_contacts': return <Mail className="h-4 w-4 text-text-muted" />;
+      case 'org_contacts': return <Building2 className="h-4 w-4 text-text-muted" />;
+      default: return null;
+    }
+  };
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-text-muted">
-        Choose a contact source for this tunnel.
+        Add one or more contact sources for this tunnel.
       </p>
 
-      {/* Source type selector */}
-      <div className="space-y-3">
-        <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-          <input
-            type="radio"
-            name="sourceType"
-            checked={sourceType === 'ddg'}
-            onChange={() => onSourceTypeChange('ddg')}
-            className="mt-0.5"
-          />
-          <div>
-            <p className="font-medium">Dynamic Distribution Group</p>
-            <p className="text-sm text-text-muted">
-              Sync members of an Exchange DDG. Best for syncing internal employee contacts.
-            </p>
-          </div>
-        </label>
-        <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-          <input
-            type="radio"
-            name="sourceType"
-            checked={sourceType === 'mailbox_contacts'}
-            onChange={() => onSourceTypeChange('mailbox_contacts')}
-            className="mt-0.5"
-          />
-          <div>
-            <p className="font-medium">Shared Mailbox</p>
-            <p className="text-sm text-text-muted">
-              Sync contacts from a shared mailbox&apos;s Contacts folder. Best for external contacts like vendors and service providers.
-            </p>
-          </div>
-        </label>
-        <label className="flex items-start gap-3 cursor-pointer rounded-lg border p-4 has-[:checked]:border-gold has-[:checked]:bg-gold/5">
-          <input
-            type="radio"
-            name="sourceType"
-            checked={sourceType === 'org_contacts'}
-            onChange={() => onSourceTypeChange('org_contacts')}
-            className="mt-0.5"
-          />
-          <div>
-            <p className="font-medium">Organization Contacts</p>
-            <p className="text-sm text-text-muted">
-              Sync tenant-level external contacts from Exchange Admin Center. These are mail contacts like vendors and attorneys managed at the organization level.
-            </p>
-          </div>
-        </label>
-      </div>
-
-      {/* DDG source — multi-select */}
-      {sourceType === 'ddg' && (
-        <>
-          {selectedDdgs.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-xs text-text-muted font-medium uppercase tracking-wide">
-                Selected ({selectedDdgs.length})
-              </p>
-              {selectedDdgs.map((ddg) => (
-                <div
-                  key={ddg.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{ddg.displayName}</p>
-                    <p className="text-xs text-text-muted">{ddg.memberCount} members</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onToggleDdg(ddg)}
-                    className="text-text-muted hover:text-destructive"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <DDGSearchList
-            onSelect={onToggleDdg}
-            selectedIds={selectedDdgs.map((d) => d.id)}
-          />
-        </>
-      )}
-
-      {/* Shared Mailbox source */}
-      {sourceType === 'mailbox_contacts' && (
+      {/* Added sources list */}
+      {sources.length > 0 && (
         <div className="space-y-2">
-          <label className="text-sm font-medium">Mailbox Email Address</label>
-          <Input
-            placeholder="e.g. afhstaffgal@atlantafinehomes.com"
-            value={mailboxEmail}
-            onChange={(e) => onMailboxEmailChange(e.target.value)}
-          />
-          <p className="text-xs text-text-muted">
-            The contacts in this mailbox&apos;s Contacts folder will be synced to target users.
-          </p>
+          {sources.map((source, i) => (
+            <div
+              key={`${source.type}-${source.ddg?.id ?? source.mailboxEmail ?? 'org'}-${i}`}
+              className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg border"
+            >
+              {sourceIcon(source.type)}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{source.label}</p>
+                {source.sublabel && (
+                  <p className="text-xs text-text-muted">{source.sublabel}</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => onRemoveSource(i)}
+                className="text-text-muted hover:text-destructive transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* Organization Contacts source */}
-      {sourceType === 'org_contacts' && (
-        <div className="mt-3 p-3 bg-gray-50 rounded-lg space-y-2">
-          <p className="text-sm font-medium">All tenant organization contacts will be synced.</p>
-          <p className="text-xs text-text-muted">
-            After creating the tunnel, you can manage which contacts to include or exclude from the tunnel detail page.
-          </p>
+      {/* Add source picker */}
+      {addMode === null && (
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setAddMode('ddg')}
+            className="w-full flex items-center gap-3 p-3 rounded-lg border border-dashed hover:border-gold hover:bg-gold/5 transition-colors cursor-pointer text-left"
+          >
+            <Cable className="h-4 w-4 text-text-muted" />
+            <div>
+              <p className="text-sm font-medium">Add DDG</p>
+              <p className="text-xs text-text-muted">Dynamic Distribution Group — internal employee contacts</p>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => setAddMode('mailbox_contacts')}
+            className="w-full flex items-center gap-3 p-3 rounded-lg border border-dashed hover:border-gold hover:bg-gold/5 transition-colors cursor-pointer text-left"
+          >
+            <Mail className="h-4 w-4 text-text-muted" />
+            <div>
+              <p className="text-sm font-medium">Add Shared Mailbox</p>
+              <p className="text-xs text-text-muted">Contacts from a mailbox&apos;s Contacts folder</p>
+            </div>
+          </button>
+          {!hasOrgContacts && (
+            <button
+              type="button"
+              onClick={handleAddOrgContacts}
+              className="w-full flex items-center gap-3 p-3 rounded-lg border border-dashed hover:border-gold hover:bg-gold/5 transition-colors cursor-pointer text-left"
+            >
+              <Building2 className="h-4 w-4 text-text-muted" />
+              <div>
+                <p className="text-sm font-medium">Add Organization Contacts</p>
+                <p className="text-xs text-text-muted">Tenant external contacts from Exchange Admin Center</p>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* DDG picker */}
+      {addMode === 'ddg' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Select DDGs</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAddMode(null)}
+            >
+              Done
+            </Button>
+          </div>
+          <DDGSearchList
+            onSelect={handleSelectDdg}
+            selectedIds={sources.filter((s) => s.type === 'ddg').map((s) => s.ddg!.id)}
+          />
+        </div>
+      )}
+
+      {/* Mailbox email input */}
+      {addMode === 'mailbox_contacts' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Shared Mailbox Email</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setAddMode(null); setMailboxInput(''); }}
+            >
+              Cancel
+            </Button>
+          </div>
+          <div className="flex gap-2">
+            <Input
+              placeholder="e.g. afhstaffgal@atlantafinehomes.com"
+              value={mailboxInput}
+              onChange={(e) => setMailboxInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddMailbox()}
+              autoFocus
+            />
+            <Button
+              className="bg-gold text-white hover:bg-gold/90"
+              onClick={handleAddMailbox}
+              disabled={!mailboxInput.trim()}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 

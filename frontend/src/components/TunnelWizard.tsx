@@ -16,11 +16,11 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { WizardStepper } from '@/components/WizardStepper';
 import { StepName } from '@/components/wizard/StepName';
 import { StepSource } from '@/components/wizard/StepSource';
+import type { SourceEntry } from '@/components/wizard/StepSource';
 import { StepTargets } from '@/components/wizard/StepTargets';
 import { StepReview } from '@/components/wizard/StepReview';
 import { useCreateTunnel } from '@/hooks/use-tunnels';
 import { usePhoneLists } from '@/hooks/use-phone-lists';
-import type { DdgDto } from '@/types/ddg';
 import type { CreateTunnelRequest } from '@/types/tunnel';
 
 interface TunnelWizardProps {
@@ -30,17 +30,13 @@ interface TunnelWizardProps {
 
 interface FormData {
   name: string;
-  sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
-  sourceDdgs: DdgDto[];
-  sourceMailboxEmail: string;
+  sources: SourceEntry[];
   targetListIds: number[];
 }
 
 const initialFormData: FormData = {
   name: '',
-  sourceType: 'ddg',
-  sourceDdgs: [],
-  sourceMailboxEmail: '',
+  sources: [],
   targetListIds: [],
 };
 
@@ -56,8 +52,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
 
   const hasData =
     formData.name.trim() !== '' ||
-    formData.sourceDdgs.length > 0 ||
-    formData.sourceMailboxEmail.trim() !== '' ||
+    formData.sources.length > 0 ||
     formData.targetListIds.length > 0;
 
   const resetForm = useCallback(() => {
@@ -81,15 +76,13 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
           }
           break;
         case 1:
-          if (formData.sourceType === 'ddg' && formData.sourceDdgs.length === 0) {
-            newErrors.source = 'Select at least one DDG to continue.';
-          } else if (formData.sourceType === 'mailbox_contacts' && !formData.sourceMailboxEmail.trim()) {
-            newErrors.source = 'Enter a mailbox email address to continue.';
+          if (formData.sources.length === 0) {
+            newErrors.source = 'Add at least one source to continue.';
           }
           break;
         case 2:
           if (formData.targetListIds.length === 0) {
-            newErrors.targets = 'Select at least one target list.';
+            newErrors.targets = 'Select at least one target.';
           }
           break;
       }
@@ -119,52 +112,48 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
     [step],
   );
 
-  const handleToggleDdg = useCallback((ddg: DdgDto) => {
-    setFormData((prev) => {
-      const exists = prev.sourceDdgs.find((d) => d.id === ddg.id);
-      return {
-        ...prev,
-        sourceDdgs: exists
-          ? prev.sourceDdgs.filter((d) => d.id !== ddg.id)
-          : [...prev.sourceDdgs, ddg],
-      };
-    });
+  const handleAddSource = useCallback((source: SourceEntry) => {
+    setFormData((prev) => ({ ...prev, sources: [...prev.sources, source] }));
     setErrors((prev) => ({ ...prev, source: '' }));
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    const sources: CreateTunnelRequest['sources'] = [];
+  const handleRemoveSource = useCallback((index: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      sources: prev.sources.filter((_, i) => i !== index),
+    }));
+  }, []);
 
-    if (formData.sourceType === 'ddg') {
-      if (formData.sourceDdgs.length === 0) return;
-      for (const ddg of formData.sourceDdgs) {
-        sources.push({
+  const handleSubmit = useCallback(() => {
+    if (formData.sources.length === 0) return;
+
+    const sources: CreateTunnelRequest['sources'] = formData.sources.map((s) => {
+      if (s.type === 'ddg' && s.ddg) {
+        return {
           sourceType: 'ddg',
-          sourceIdentifier: ddg.graphFilter ?? ddg.recipientFilter,
-          sourceDisplayName: ddg.displayName,
-          sourceSmtpAddress: ddg.primarySmtpAddress,
-          sourceFilterPlain: ddg.recipientFilterPlain,
-        });
+          sourceIdentifier: s.ddg.graphFilter ?? s.ddg.recipientFilter,
+          sourceDisplayName: s.ddg.displayName,
+          sourceSmtpAddress: s.ddg.primarySmtpAddress,
+          sourceFilterPlain: s.ddg.recipientFilterPlain,
+        };
+      } else if (s.type === 'mailbox_contacts' && s.mailboxEmail) {
+        return {
+          sourceType: 'mailbox_contacts',
+          sourceIdentifier: s.mailboxEmail,
+          sourceDisplayName: s.mailboxEmail,
+          sourceSmtpAddress: s.mailboxEmail,
+          sourceFilterPlain: null,
+        };
+      } else {
+        return {
+          sourceType: 'org_contacts',
+          sourceIdentifier: 'all',
+          sourceDisplayName: 'Organization Contacts',
+          sourceSmtpAddress: null,
+          sourceFilterPlain: null,
+        };
       }
-    } else if (formData.sourceType === 'mailbox_contacts') {
-      const email = formData.sourceMailboxEmail.trim();
-      if (!email) return;
-      sources.push({
-        sourceType: 'mailbox_contacts',
-        sourceIdentifier: email,
-        sourceDisplayName: email,
-        sourceSmtpAddress: email,
-        sourceFilterPlain: null,
-      });
-    } else if (formData.sourceType === 'org_contacts') {
-      sources.push({
-        sourceType: 'org_contacts',
-        sourceIdentifier: 'all',
-        sourceDisplayName: 'Organization Contacts',
-        sourceSmtpAddress: null,
-        sourceFilterPlain: null,
-      });
-    }
+    });
 
     const request: CreateTunnelRequest = {
       name: formData.name.trim(),
@@ -252,21 +241,9 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             )}
             {step === 1 && (
               <StepSource
-                sourceType={formData.sourceType}
-                onSourceTypeChange={(type) =>
-                  setFormData((prev) => ({ ...prev, sourceType: type }))
-                }
-                selectedDdgs={formData.sourceDdgs}
-                onToggleDdg={handleToggleDdg}
-                mailboxEmail={formData.sourceMailboxEmail}
-                onMailboxEmailChange={(email) => {
-                  setFormData((prev) => ({
-                    ...prev,
-                    sourceMailboxEmail: email,
-                  }));
-                  if (errors.source)
-                    setErrors((prev) => ({ ...prev, source: '' }));
-                }}
+                sources={formData.sources}
+                onAddSource={handleAddSource}
+                onRemoveSource={handleRemoveSource}
                 error={errors.source || null}
               />
             )}
@@ -282,9 +259,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             {step === 3 && (
               <StepReview
                 name={formData.name}
-                sourceType={formData.sourceType}
-                ddgs={formData.sourceDdgs}
-                mailboxEmail={formData.sourceMailboxEmail}
+                sources={formData.sources}
                 targetListIds={formData.targetListIds}
                 onEdit={goToStep}
               />
