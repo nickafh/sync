@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePhoneLists, usePhoneListContacts, useCreatePhoneList, useUpdatePhoneList, useDeletePhoneList } from '@/hooks/use-phone-lists';
 import { PageHeader } from '@/components/PageHeader';
 import { EmptyState } from '@/components/EmptyState';
@@ -13,7 +13,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
-import { Phone, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Phone, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { api } from '@/lib/api';
+import type { UserSearchResult } from '@/types/tunnel';
 import type { ContactDto, PhoneListDto } from '@/types/phone-list';
 
 function mapContactDtoToCardData(dto: ContactDto): ContactCardData {
@@ -44,14 +46,14 @@ export default function PhoneListsPage() {
   const [newName, setNewName] = useState('');
   const [newDescription, setNewDescription] = useState('');
   const [newScope, setNewScope] = useState('all_users');
-  const [newEmails, setNewEmails] = useState('');
+  const [newEmails, setNewEmails] = useState<string[]>([]);
 
   // Edit form state
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editScope, setEditScope] = useState('all_users');
-  const [editEmails, setEditEmails] = useState('');
+  const [editEmails, setEditEmails] = useState<string[]>([]);
 
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
@@ -85,7 +87,7 @@ export default function PhoneListsPage() {
         description: newDescription.trim() || null,
         targetScope: newScope,
         targetUserFilter: newScope === 'specific_users'
-          ? JSON.stringify({ emails: newEmails.split(',').map(e => e.trim()).filter(Boolean) })
+          ? JSON.stringify({ emails: newEmails })
           : null,
       },
       {
@@ -95,7 +97,7 @@ export default function PhoneListsPage() {
           setNewName('');
           setNewDescription('');
           setNewScope('all_users');
-          setNewEmails('');
+          setNewEmails([]);
         },
         onError: () => toast.error('Failed to create target.'),
       },
@@ -107,7 +109,7 @@ export default function PhoneListsPage() {
     setEditName(list.name);
     setEditDescription('');
     setEditScope(list.targetScope);
-    setEditEmails('');
+    setEditEmails([]);
   };
 
   const handleUpdate = () => {
@@ -120,7 +122,7 @@ export default function PhoneListsPage() {
           description: editDescription.trim() || null,
           targetScope: editScope,
           targetUserFilter: editScope === 'specific_users'
-            ? JSON.stringify({ emails: editEmails.split(',').map(e => e.trim()).filter(Boolean) })
+            ? JSON.stringify({ emails: editEmails })
             : null,
         },
       },
@@ -206,10 +208,9 @@ export default function PhoneListsPage() {
               </label>
             </div>
             {newScope === 'specific_users' && (
-              <Input
-                placeholder="nick@atlantafinehomes.com, jane@atlantafinehomes.com"
-                value={newEmails}
-                onChange={(e) => setNewEmails(e.target.value)}
+              <EmailSearchPicker
+                selected={newEmails}
+                onChange={setNewEmails}
               />
             )}
           </div>
@@ -225,7 +226,7 @@ export default function PhoneListsPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { setShowCreate(false); setNewName(''); setNewDescription(''); setNewScope('all_users'); setNewEmails(''); }}
+              onClick={() => { setShowCreate(false); setNewName(''); setNewDescription(''); setNewScope('all_users'); setNewEmails([]); }}
             >
               Cancel
             </Button>
@@ -286,10 +287,9 @@ export default function PhoneListsPage() {
                         </label>
                       </div>
                       {editScope === 'specific_users' && (
-                        <Input
-                          placeholder="nick@atlantafinehomes.com, jane@atlantafinehomes.com"
-                          value={editEmails}
-                          onChange={(e) => setEditEmails(e.target.value)}
+                        <EmailSearchPicker
+                          selected={editEmails}
+                          onChange={setEditEmails}
                         />
                       )}
                     </div>
@@ -405,6 +405,93 @@ export default function PhoneListsPage() {
         onConfirm={handleDelete}
         isLoading={deletePhoneList.isPending}
       />
+    </div>
+  );
+}
+
+function EmailSearchPicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (emails: string[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<UserSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  React.useEffect(() => {
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await api.users.search(query);
+        setResults(data);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
+
+  return (
+    <div className="space-y-2">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((email) => (
+            <span
+              key={email}
+              className="inline-flex items-center gap-1 rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold"
+            >
+              {email}
+              <button
+                type="button"
+                onClick={() => onChange(selected.filter((e) => e !== email))}
+                className="hover:text-gold/70 cursor-pointer"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <Input
+        placeholder="Search by name or email..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {searching && <p className="text-xs text-text-muted">Searching...</p>}
+      {results.length > 0 && (
+        <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+          {results
+            .filter((u) => !selected.some((e) => e.toLowerCase() === u.email.toLowerCase()))
+            .map((user) => (
+              <button
+                key={user.id}
+                type="button"
+                className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                onClick={() => {
+                  onChange([...selected, user.email]);
+                  setQuery('');
+                  setResults([]);
+                }}
+              >
+                <Plus className="h-4 w-4 text-text-muted shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{user.displayName}</p>
+                  <p className="text-xs text-text-muted truncate">{user.email}</p>
+                </div>
+              </button>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

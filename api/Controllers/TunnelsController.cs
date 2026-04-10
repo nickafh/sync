@@ -143,10 +143,18 @@ public class TunnelsController : ControllerBase
         if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
+        // Auto-assign default field profile if none specified
+        var fieldProfileId = request.FieldProfileId;
+        if (fieldProfileId == null)
+        {
+            var defaultProfile = await _db.FieldProfiles.FirstOrDefaultAsync(fp => fp.IsDefault);
+            fieldProfileId = defaultProfile?.Id;
+        }
+
         var tunnel = new Tunnel
         {
             Name = request.Name,
-            FieldProfileId = request.FieldProfileId,
+            FieldProfileId = fieldProfileId,
             StalePolicy = stalePolicy,
             StaleHoldDays = request.StaleDays,
             PhotoSyncEnabled = request.PhotoSyncEnabled,
