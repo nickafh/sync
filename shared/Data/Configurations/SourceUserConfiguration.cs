@@ -12,7 +12,7 @@ public class SourceUserConfiguration : IEntityTypeConfiguration<SourceUser>
 
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).HasColumnName("id");
-        builder.Property(e => e.EntraId).HasColumnName("entra_id").HasMaxLength(100).IsRequired();
+        builder.Property(e => e.EntraId).HasColumnName("entra_id").HasMaxLength(500).IsRequired();
         builder.Property(e => e.DisplayName).HasColumnName("display_name").HasMaxLength(200);
         builder.Property(e => e.FirstName).HasColumnName("first_name").HasMaxLength(100);
         builder.Property(e => e.LastName).HasColumnName("last_name").HasMaxLength(100);

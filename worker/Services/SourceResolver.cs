@@ -561,7 +561,7 @@ public class SourceResolver : ISourceResolver
         foreach (var user in users)
         {
             await db.Database.ExecuteSqlRawAsync(sql, [
-                Trunc(user.EntraId, 100)!, (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
+                Trunc(user.EntraId, 500)!, (object?)Trunc(user.DisplayName, 200), (object?)Trunc(user.FirstName, 100),
                 (object?)Trunc(user.LastName, 100), (object?)Trunc(user.Email, 300),
                 (object?)Trunc(user.BusinessPhone, 50), (object?)Trunc(user.MobilePhone, 50),
                 (object?)Trunc(user.JobTitle, 200), (object?)Trunc(user.Department, 200),
