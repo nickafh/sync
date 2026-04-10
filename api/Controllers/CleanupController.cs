@@ -39,6 +39,33 @@ public class CleanupController : ControllerBase
         {
             var emailSet = new HashSet<string>(request.Emails, StringComparer.OrdinalIgnoreCase);
             mailboxes = mailboxes.Where(m => emailSet.Contains(m.Email)).ToList();
+
+            // If any requested emails aren't in target_mailboxes yet, look them up
+            // directly in Graph so cleanup works for users not yet synced.
+            var foundEmails = new HashSet<string>(mailboxes.Select(m => m.Email), StringComparer.OrdinalIgnoreCase);
+            var missingEmails = emailSet.Where(e => !foundEmails.Contains(e)).ToList();
+            foreach (var email in missingEmails)
+            {
+                try
+                {
+                    var graphUser = await _graphClient.Users[email]
+                        .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
+                    if (graphUser?.Id != null)
+                    {
+                        mailboxes.Add(new AFHSync.Shared.Entities.TargetMailbox
+                        {
+                            EntraId = graphUser.Id,
+                            Email = graphUser.Mail ?? email,
+                            DisplayName = graphUser.DisplayName,
+                            IsActive = true
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to look up {Email} in Graph for cleanup scan", email);
+                }
+            }
         }
 
         var results = new List<UserFoldersDto>();
