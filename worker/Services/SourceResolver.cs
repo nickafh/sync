@@ -74,9 +74,9 @@ public class SourceResolver : ISourceResolver
 
                     case SourceType.MailboxContacts:
                     {
-                        var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, ct);
-                        _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} for source {SourceId}",
-                            contacts.Count, source.SourceIdentifier, source.Id);
+                        var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, source.ContactFolderId, ct);
+                        _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} folder {Folder} for source {SourceId}",
+                            contacts.Count, source.SourceIdentifier, source.ContactFolderName ?? "root", source.Id);
                         allSourceUsers.AddRange(contacts);
                         break;
                     }
@@ -206,25 +206,39 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
-    /// Queries Graph /users/{mailboxEmail}/contacts to read contacts from a shared mailbox's
-    /// Contacts folder, handling pagination via PageIterator.
-    /// Returns already-mapped SourceUser entities (no DDG-specific filtering applied).
+    /// Queries Graph for contacts from a mailbox. Reads from the root Contacts folder
+    /// by default, or from a specific subfolder when contactFolderId is provided.
+    /// Handles pagination via PageIterator.
     /// </summary>
-    private async Task<List<SourceUser>> FetchMailboxContactsAsync(string mailboxEmail, CancellationToken ct)
+    private async Task<List<SourceUser>> FetchMailboxContactsAsync(string mailboxEmail, string? contactFolderId, CancellationToken ct)
     {
         var sourceUsers = new List<SourceUser>();
         var client = _graphClientFactory.Client;
 
-        var response = await client.Users[mailboxEmail].Contacts.GetAsync(config =>
+        var selectFields = new[]
         {
-            config.QueryParameters.Select =
-            [
-                "id", "displayName", "givenName", "surname", "emailAddresses",
-                "businessPhones", "mobilePhone", "jobTitle", "department",
-                "companyName", "businessAddress", "personalNotes"
-            ];
-            config.QueryParameters.Top = 999;
-        }, ct);
+            "id", "displayName", "givenName", "surname", "emailAddresses",
+            "businessPhones", "mobilePhone", "jobTitle", "department",
+            "companyName", "businessAddress", "personalNotes"
+        };
+
+        ContactCollectionResponse? response;
+        if (!string.IsNullOrEmpty(contactFolderId))
+        {
+            response = await client.Users[mailboxEmail].ContactFolders[contactFolderId].Contacts.GetAsync(config =>
+            {
+                config.QueryParameters.Select = selectFields;
+                config.QueryParameters.Top = 999;
+            }, ct);
+        }
+        else
+        {
+            response = await client.Users[mailboxEmail].Contacts.GetAsync(config =>
+            {
+                config.QueryParameters.Select = selectFields;
+                config.QueryParameters.Top = 999;
+            }, ct);
+        }
 
         if (response == null)
             return sourceUsers;

@@ -20,5 +20,7 @@ public record SourceInput(
     [Required] string SourceIdentifier,
     string? SourceDisplayName,
     string? SourceSmtpAddress,
-    string? SourceFilterPlain
+    string? SourceFilterPlain,
+    string? ContactFolderId = null,
+    string? ContactFolderName = null
 );

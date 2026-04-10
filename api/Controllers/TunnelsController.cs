@@ -73,7 +73,7 @@ public class TunnelsController : ControllerBase
             result.Add(new TunnelDto(
                 t.Id,
                 t.Name,
-                t.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain)).ToArray(),
+                t.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain, s.ContactFolderId, s.ContactFolderName)).ToArray(),
                 EnumHelpers.ToPgName(t.Status),
                 EnumHelpers.ToPgName(t.StalePolicy),
                 t.StaleHoldDays,
@@ -113,7 +113,7 @@ public class TunnelsController : ControllerBase
         var dto = new TunnelDetailDto(
             tunnel.Id,
             tunnel.Name,
-            tunnel.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain)).ToArray(),
+            tunnel.TunnelSources.Select(s => new TunnelSourceDto(s.Id, EnumHelpers.ToPgName(s.SourceType), s.SourceIdentifier, s.SourceDisplayName, s.SourceSmtpAddress, s.SourceFilterPlain, s.ContactFolderId, s.ContactFolderName)).ToArray(),
             EnumHelpers.ToPgName(tunnel.Status),
             EnumHelpers.ToPgName(tunnel.StalePolicy),
             tunnel.StaleHoldDays,
@@ -175,6 +175,8 @@ public class TunnelsController : ControllerBase
                 SourceDisplayName = src.SourceDisplayName,
                 SourceSmtpAddress = src.SourceSmtpAddress,
                 SourceFilterPlain = src.SourceFilterPlain,
+                ContactFolderId = src.ContactFolderId,
+                ContactFolderName = src.ContactFolderName,
                 CreatedAt = DateTime.UtcNow
             });
         }
@@ -239,6 +241,8 @@ public class TunnelsController : ControllerBase
                 SourceDisplayName = src.SourceDisplayName,
                 SourceSmtpAddress = src.SourceSmtpAddress,
                 SourceFilterPlain = src.SourceFilterPlain,
+                ContactFolderId = src.ContactFolderId,
+                ContactFolderName = src.ContactFolderName,
                 CreatedAt = DateTime.UtcNow
             });
         }

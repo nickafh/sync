@@ -13,6 +13,8 @@ export interface SourceEntry {
   type: 'ddg' | 'mailbox_contacts' | 'org_contacts';
   ddg?: DdgDto;
   mailboxEmail?: string;
+  contactFolderId?: string;
+  contactFolderName?: string;
   label: string;
   sublabel?: string;
 }
@@ -178,13 +180,15 @@ export function StepSource({
       {/* Mailbox email input with autocomplete */}
       {addMode === 'mailbox_contacts' && (
         <MailboxAutocomplete
-          onSelect={(email, displayName) => {
-            if (sources.some((s) => s.type === 'mailbox_contacts' && s.mailboxEmail === email)) return;
+          onSelect={(email, displayName, folderId, folderName) => {
+            if (sources.some((s) => s.type === 'mailbox_contacts' && s.mailboxEmail === email && s.contactFolderId === folderId)) return;
             onAddSource({
               type: 'mailbox_contacts',
               mailboxEmail: email,
+              contactFolderId: folderId,
+              contactFolderName: folderName,
               label: displayName || email,
-              sublabel: displayName ? email : undefined,
+              sublabel: folderName ? `${email} / ${folderName}` : (displayName ? email : undefined),
             });
             setAddMode(null);
             setMailboxInput('');
@@ -204,16 +208,21 @@ function MailboxAutocomplete({
   onSelect,
   onCancel,
 }: {
-  onSelect: (email: string, displayName?: string) => void;
+  onSelect: (email: string, displayName?: string, folderId?: string, folderName?: string) => void;
   onCancel: () => void;
 }) {
+  const [step, setStep] = useState<'email' | 'folder'>('email');
+  const [selectedEmail, setSelectedEmail] = useState('');
+  const [selectedDisplayName, setSelectedDisplayName] = useState<string | undefined>();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [folders, setFolders] = useState<{ id: string; name: string }[]>([]);
+  const [loadingFolders, setLoadingFolders] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    if (query.length < 2) {
+    if (step !== 'email' || query.length < 2) {
       setResults([]);
       return;
     }
@@ -230,7 +239,61 @@ function MailboxAutocomplete({
       }
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [query]);
+  }, [query, step]);
+
+  const handlePickEmail = async (email: string, displayName?: string) => {
+    setSelectedEmail(email);
+    setSelectedDisplayName(displayName);
+    setLoadingFolders(true);
+    setStep('folder');
+    try {
+      const data = await api.graph.contactFolders(email);
+      setFolders(data);
+    } catch {
+      setFolders([]);
+    } finally {
+      setLoadingFolders(false);
+    }
+  };
+
+  if (step === 'folder') {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium">Select Contact Folder</p>
+          <Button variant="outline" size="sm" onClick={() => { setStep('email'); setQuery(''); }}>
+            Back
+          </Button>
+        </div>
+        <p className="text-xs text-text-muted">{selectedEmail}</p>
+        {loadingFolders ? (
+          <p className="text-xs text-text-muted">Loading folders...</p>
+        ) : (
+          <div className="border rounded-lg divide-y max-h-[250px] overflow-y-auto">
+            <button
+              type="button"
+              className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer font-medium"
+              onClick={() => onSelect(selectedEmail, selectedDisplayName)}
+            >
+              <Mail className="h-4 w-4 text-text-muted shrink-0" />
+              <span className="text-sm">All Contacts (root folder)</span>
+            </button>
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                onClick={() => onSelect(selectedEmail, selectedDisplayName, folder.id, folder.name)}
+              >
+                <Cable className="h-4 w-4 text-text-muted shrink-0" />
+                <span className="text-sm">{folder.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -256,7 +319,7 @@ function MailboxAutocomplete({
               key={user.id}
               type="button"
               className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
-              onClick={() => onSelect(user.email, user.displayName)}
+              onClick={() => handlePickEmail(user.email, user.displayName)}
             >
               <Mail className="h-4 w-4 text-text-muted shrink-0" />
               <div className="min-w-0">
@@ -274,7 +337,7 @@ function MailboxAutocomplete({
         <Button
           size="sm"
           variant="outline"
-          onClick={() => onSelect(query.trim())}
+          onClick={() => handlePickEmail(query.trim())}
           className="w-full"
         >
           Use &quot;{query.trim()}&quot;

@@ -353,4 +353,37 @@ public class GraphController : ControllerBase
 
         return "Other";
     }
+
+    /// <summary>
+    /// GET /api/graph/contact-folders?email=user@example.com
+    /// Lists contact folders for a mailbox so the user can pick a specific subfolder as source.
+    /// </summary>
+    [HttpGet("contact-folders")]
+    public async Task<IActionResult> GetContactFolders([FromQuery] string email, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { message = "Email is required." });
+
+        try
+        {
+            var response = await _graphClient.Users[email].ContactFolders.GetAsync(config =>
+            {
+                config.QueryParameters.Select = ["id", "displayName"];
+                config.QueryParameters.Top = 100;
+            }, ct);
+
+            var folders = response?.Value?
+                .Where(f => f.Id != null)
+                .Select(f => new { id = f.Id, name = f.DisplayName ?? "(unnamed)" })
+                .OrderBy(f => f.name)
+                .ToArray() ?? [];
+
+            return Ok(folders);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list contact folders for {Email}", email);
+            return StatusCode(503, new { message = "Unable to list contact folders." });
+        }
+    }
 }

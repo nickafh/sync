@@ -19,6 +19,8 @@ public class TunnelSourceConfiguration : IEntityTypeConfiguration<TunnelSource>
         builder.Property(e => e.SourceDisplayName).HasColumnName("source_display_name").HasMaxLength(200);
         builder.Property(e => e.SourceSmtpAddress).HasColumnName("source_smtp_address").HasMaxLength(320);
         builder.Property(e => e.SourceFilterPlain).HasColumnName("source_filter_plain").HasMaxLength(2000);
+        builder.Property(e => e.ContactFolderId).HasColumnName("contact_folder_id").HasMaxLength(500);
+        builder.Property(e => e.ContactFolderName).HasColumnName("contact_folder_name").HasMaxLength(200);
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
 
         builder.HasOne(e => e.Tunnel)

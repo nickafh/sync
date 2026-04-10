@@ -11,6 +11,8 @@ public class TunnelSource
     public string? SourceDisplayName { get; set; }
     public string? SourceSmtpAddress { get; set; }
     public string? SourceFilterPlain { get; set; }
+    public string? ContactFolderId { get; set; }
+    public string? ContactFolderName { get; set; }
     public DateTime CreatedAt { get; set; }
 
     // Navigation properties

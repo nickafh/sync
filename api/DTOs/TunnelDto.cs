@@ -25,7 +25,9 @@ public record TunnelSourceDto(
     string SourceIdentifier,
     string? SourceDisplayName,
     string? SourceSmtpAddress,
-    string? SourceFilterPlain
+    string? SourceFilterPlain,
+    string? ContactFolderId,
+    string? ContactFolderName
 );
 
 public record TunnelTargetListDto(int Id, string Name);

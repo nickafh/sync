@@ -5,6 +5,8 @@ export interface TunnelSourceDto {
   sourceDisplayName: string | null;
   sourceSmtpAddress: string | null;
   sourceFilterPlain: string | null;
+  contactFolderId: string | null;
+  contactFolderName: string | null;
 }
 
 export interface SourceInput {
@@ -13,6 +15,8 @@ export interface SourceInput {
   sourceDisplayName: string | null;
   sourceSmtpAddress: string | null;
   sourceFilterPlain: string | null;
+  contactFolderId?: string | null;
+  contactFolderName?: string | null;
 }
 
 import type { TunnelStatus, StalePolicy, SyncRunStatus } from './common';

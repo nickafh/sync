@@ -134,6 +134,11 @@ export const api = {
     search: (q: string) => fetchApi<UserSearchResult[]>(`/graph/users/search?q=${encodeURIComponent(q)}`),
   },
 
+  graph: {
+    contactFolders: (email: string) =>
+      fetchApi<{ id: string; name: string }[]>(`/graph/contact-folders?email=${encodeURIComponent(email)}`),
+  },
+
   contactExclusions: {
     sourceContacts: (tunnelId: number) =>
       fetchApi<SourceContactDto[]>(`/tunnels/${tunnelId}/contact-exclusions/source-contacts`),

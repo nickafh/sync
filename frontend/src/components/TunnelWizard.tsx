@@ -148,9 +148,11 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
         return {
           sourceType: 'mailbox_contacts',
           sourceIdentifier: s.mailboxEmail,
-          sourceDisplayName: s.mailboxEmail,
+          sourceDisplayName: s.contactFolderName ? `${s.mailboxEmail} / ${s.contactFolderName}` : s.mailboxEmail,
           sourceSmtpAddress: s.mailboxEmail,
           sourceFilterPlain: null,
+          contactFolderId: s.contactFolderId ?? null,
+          contactFolderName: s.contactFolderName ?? null,
         };
       } else {
         return {
