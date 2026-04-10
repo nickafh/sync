@@ -88,6 +88,9 @@ public class CleanupController : ControllerBase
         {
             try
             {
+                // Graph won't delete a non-empty folder. Delete all contacts inside first.
+                await DeleteAllContactsInFolderAsync(item.EntraId, item.FolderId, ct);
+
                 await _graphClient.Users[item.EntraId].ContactFolders[item.FolderId]
                     .DeleteAsync(cancellationToken: ct);
                 deleted++;
@@ -97,11 +100,46 @@ public class CleanupController : ControllerBase
             catch (Exception ex)
             {
                 failed++;
-                _logger.LogWarning(ex, "Failed to delete folder {FolderId} from {Email}", item.FolderId, item.Email);
+                _logger.LogWarning(ex, "Failed to delete folder {FolderId} ({FolderName}) from {Email}",
+                    item.FolderId, item.FolderName, item.Email);
             }
         }
 
         return Ok(new { deleted, failed, message = $"Deleted {deleted} folder(s), {failed} failed." });
+    }
+
+    /// <summary>
+    /// Deletes all contacts inside a contact folder so the folder itself can be deleted.
+    /// Graph API returns "Object cannot be deleted" for non-empty folders.
+    /// </summary>
+    private async Task DeleteAllContactsInFolderAsync(string entraId, string folderId, CancellationToken ct)
+    {
+        var contacts = await _graphClient.Users[entraId].ContactFolders[folderId].Contacts
+            .GetAsync(config =>
+            {
+                config.QueryParameters.Select = ["id"];
+                config.QueryParameters.Top = 999;
+            }, ct);
+
+        if (contacts?.Value is null || contacts.Value.Count == 0)
+            return;
+
+        _logger.LogInformation("Deleting {Count} contacts from folder {FolderId} before folder removal",
+            contacts.Value.Count, folderId);
+
+        foreach (var contact in contacts.Value)
+        {
+            if (contact.Id is null) continue;
+            try
+            {
+                await _graphClient.Users[entraId].ContactFolders[folderId].Contacts[contact.Id]
+                    .DeleteAsync(cancellationToken: ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to delete contact {ContactId} from folder {FolderId}", contact.Id, folderId);
+            }
+        }
     }
 }
 
