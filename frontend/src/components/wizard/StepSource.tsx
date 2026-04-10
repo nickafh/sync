@@ -26,7 +26,7 @@ interface StepSourceProps {
   error: string | null;
 }
 
-type AddMode = null | 'ddg' | 'mailbox_contacts' | 'org_contacts';
+type AddMode = null | 'ddg' | 'mailbox_contacts' | 'org_contacts' | 'specific_users';
 
 export function StepSource({
   sources,
@@ -141,6 +141,17 @@ export function StepSource({
               <p className="text-xs text-text-muted">Contacts from a mailbox&apos;s Contacts folder</p>
             </div>
           </button>
+          <button
+            type="button"
+            onClick={() => setAddMode('specific_users')}
+            className="w-full flex items-center gap-3 p-3 rounded-lg border border-dashed hover:border-gold hover:bg-gold/5 transition-colors cursor-pointer text-left"
+          >
+            <Plus className="h-4 w-4 text-text-muted" />
+            <div>
+              <p className="text-sm font-medium">Add Specific Users</p>
+              <p className="text-xs text-text-muted">Pick individual users to sync as contacts</p>
+            </div>
+          </button>
           {!hasOrgContacts && (
             <button
               type="button"
@@ -197,8 +208,144 @@ export function StepSource({
         />
       )}
 
+      {/* Specific Users picker */}
+      {addMode === 'specific_users' && (
+        <SpecificUsersPicker
+          onDone={(users) => {
+            if (users.length === 0) { setAddMode(null); return; }
+            const emails = users.map((u) => u.email);
+            const filter = emails.map((e) => `mail eq '${e}'`).join(' or ');
+            const names = users.map((u) => u.displayName || u.email).join(', ');
+            onAddSource({
+              type: 'ddg',
+              label: names.length > 60 ? `${names.substring(0, 57)}...` : names,
+              sublabel: `${users.length} specific user(s)`,
+              ddg: {
+                id: `specific-${Date.now()}`,
+                displayName: names.length > 60 ? `${names.substring(0, 57)}...` : names,
+                primarySmtpAddress: '',
+                recipientFilter: filter,
+                recipientFilterPlain: `Specific users: ${emails.join(', ')}`,
+                graphFilter: filter,
+                graphFilterSuccess: true,
+                graphFilterWarning: null,
+                memberCount: users.length,
+                type: 'Specific',
+              },
+            });
+            setAddMode(null);
+          }}
+          onCancel={() => setAddMode(null)}
+        />
+      )}
+
       {error && (
         <p className="text-destructive text-xs">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function SpecificUsersPicker({
+  onDone,
+  onCancel,
+}: {
+  onDone: (users: { email: string; displayName?: string }[]) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<UserSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<{ email: string; displayName?: string }[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await api.users.search(query);
+        setResults(data);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">Add Specific Users</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
+          <Button
+            size="sm"
+            className="bg-gold text-white hover:bg-gold/90"
+            onClick={() => onDone(selected)}
+            disabled={selected.length === 0}
+          >
+            Add {selected.length} user(s)
+          </Button>
+        </div>
+      </div>
+
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((u) => (
+            <span
+              key={u.email}
+              className="inline-flex items-center gap-1 rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold"
+            >
+              {u.displayName || u.email}
+              <button
+                type="button"
+                onClick={() => setSelected((prev) => prev.filter((s) => s.email !== u.email))}
+                className="hover:text-gold/70 cursor-pointer"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <Input
+        placeholder="Search by name or email..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      {searching && <p className="text-xs text-text-muted">Searching...</p>}
+      {results.length > 0 && (
+        <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+          {results
+            .filter((u) => !selected.some((s) => s.email.toLowerCase() === u.email.toLowerCase()))
+            .map((user) => (
+              <button
+                key={user.id}
+                type="button"
+                className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                onClick={() => {
+                  setSelected((prev) => [...prev, { email: user.email, displayName: user.displayName }]);
+                  setQuery('');
+                  setResults([]);
+                }}
+              >
+                <Plus className="h-4 w-4 text-text-muted shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{user.displayName}</p>
+                  <p className="text-xs text-text-muted truncate">{user.email}</p>
+                </div>
+              </button>
+            ))}
+        </div>
       )}
     </div>
   );
