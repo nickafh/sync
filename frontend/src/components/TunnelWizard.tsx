@@ -84,7 +84,13 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
           break;
         case 2:
           if (formData.targetListIds.length === 0) {
-            newErrors.targets = 'Select at least one target.';
+            newErrors.targets = 'Select at least one phone list above.';
+          }
+          if (formData.targetUserEmails !== null) {
+            const emails: string[] = JSON.parse(formData.targetUserEmails || '[]');
+            if (emails.length === 0) {
+              newErrors.targets = 'Select at least one user, or switch scope to All Users.';
+            }
           }
           break;
       }
