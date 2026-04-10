@@ -60,6 +60,27 @@ public class SyncRunsController : ControllerBase
     }
 
     /// <summary>
+    /// POST /api/sync-runs/stop — Request cancellation of the current sync run.
+    /// Sets a flag that the sync engine checks between tunnels.
+    /// </summary>
+    [HttpPost("stop")]
+    public async Task<IActionResult> StopSync([FromServices] AFHSyncDbContext db)
+    {
+        var isRunning = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running);
+        if (!isRunning)
+            return Ok(new { message = "No sync is currently running." });
+
+        var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "cancel_sync");
+        if (setting != null)
+            setting.Value = "true";
+        else
+            db.AppSettings.Add(new AFHSync.Shared.Entities.AppSetting { Key = "cancel_sync", Value = "true" });
+        await db.SaveChangesAsync();
+
+        return Ok(new { message = "Stop requested. Sync will stop after the current tunnel completes." });
+    }
+
+    /// <summary>
     /// GET /api/sync-runs?page=1&amp;pageSize=20 — Paginated run history.
     /// </summary>
     [HttpGet]

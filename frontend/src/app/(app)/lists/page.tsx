@@ -422,13 +422,17 @@ function EmailSearchPicker({
   selected: string[];
   onChange: (emails: string[]) => void;
 }) {
+  const [tab, setTab] = useState<'users' | 'groups'>('users');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [ddgs, setDdgs] = useState<{ id: string; displayName: string; memberCount: number }[]>([]);
+  const [ddgsLoading, setDdgsLoading] = useState(false);
+  const [addingGroup, setAddingGroup] = useState<string | null>(null);
   const debounceRef = React.useRef<ReturnType<typeof setTimeout>>(undefined);
 
   React.useEffect(() => {
-    if (query.length < 2) {
+    if (tab !== 'users' || query.length < 2) {
       setResults([]);
       return;
     }
@@ -445,7 +449,42 @@ function EmailSearchPicker({
       }
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [query]);
+  }, [query, tab]);
+
+  React.useEffect(() => {
+    if (tab === 'groups' && ddgs.length === 0) {
+      setDdgsLoading(true);
+      api.ddgs.list()
+        .then((data) => setDdgs(data.map((d) => ({ id: d.primarySmtpAddress, displayName: d.displayName, memberCount: d.memberCount }))))
+        .catch(() => setDdgs([]))
+        .finally(() => setDdgsLoading(false));
+    }
+  }, [tab, ddgs.length]);
+
+  const handleAddGroup = async (groupEmail: string) => {
+    setAddingGroup(groupEmail);
+    try {
+      const members = await api.ddgs.getMembers(groupEmail, 1, 999);
+      const newEmails = members
+        .map((m) => m.email)
+        .filter((e): e is string => !!e)
+        .filter((e) => !selected.some((s) => s.toLowerCase() === e.toLowerCase()));
+      if (newEmails.length > 0) {
+        onChange([...selected, ...newEmails]);
+        toast.success(`Added ${newEmails.length} users from group.`);
+      } else {
+        toast.info('All members already selected.');
+      }
+    } catch {
+      toast.error('Failed to load group members.');
+    } finally {
+      setAddingGroup(null);
+    }
+  };
+
+  const filteredDdgs = query.trim()
+    ? ddgs.filter((d) => d.displayName.toLowerCase().includes(query.toLowerCase()))
+    : ddgs;
 
   return (
     <div className="space-y-2">
@@ -468,35 +507,86 @@ function EmailSearchPicker({
           ))}
         </div>
       )}
+      <p className="text-xs text-text-muted">{selected.length} user(s) selected</p>
+
+      <div className="flex gap-2 border-b">
+        <button
+          type="button"
+          onClick={() => setTab('users')}
+          className={`px-3 py-1.5 text-sm font-medium cursor-pointer ${tab === 'users' ? 'border-b-2 border-gold text-gold' : 'text-text-muted'}`}
+        >
+          Users
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('groups')}
+          className={`px-3 py-1.5 text-sm font-medium cursor-pointer ${tab === 'groups' ? 'border-b-2 border-gold text-gold' : 'text-text-muted'}`}
+        >
+          Groups
+        </button>
+      </div>
+
       <Input
-        placeholder="Search by name or email..."
+        placeholder={tab === 'users' ? 'Search by name or email...' : 'Filter groups...'}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
-      {searching && <p className="text-xs text-text-muted">Searching...</p>}
-      {results.length > 0 && (
-        <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
-          {results
-            .filter((u) => !selected.some((e) => e.toLowerCase() === u.email.toLowerCase()))
-            .map((user) => (
-              <button
-                key={user.id}
-                type="button"
-                className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
-                onClick={() => {
-                  onChange([...selected, user.email]);
-                  setQuery('');
-                  setResults([]);
-                }}
-              >
-                <Plus className="h-4 w-4 text-text-muted shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{user.displayName}</p>
-                  <p className="text-xs text-text-muted truncate">{user.email}</p>
-                </div>
-              </button>
-            ))}
-        </div>
+
+      {tab === 'users' && (
+        <>
+          {searching && <p className="text-xs text-text-muted">Searching...</p>}
+          {results.length > 0 && (
+            <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+              {results
+                .filter((u) => !selected.some((e) => e.toLowerCase() === u.email.toLowerCase()))
+                .map((user) => (
+                  <button
+                    key={user.id}
+                    type="button"
+                    className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                    onClick={() => {
+                      onChange([...selected, user.email]);
+                      setQuery('');
+                      setResults([]);
+                    }}
+                  >
+                    <Plus className="h-4 w-4 text-text-muted shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{user.displayName}</p>
+                      <p className="text-xs text-text-muted truncate">{user.email}</p>
+                    </div>
+                  </button>
+                ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === 'groups' && (
+        <>
+          {ddgsLoading && <p className="text-xs text-text-muted">Loading groups...</p>}
+          {filteredDdgs.length > 0 && (
+            <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+              {filteredDdgs.map((ddg) => (
+                <button
+                  key={ddg.id}
+                  type="button"
+                  className="flex items-center justify-between px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                  onClick={() => handleAddGroup(ddg.id)}
+                  disabled={addingGroup === ddg.id}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{ddg.displayName}</p>
+                    <p className="text-xs text-text-muted">{ddg.memberCount} members</p>
+                  </div>
+                  <span className="text-xs text-gold shrink-0">
+                    {addingGroup === ddg.id ? 'Adding...' : '+ Add all'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

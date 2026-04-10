@@ -3,9 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Cable, ClipboardList, Play, FlaskConical, ArrowUpDown } from 'lucide-react';
+import { Loader2, Cable, ClipboardList, Play, Square, ArrowUpDown } from 'lucide-react';
 import { useDashboard, useTriggerSync, useSyncRunPolling } from '@/hooks/use-dashboard';
 import { useTunnels } from '@/hooks/use-tunnels';
+import { api } from '@/lib/api';
 import type { SyncRunDetailDto } from '@/types/sync-run';
 import { PageHeader } from '@/components/PageHeader';
 import { KPICard } from '@/components/KPICard';
@@ -154,23 +155,13 @@ export default function DashboardPage() {
     );
   }
 
-  function handleDryRun() {
-    triggerSync.mutate(
-      { runType: 'dry_run', isDryRun: true, tunnelIds: null },
-      {
-        onSuccess: (data) => {
-          toast.success('Dry run started. No changes will be written.');
-          setActiveRunId(data.runId);
-        },
-        onError: (error) => {
-          if (error.message.includes('409')) {
-            toast.warning('A sync run is already in progress.');
-          } else {
-            toast.error('Something went wrong. Please try again.');
-          }
-        },
-      },
-    );
+  async function handleStopSync() {
+    try {
+      const result = await api.syncRuns.stop();
+      toast.success(result.message);
+    } catch {
+      toast.error('Failed to stop sync.');
+    }
   }
 
   // Loading state
@@ -227,12 +218,12 @@ export default function DashboardPage() {
         </Button>
         <Button
           variant="outline"
-          className="border-gold text-gold hover:bg-gold/10"
-          onClick={handleDryRun}
-          disabled={isSyncing}
+          className="border-red-500 text-red-500 hover:bg-red-50"
+          onClick={handleStopSync}
+          disabled={!isSyncing}
         >
-          <FlaskConical className="mr-2 h-4 w-4" />
-          Dry Run
+          <Square className="mr-2 h-4 w-4" />
+          Stop Sync
         </Button>
       </PageHeader>
 

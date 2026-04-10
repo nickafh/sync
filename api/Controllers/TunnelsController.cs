@@ -444,6 +444,66 @@ public class TunnelsController : ControllerBase
     }
 
     /// <summary>
+    /// POST /api/tunnels/{id}/purge — Delete ALL Graph contacts and sync state for this tunnel.
+    /// Removes the contact folder from every target mailbox, then clears ContactSyncState records.
+    /// Next sync will recreate everything from scratch.
+    /// </summary>
+    [HttpPost("{id:int}/purge")]
+    public async Task<IActionResult> Purge(int id, CancellationToken ct)
+    {
+        var tunnel = await _db.Tunnels.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (tunnel is null)
+            return NotFound(new { message = $"Tunnel {id} not found." });
+
+        // Get all target mailboxes that have sync state for this tunnel
+        var mailboxIds = await _db.ContactSyncStates
+            .Where(s => s.TunnelId == id)
+            .Select(s => s.TargetMailboxId)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var mailboxes = await _db.TargetMailboxes
+            .Where(m => mailboxIds.Contains(m.Id))
+            .ToListAsync(ct);
+
+        int foldersDeleted = 0;
+        foreach (var mailbox in mailboxes)
+        {
+            try
+            {
+                // Find the contact folder by name
+                var folders = await _graphClient.Users[mailbox.EntraId].ContactFolders
+                    .GetAsync(config =>
+                    {
+                        var escaped = tunnel.Name.Replace("'", "''");
+                        config.QueryParameters.Filter = $"displayName eq '{escaped}'";
+                        config.QueryParameters.Top = 1;
+                    }, ct);
+
+                var folder = folders?.Value?.FirstOrDefault();
+                if (folder?.Id != null)
+                {
+                    await _graphClient.Users[mailbox.EntraId].ContactFolders[folder.Id]
+                        .DeleteAsync(cancellationToken: ct);
+                    foldersDeleted++;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log but continue — folder may already be gone
+                _ = ex;
+            }
+        }
+
+        // Clear all sync state for this tunnel
+        var statesDeleted = await _db.ContactSyncStates
+            .Where(s => s.TunnelId == id)
+            .ExecuteDeleteAsync(ct);
+
+        return Ok(new { foldersDeleted, statesDeleted, message = $"Purged tunnel {tunnel.Name}: {foldersDeleted} folders deleted, {statesDeleted} sync states cleared." });
+    }
+
+    /// <summary>
     /// POST /api/tunnels/{id}/sources/{sourceId}/refresh-ddg — Re-read DDG filter from Exchange and update source (DDG-07).
     /// </summary>
     [HttpPost("{id:int}/sources/{sourceId:int}/refresh-ddg")]

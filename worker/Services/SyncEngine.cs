@@ -118,6 +118,9 @@ public sealed class SyncEngine(
 
         try
         {
+            // Step 2b: Auto-discover target mailboxes from Graph.
+            await RefreshTargetMailboxesAsync(ct);
+
             // Step 3: Load tunnels.
             var tunnels = await LoadTunnelsAsync(tunnelId, ct);
             tunnelCount = tunnels.Count;
@@ -129,6 +132,16 @@ public sealed class SyncEngine(
             // Step 5: Process each tunnel sequentially (D-13).
             foreach (var tunnel in tunnels)
             {
+                // Check for cancellation request (stop sync button)
+                var cancelRequested = await ReadAppSettingAsync("cancel_sync", "false", ct);
+                if (cancelRequested == "true")
+                {
+                    logger.LogInformation("Sync cancelled by user — stopping after {Processed} tunnel(s)", tunnelsProcessed);
+                    // Clear the flag so the next sync isn't auto-cancelled
+                    await WriteAppSettingAsync("cancel_sync", "false", ct);
+                    break;
+                }
+
                 try
                 {
                     var (created, updated, skipped, failed, removed) =
@@ -992,6 +1005,90 @@ public sealed class SyncEngine(
         return entraIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Auto-discovers all active users from Graph and upserts them into target_mailboxes.
+    /// Ensures "All Users" delivery scope always includes every licensed user.
+    /// </summary>
+    private async Task RefreshTargetMailboxesAsync(CancellationToken ct)
+    {
+        try
+        {
+            logger.LogInformation("Refreshing target mailboxes from Graph...");
+            var graphUsers = new List<(string id, string? mail, string? displayName)>();
+
+            var response = await graphClientFactory.Client.Users.GetAsync(config =>
+            {
+                config.QueryParameters.Filter = "accountEnabled eq true and userType eq 'Member'";
+                config.QueryParameters.Select = ["id", "mail", "displayName"];
+                config.QueryParameters.Top = 999;
+                config.Headers.Add("ConsistencyLevel", "eventual");
+                config.QueryParameters.Count = true;
+            }, ct);
+
+            if (response?.Value != null)
+            {
+                var pageIterator = Microsoft.Graph.PageIterator<Microsoft.Graph.Models.User, Microsoft.Graph.Models.UserCollectionResponse>
+                    .CreatePageIterator(
+                        graphClientFactory.Client,
+                        response,
+                        user =>
+                        {
+                            if (user.Id != null && !string.IsNullOrEmpty(user.Mail))
+                                graphUsers.Add((user.Id, user.Mail, user.DisplayName));
+                            return true;
+                        },
+                        req =>
+                        {
+                            req.Headers.Add("ConsistencyLevel", "eventual");
+                            return req;
+                        });
+                await pageIterator.IterateAsync(ct);
+            }
+
+            if (graphUsers.Count == 0)
+            {
+                logger.LogWarning("Graph returned 0 users for target mailbox refresh — skipping");
+                return;
+            }
+
+            await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+            var existing = await db.TargetMailboxes.ToDictionaryAsync(m => m.EntraId, StringComparer.OrdinalIgnoreCase, ct);
+
+            var now = DateTime.UtcNow;
+            int added = 0;
+            foreach (var (id, mail, displayName) in graphUsers)
+            {
+                if (!existing.ContainsKey(id))
+                {
+                    db.TargetMailboxes.Add(new TargetMailbox
+                    {
+                        EntraId = id,
+                        Email = mail!,
+                        DisplayName = displayName,
+                        IsActive = true,
+                        LastVerifiedAt = now,
+                        CreatedAt = now,
+                        UpdatedAt = now
+                    });
+                    added++;
+                }
+                else
+                {
+                    var mb = existing[id];
+                    mb.LastVerifiedAt = now;
+                }
+            }
+
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Target mailbox refresh complete: {Total} Graph users, {Added} new, {Existing} existing",
+                graphUsers.Count, added, existing.Count);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Target mailbox refresh failed — continuing with existing mailboxes");
+        }
+    }
+
     private async Task<int> ReadParallelismSettingAsync(CancellationToken ct)
     {
         try
@@ -1044,6 +1141,24 @@ public sealed class SyncEngine(
         {
             logger.LogWarning(ex, "Failed to read {Key} from app_settings, using default: {Default}", key, defaultValue);
             return defaultValue;
+        }
+    }
+
+    private async Task WriteAppSettingAsync(string key, string value, CancellationToken ct)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(ct);
+            var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == key, ct);
+            if (setting != null)
+                setting.Value = value;
+            else
+                db.AppSettings.Add(new AppSetting { Key = key, Value = value });
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to write {Key}={Value} to app_settings", key, value);
         }
     }
 

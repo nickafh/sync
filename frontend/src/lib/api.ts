@@ -72,6 +72,8 @@ export const api = {
       fetchApi<RefreshDdgResponse>(`/tunnels/${id}/sources/${sourceId}/refresh-ddg`, { method: 'POST' }),
     resetHashes: (id: number) =>
       fetchApi<{ count: number; message: string }>(`/tunnels/${id}/reset-hashes`, { method: 'POST' }),
+    purge: (id: number) =>
+      fetchApi<{ foldersDeleted: number; statesDeleted: number; message: string }>(`/tunnels/${id}/purge`, { method: 'POST' }),
     targetMailboxes: () =>
       fetchApi<{ id: number; email: string; displayName: string | null }[]>('/tunnels/target-mailboxes'),
   },
@@ -86,6 +88,8 @@ export const api = {
       ),
     trigger: (req: TriggerSyncRequest) =>
       fetchApi<{ runId: number }>('/sync-runs', { method: 'POST', body: JSON.stringify(req) }),
+    stop: () =>
+      fetchApi<{ message: string }>('/sync-runs/stop', { method: 'POST' }),
   },
 
   phoneLists: {

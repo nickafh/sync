@@ -895,6 +895,28 @@ export default function TunnelDetailPage() {
                 Force Full Re-Sync
               </Button>
             </div>
+            <Separator className="my-4" />
+            <div className="space-y-2">
+              <Label>Purge Contacts</Label>
+              <p className="text-sm text-text-muted">
+                Deletes ALL synced contacts from target mailboxes and clears sync state. Use this to fix duplicates. Next sync recreates everything fresh.
+              </p>
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  if (!confirm(`Purge all contacts for "${tunnel.name}"? This deletes contacts from all target phones.`)) return;
+                  try {
+                    const result = await api.tunnels.purge(tunnelId);
+                    toast.success(result.message);
+                  } catch {
+                    toast.error('Failed to purge contacts.');
+                  }
+                }}
+                className="mt-2"
+              >
+                Purge Contacts
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
