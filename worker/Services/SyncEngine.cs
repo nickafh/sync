@@ -795,15 +795,63 @@ public sealed class SyncEngine(
             .ToListAsync(ct);
 
         // If tunnel targets specific users by email, filter to those mailboxes only.
+        // Auto-provision any missing target mailboxes by looking them up in Graph.
         if (!string.IsNullOrEmpty(tunnel.TargetUserEmails))
         {
             var targetEmails = System.Text.Json.JsonSerializer
                 .Deserialize<string[]>(tunnel.TargetUserEmails) ?? [];
             var emailSet = new HashSet<string>(targetEmails, StringComparer.OrdinalIgnoreCase);
             var filtered = allMailboxes.Where(m => emailSet.Contains(m.Email)).ToList();
+
+            // Auto-provision missing mailboxes
+            var foundEmails = new HashSet<string>(filtered.Select(m => m.Email), StringComparer.OrdinalIgnoreCase);
+            var missingEmails = emailSet.Where(e => !foundEmails.Contains(e)).ToList();
+            if (missingEmails.Count > 0)
+            {
+                logger.LogInformation(
+                    "Tunnel {TunnelName}: auto-provisioning {Count} missing target mailbox(es): {Emails}",
+                    tunnel.Name, missingEmails.Count, string.Join(", ", missingEmails));
+
+                foreach (var email in missingEmails)
+                {
+                    try
+                    {
+                        var graphUser = await graphClientFactory.Client.Users[email]
+                            .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
+                        if (graphUser?.Id != null)
+                        {
+                            await using var provisionDb = await dbContextFactory.CreateDbContextAsync(ct);
+                            var exists = await provisionDb.TargetMailboxes
+                                .AnyAsync(m => m.EntraId == graphUser.Id, ct);
+                            if (!exists)
+                            {
+                                var newMailbox = new TargetMailbox
+                                {
+                                    EntraId = graphUser.Id,
+                                    Email = graphUser.Mail ?? email,
+                                    DisplayName = graphUser.DisplayName,
+                                    IsActive = true,
+                                    CreatedAt = DateTime.UtcNow,
+                                    UpdatedAt = DateTime.UtcNow
+                                };
+                                provisionDb.TargetMailboxes.Add(newMailbox);
+                                await provisionDb.SaveChangesAsync(ct);
+                                filtered.Add(newMailbox);
+                                logger.LogInformation("Auto-provisioned target mailbox: {Email} ({EntraId})",
+                                    email, graphUser.Id);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to auto-provision target mailbox {Email}", email);
+                    }
+                }
+            }
+
             logger.LogInformation(
-                "Tunnel {TunnelName}: scoped to {EmailCount} specific user(s) — {Filtered}/{Total} mailboxes matched",
-                tunnel.Name, emailSet.Count, filtered.Count, allMailboxes.Count);
+                "Tunnel {TunnelName}: scoped to {EmailCount} specific user(s) — {Filtered} mailboxes matched",
+                tunnel.Name, emailSet.Count, filtered.Count);
             return filtered;
         }
 

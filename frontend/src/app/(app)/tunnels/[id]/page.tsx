@@ -687,67 +687,12 @@ export default function TunnelDetailPage() {
                 </div>
 
                 {editForm.targetUserEmails !== null && (
-                  <div className="space-y-2">
-                    <p className="text-xs text-text-muted">
-                      {(() => {
-                        const selected: string[] = JSON.parse(editForm.targetUserEmails || '[]');
-                        return `${selected.length} user(s) selected`;
-                      })()}
-                    </p>
-                    <Input
-                      placeholder="Search mailboxes..."
-                      value={mailboxSearch}
-                      onChange={(e) => setMailboxSearch(e.target.value)}
-                    />
-                    <div className="border rounded-lg divide-y max-h-[300px] overflow-y-auto">
-                      {targetMailboxes
-                        ?.filter((m) => {
-                          if (!mailboxSearch.trim()) return true;
-                          const q = mailboxSearch.toLowerCase();
-                          return (
-                            m.email.toLowerCase().includes(q) ||
-                            m.displayName?.toLowerCase().includes(q)
-                          );
-                        })
-                        .map((mailbox) => {
-                          const selected: string[] = JSON.parse(editForm.targetUserEmails || '[]');
-                          const isSelected = selected.some(
-                            (e) => e.toLowerCase() === mailbox.email.toLowerCase()
-                          );
-                          return (
-                            <label
-                              key={mailbox.id}
-                              className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors ${
-                                !isSelected ? 'opacity-50' : ''
-                              }`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {
-                                  setEditForm((prev) => {
-                                    const current: string[] = JSON.parse(prev.targetUserEmails || '[]');
-                                    const next = isSelected
-                                      ? current.filter((e) => e.toLowerCase() !== mailbox.email.toLowerCase())
-                                      : [...current, mailbox.email];
-                                    return { ...prev, targetUserEmails: JSON.stringify(next) };
-                                  });
-                                }}
-                                className="rounded"
-                              />
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium truncate">
-                                  {mailbox.displayName || mailbox.email}
-                                </p>
-                                {mailbox.displayName && (
-                                  <p className="text-xs text-text-muted truncate">{mailbox.email}</p>
-                                )}
-                              </div>
-                            </label>
-                          );
-                        })}
-                    </div>
-                  </div>
+                  <TunnelTargetUserPicker
+                    emails={JSON.parse(editForm.targetUserEmails || '[]')}
+                    onChange={(emails) =>
+                      setEditForm((prev) => ({ ...prev, targetUserEmails: JSON.stringify(emails) }))
+                    }
+                  />
                 )}
               </div>
             ) : (
@@ -1075,6 +1020,94 @@ export default function TunnelDetailPage() {
         onConfirm={doSave}
         isLoading={updateTunnel.isPending}
       />
+    </div>
+  );
+}
+
+function TunnelTargetUserPicker({
+  emails,
+  onChange,
+}: {
+  emails: string[];
+  onChange: (emails: string[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<{ id: string; displayName: string; email: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  React.useEffect(() => {
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await api.users.search(query);
+        setResults(data);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
+
+  return (
+    <div className="space-y-2">
+      {emails.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {emails.map((email) => (
+            <span
+              key={email}
+              className="inline-flex items-center gap-1 rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold"
+            >
+              {email}
+              <button
+                type="button"
+                onClick={() => onChange(emails.filter((e) => e !== email))}
+                className="hover:text-gold/70 cursor-pointer"
+              >
+                <span className="text-xs">x</span>
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <p className="text-xs text-text-muted">{emails.length} user(s) selected</p>
+      <Input
+        placeholder="Search by name or email..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {searching && <p className="text-xs text-text-muted">Searching...</p>}
+      {results.length > 0 && (
+        <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+          {results
+            .filter((u) => !emails.some((e) => e.toLowerCase() === u.email.toLowerCase()))
+            .map((user) => (
+              <button
+                key={user.id}
+                type="button"
+                className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                onClick={() => {
+                  onChange([...emails, user.email]);
+                  setQuery('');
+                  setResults([]);
+                }}
+              >
+                <span className="text-text-muted shrink-0">+</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{user.displayName}</p>
+                  <p className="text-xs text-text-muted truncate">{user.email}</p>
+                </div>
+              </button>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ export interface PhoneListDto {
   contactCount: number;
   userCount: number;
   targetScope: string;
+  targetUserFilter: string | null;
   sourceTunnels: PhoneListSourceTunnelDto[];
   lastSyncStatus: string | null;
 }

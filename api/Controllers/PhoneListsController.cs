@@ -49,6 +49,7 @@ public class PhoneListsController : ControllerBase
             contactCounts.GetValueOrDefault(pl.Id, 0),
             userCounts.GetValueOrDefault(pl.Id, 0),
             EnumHelpers.ToPgName(pl.TargetScope),
+            pl.TargetUserFilter,
             pl.TunnelPhoneLists.Select(tp => new PhoneListSourceTunnelDto(tp.Tunnel.Id, tp.Tunnel.Name)).ToArray(),
             null // LastSyncStatus: derived from SyncRun data — not yet wired for v1
         )).ToArray();

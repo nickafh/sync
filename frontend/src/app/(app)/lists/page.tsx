@@ -109,7 +109,13 @@ export default function PhoneListsPage() {
     setEditName(list.name);
     setEditDescription('');
     setEditScope(list.targetScope);
-    setEditEmails([]);
+    // Load existing emails from targetUserFilter JSON
+    try {
+      const parsed = list.targetUserFilter ? JSON.parse(list.targetUserFilter) : null;
+      setEditEmails(parsed?.emails ?? []);
+    } catch {
+      setEditEmails([]);
+    }
   };
 
   const handleUpdate = () => {

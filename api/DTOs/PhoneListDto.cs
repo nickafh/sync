@@ -6,6 +6,7 @@ public record PhoneListDto(
     int ContactCount,
     int UserCount,
     string TargetScope,
+    string? TargetUserFilter,
     PhoneListSourceTunnelDto[] SourceTunnels,
     string? LastSyncStatus
 );
