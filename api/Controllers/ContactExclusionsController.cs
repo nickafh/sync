@@ -1,8 +1,11 @@
 using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
 using AFHSync.Shared.Entities;
+using AFHSync.Shared.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Graph;
+using Microsoft.Graph.Models;
 
 namespace AFHSync.Api.Controllers;
 
@@ -11,15 +14,23 @@ namespace AFHSync.Api.Controllers;
 public class ContactExclusionsController : ControllerBase
 {
     private readonly AFHSyncDbContext _db;
+    private readonly GraphServiceClient _graphClient;
+    private readonly ILogger<ContactExclusionsController> _logger;
 
-    public ContactExclusionsController(AFHSyncDbContext db)
+    public ContactExclusionsController(
+        AFHSyncDbContext db,
+        GraphServiceClient graphClient,
+        ILogger<ContactExclusionsController> logger)
     {
         _db = db;
+        _graphClient = graphClient;
+        _logger = logger;
     }
 
     /// <summary>
     /// GET /api/tunnels/{tunnelId}/contact-exclusions/source-contacts
-    /// Returns all source contacts for this tunnel (from last sync) with exclusion state.
+    /// Returns all source contacts for this tunnel with exclusion state.
+    /// Pulls from sync state + exclusions table + source_users.
     /// </summary>
     [HttpGet("source-contacts")]
     public async Task<IActionResult> GetSourceContacts(int tunnelId)
@@ -50,7 +61,6 @@ public class ContactExclusionsController : ControllerBase
             .ToListAsync();
 
         // Also load source users that are excluded but not in sync state anymore
-        // (they were removed from sync state when excluded)
         var syncedEntraIds = sourceUsers.Select(u => u.EntraId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var missingExcludedEntraIds = excludedEntraIds
             .Where(id => !syncedEntraIds.Contains(id))
@@ -79,6 +89,73 @@ public class ContactExclusionsController : ControllerBase
             )).ToList();
 
         return Ok(contacts);
+    }
+
+    /// <summary>
+    /// POST /api/tunnels/{tunnelId}/contact-exclusions/resolve
+    /// Resolves source contacts from Graph based on tunnel sources.
+    /// Upserts to source_users so they're available for exclusion management.
+    /// Use this before the first sync to populate the contact list.
+    /// </summary>
+    [HttpPost("resolve")]
+    public async Task<IActionResult> ResolveContacts(int tunnelId, CancellationToken ct)
+    {
+        var tunnel = await _db.Tunnels
+            .Include(t => t.TunnelSources)
+            .FirstOrDefaultAsync(t => t.Id == tunnelId, ct);
+        if (tunnel is null)
+            return NotFound(new { message = $"Tunnel {tunnelId} not found." });
+
+        var resolved = new List<SourceContactDto>();
+        var exclusions = await _db.TunnelContactExclusions
+            .Where(e => e.TunnelId == tunnelId)
+            .Select(e => e.EntraId)
+            .ToListAsync(ct);
+        var excludedSet = exclusions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var source in tunnel.TunnelSources)
+        {
+            try
+            {
+                switch (source.SourceType)
+                {
+                    case SourceType.Ddg:
+                        var users = await ResolveDdgUsersAsync(source.SourceIdentifier, ct);
+                        resolved.AddRange(users.Select(u => new SourceContactDto(
+                            0, u.entraId, u.displayName, u.email, u.companyName, u.jobTitle, u.department,
+                            excludedSet.Contains(u.entraId))));
+                        break;
+
+                    case SourceType.MailboxContacts:
+                        var contacts = await ResolveMailboxContactsAsync(source.SourceIdentifier, ct);
+                        resolved.AddRange(contacts.Select(c => new SourceContactDto(
+                            0, c.entraId, c.displayName, c.email, c.companyName, c.jobTitle, null,
+                            excludedSet.Contains(c.entraId))));
+                        break;
+
+                    case SourceType.OrgContacts:
+                        var orgContacts = await ResolveOrgContactsAsync(ct);
+                        resolved.AddRange(orgContacts.Select(c => new SourceContactDto(
+                            0, c.entraId, c.displayName, c.email, c.companyName, c.jobTitle, c.department,
+                            excludedSet.Contains(c.entraId))));
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to resolve source {SourceId} ({SourceType}) for tunnel {TunnelId}",
+                    source.Id, source.SourceType, tunnelId);
+            }
+        }
+
+        // Deduplicate by entraId
+        var deduped = resolved
+            .GroupBy(c => c.EntraId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(c => c.DisplayName)
+            .ToList();
+
+        return Ok(deduped);
     }
 
     /// <summary>
@@ -132,5 +209,83 @@ public class ContactExclusionsController : ControllerBase
         }
 
         return Ok(new { message = $"Saved {request.Exclusions?.Length ?? 0} exclusion(s)." });
+    }
+
+    // --- Graph resolution helpers ---
+
+    private async Task<List<(string entraId, string? displayName, string? email, string? companyName, string? jobTitle, string? department)>>
+        ResolveDdgUsersAsync(string graphFilter, CancellationToken ct)
+    {
+        var results = new List<(string, string?, string?, string?, string?, string?)>();
+        var response = await _graphClient.Users.GetAsync(config =>
+        {
+            config.QueryParameters.Filter = graphFilter;
+            config.QueryParameters.Top = 999;
+            config.QueryParameters.Select = ["id", "displayName", "mail", "companyName", "jobTitle", "department"];
+            config.Headers.Add("ConsistencyLevel", "eventual");
+            config.QueryParameters.Count = true;
+        }, ct);
+
+        if (response?.Value != null)
+        {
+            var pageIterator = PageIterator<User, UserCollectionResponse>
+                .CreatePageIterator(_graphClient, response, user =>
+                {
+                    if (user.Id != null)
+                        results.Add((user.Id, user.DisplayName, user.Mail, user.CompanyName, user.JobTitle, user.Department));
+                    return true;
+                }, req =>
+                {
+                    req.Headers.Add("ConsistencyLevel", "eventual");
+                    return req;
+                });
+            await pageIterator.IterateAsync(ct);
+        }
+        return results;
+    }
+
+    private async Task<List<(string entraId, string? displayName, string? email, string? companyName, string? jobTitle)>>
+        ResolveMailboxContactsAsync(string mailboxEmail, CancellationToken ct)
+    {
+        var results = new List<(string, string?, string?, string?, string?)>();
+        var response = await _graphClient.Users[mailboxEmail].Contacts.GetAsync(config =>
+        {
+            config.QueryParameters.Select = ["id", "displayName", "emailAddresses", "companyName", "jobTitle"];
+            config.QueryParameters.Top = 999;
+        }, ct);
+
+        if (response?.Value != null)
+        {
+            foreach (var contact in response.Value)
+            {
+                var email = contact.EmailAddresses?.FirstOrDefault()?.Address;
+                results.Add((contact.Id ?? "", contact.DisplayName, email, contact.CompanyName, contact.JobTitle));
+            }
+        }
+        return results;
+    }
+
+    private async Task<List<(string entraId, string? displayName, string? email, string? companyName, string? jobTitle, string? department)>>
+        ResolveOrgContactsAsync(CancellationToken ct)
+    {
+        var results = new List<(string, string?, string?, string?, string?, string?)>();
+        var response = await _graphClient.Contacts.GetAsync(config =>
+        {
+            config.QueryParameters.Select = ["id", "displayName", "mail", "companyName", "jobTitle", "department"];
+            config.QueryParameters.Top = 999;
+        }, ct);
+
+        if (response?.Value != null)
+        {
+            var pageIterator = PageIterator<OrgContact, OrgContactCollectionResponse>
+                .CreatePageIterator(_graphClient, response, orgContact =>
+                {
+                    if (orgContact.Id != null)
+                        results.Add((orgContact.Id, orgContact.DisplayName, orgContact.Mail, orgContact.CompanyName, orgContact.JobTitle, orgContact.Department));
+                    return true;
+                });
+            await pageIterator.IterateAsync(ct);
+        }
+        return results;
     }
 }

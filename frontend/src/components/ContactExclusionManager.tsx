@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
 import type { SourceContactDto, ContactExclusionInput } from '@/types/tunnel';
+import { RefreshCw } from 'lucide-react';
 
 interface ContactExclusionManagerProps {
   tunnelId: number;
@@ -15,6 +16,7 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
   const [contacts, setContacts] = useState<SourceContactDto[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [resolving, setResolving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -24,13 +26,25 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
         const data = await api.contactExclusions.sourceContacts(tunnelId);
         setContacts(data);
       } catch {
-        // No contacts yet — tunnel may not have synced
         setContacts([]);
       } finally {
         setLoading(false);
       }
     }
     load();
+  }, [tunnelId]);
+
+  const handleResolve = useCallback(async () => {
+    setResolving(true);
+    try {
+      const data = await api.contactExclusions.resolve(tunnelId);
+      setContacts(data);
+      toast.success(`Loaded ${data.length} contacts from source.`);
+    } catch {
+      toast.error('Failed to load contacts from source.');
+    } finally {
+      setResolving(false);
+    }
   }, [tunnelId]);
 
   const filtered = useMemo(() => {
@@ -97,8 +111,19 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
 
   if (contacts.length === 0) {
     return (
-      <div className="text-sm text-text-muted py-4 text-center">
-        No contacts available. Run a sync first to populate the contact list.
+      <div className="text-center py-6 space-y-3">
+        <p className="text-sm text-text-muted">
+          No contacts loaded yet.
+        </p>
+        <Button
+          variant="outline"
+          onClick={handleResolve}
+          disabled={resolving}
+          className="cursor-pointer"
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${resolving ? 'animate-spin' : ''}`} />
+          {resolving ? 'Loading from Graph...' : 'Load Contacts'}
+        </Button>
       </div>
     );
   }
@@ -112,6 +137,16 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleResolve}
+            disabled={resolving || saving}
+            className="cursor-pointer"
+            title="Refresh contacts from source"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${resolving ? 'animate-spin' : ''}`} />
+          </Button>
           <Button variant="outline" size="sm" onClick={includeAll} disabled={saving}>
             Include All
           </Button>

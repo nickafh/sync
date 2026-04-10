@@ -135,6 +135,10 @@ export const api = {
   contactExclusions: {
     sourceContacts: (tunnelId: number) =>
       fetchApi<SourceContactDto[]>(`/tunnels/${tunnelId}/contact-exclusions/source-contacts`),
+    resolve: (tunnelId: number) =>
+      fetchApi<SourceContactDto[]>(`/tunnels/${tunnelId}/contact-exclusions/resolve`, {
+        method: 'POST',
+      }),
     getExclusions: (tunnelId: number) =>
       fetchApi<ContactExclusionInput[]>(`/tunnels/${tunnelId}/contact-exclusions`),
     updateExclusions: (tunnelId: number, exclusions: ContactExclusionInput[]) =>
