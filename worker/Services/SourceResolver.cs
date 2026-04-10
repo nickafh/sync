@@ -51,53 +51,62 @@ public class SourceResolver : ISourceResolver
 
         foreach (var source in tunnel.TunnelSources)
         {
-            switch (source.SourceType)
+            try
             {
-                case SourceType.Ddg:
+                switch (source.SourceType)
                 {
-                    var graphUsers = await FetchGraphUsersAsync(source.SourceIdentifier, ct);
-                    _logger.LogDebug("Fetched {Count} users from Graph for DDG source {SourceId} ({SourceName})",
-                        graphUsers.Count, source.Id, source.SourceDisplayName);
+                    case SourceType.Ddg:
+                    {
+                        var graphUsers = await FetchGraphUsersAsync(source.SourceIdentifier, ct);
+                        _logger.LogDebug("Fetched {Count} users from Graph for DDG source {SourceId} ({SourceName})",
+                            graphUsers.Count, source.Id, source.SourceDisplayName);
 
-                    var mapped = graphUsers.Select(MapGraphUserToSourceUser).ToList();
-                    var filtered = ApplySourceFiltersWithLogging(mapped);
+                        var mapped = graphUsers.Select(MapGraphUserToSourceUser).ToList();
+                        var filtered = ApplySourceFiltersWithLogging(mapped);
 
-                    _logger.LogInformation(
-                        "DDG source {SourceId}: {TotalCount} Graph users -> {FilteredCount} after source filtering",
-                        source.Id, mapped.Count, filtered.Count);
+                        _logger.LogInformation(
+                            "DDG source {SourceId}: {TotalCount} Graph users -> {FilteredCount} after source filtering",
+                            source.Id, mapped.Count, filtered.Count);
 
-                    allSourceUsers.AddRange(filtered);
-                    break;
+                        allSourceUsers.AddRange(filtered);
+                        break;
+                    }
+
+                    case SourceType.MailboxContacts:
+                    {
+                        var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, ct);
+                        _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} for source {SourceId}",
+                            contacts.Count, source.SourceIdentifier, source.Id);
+                        allSourceUsers.AddRange(contacts);
+                        break;
+                    }
+
+                    case SourceType.OrgContacts:
+                    {
+                        var orgContacts = await FetchOrgContactsAsync(ct);
+                        _logger.LogDebug("Fetched {Count} org contacts from Graph for source {SourceId}",
+                            orgContacts.Count, source.Id);
+
+                        // Apply exclusion filters from the org_contact_filters table
+                        var excludedIds = await GetExcludedOrgContactIdsAsync(tunnel.Id, ct);
+                        var filtered = excludedIds.Count > 0
+                            ? orgContacts.Where(c => !excludedIds.Contains(c.EntraId)).ToList()
+                            : orgContacts;
+
+                        _logger.LogInformation(
+                            "OrgContacts source {SourceId}: {TotalCount} org contacts -> {FilteredCount} after exclusion filters",
+                            source.Id, orgContacts.Count, filtered.Count);
+
+                        allSourceUsers.AddRange(filtered);
+                        break;
+                    }
                 }
-
-                case SourceType.MailboxContacts:
-                {
-                    var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, ct);
-                    _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} for source {SourceId}",
-                        contacts.Count, source.SourceIdentifier, source.Id);
-                    allSourceUsers.AddRange(contacts);
-                    break;
-                }
-
-                case SourceType.OrgContacts:
-                {
-                    var orgContacts = await FetchOrgContactsAsync(ct);
-                    _logger.LogDebug("Fetched {Count} org contacts from Graph for source {SourceId}",
-                        orgContacts.Count, source.Id);
-
-                    // Apply exclusion filters from the org_contact_filters table
-                    var excludedIds = await GetExcludedOrgContactIdsAsync(tunnel.Id, ct);
-                    var filtered = excludedIds.Count > 0
-                        ? orgContacts.Where(c => !excludedIds.Contains(c.EntraId)).ToList()
-                        : orgContacts;
-
-                    _logger.LogInformation(
-                        "OrgContacts source {SourceId}: {TotalCount} org contacts -> {FilteredCount} after exclusion filters",
-                        source.Id, orgContacts.Count, filtered.Count);
-
-                    allSourceUsers.AddRange(filtered);
-                    break;
-                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Source {SourceId} ({SourceType}, {SourceIdentifier}) failed for tunnel {TunnelId} — skipping this source",
+                    source.Id, source.SourceType, source.SourceIdentifier, tunnel.Id);
             }
         }
 

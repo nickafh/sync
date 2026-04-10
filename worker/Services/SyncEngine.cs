@@ -114,6 +114,7 @@ public sealed class SyncEngine(
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;
         int tunnelCount = 0;
         string? fatalError = null;
+        var tunnelErrors = new List<string>();
 
         try
         {
@@ -171,6 +172,7 @@ public sealed class SyncEngine(
                     logger.LogError(ex, "Tunnel {TunnelId} ({TunnelName}) failed with unhandled exception",
                         tunnel.Id, tunnel.Name);
                     tunnelsFailed++;
+                    tunnelErrors.Add($"{tunnel.Name}: {ex.Message}");
                 }
             }
 
@@ -206,7 +208,7 @@ public sealed class SyncEngine(
             await runLogger.FinalizeRunAsync(
                 run,
                 status: finalStatus,
-                errorSummary: fatalError ?? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed completely" : null),
+                errorSummary: fatalError ?? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed: {string.Join("; ", tunnelErrors)}" : null),
                 contactsCreated: totalCreated,
                 contactsUpdated: totalUpdated,
                 contactsSkipped: totalSkipped,
