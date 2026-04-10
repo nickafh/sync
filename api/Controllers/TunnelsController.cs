@@ -147,6 +147,15 @@ public class TunnelsController : ControllerBase
         if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
+        // Validate all source types before starting the transaction
+        var parsedSources = new List<(SourceType type, SourceInput src)>();
+        foreach (var src in request.Sources)
+        {
+            if (!EnumHelpers.TryFromPgName<SourceType>(src.SourceType, out var sourceType))
+                return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
+            parsedSources.Add((sourceType, src));
+        }
+
         // Auto-assign default field profile if none specified
         var fieldProfileId = request.FieldProfileId;
         if (fieldProfileId == null)
@@ -154,6 +163,12 @@ public class TunnelsController : ControllerBase
             var defaultProfile = await _db.FieldProfiles.FirstOrDefaultAsync(fp => fp.IsDefault);
             fieldProfileId = defaultProfile?.Id;
         }
+
+        // Wrap tunnel + sources + phone lists in a single transaction so a failure
+        // in source/phone-list creation doesn't leave an orphan tunnel in the DB.
+        // InMemory database (tests) doesn't support transactions — skip gracefully.
+        var useTransaction = !_db.Database.IsInMemory();
+        var tx = useTransaction ? await _db.Database.BeginTransactionAsync() : null;
 
         var tunnel = new Tunnel
         {
@@ -173,12 +188,9 @@ public class TunnelsController : ControllerBase
         _db.Tunnels.Add(tunnel);
         await _db.SaveChangesAsync();
 
-        // Create TunnelSource records
-        foreach (var src in request.Sources)
+        // Create TunnelSource records (types already validated above)
+        foreach (var (sourceType, src) in parsedSources)
         {
-            if (!EnumHelpers.TryFromPgName<SourceType>(src.SourceType, out var sourceType))
-                return BadRequest(new { message = $"Invalid SourceType: {src.SourceType}" });
-
             _db.TunnelSources.Add(new TunnelSource
             {
                 TunnelId = tunnel.Id,
@@ -204,6 +216,7 @@ public class TunnelsController : ControllerBase
             });
         }
         await _db.SaveChangesAsync();
+        if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
         return CreatedAtAction(nameof(GetById), new { id = tunnel.Id }, new { id = tunnel.Id });
     }
@@ -309,6 +322,12 @@ public class TunnelsController : ControllerBase
         if (tunnel is null)
             return NotFound(new { message = $"Tunnel {id} not found." });
 
+        // Wrap all deletes in a transaction so a failure mid-way doesn't leave
+        // orphaned data or a partially-deleted tunnel.
+        // InMemory database (tests) doesn't support transactions — skip gracefully.
+        var useTransaction = !_db.Database.IsInMemory();
+        var tx = useTransaction ? await _db.Database.BeginTransactionAsync() : null;
+
         // Clean up related records that don't cascade automatically
         await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
         await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
@@ -316,6 +335,8 @@ public class TunnelsController : ControllerBase
 
         _db.Tunnels.Remove(tunnel);
         await _db.SaveChangesAsync();
+        if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
+
         return NoContent();
     }
 

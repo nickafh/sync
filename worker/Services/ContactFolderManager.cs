@@ -25,6 +25,11 @@ public class ContactFolderManager : IContactFolderManager
     // Thread-safe for concurrent mailbox processing (D-14: parallelism at mailbox level).
     private readonly ConcurrentDictionary<string, string> _folderCache = new();
 
+    // Per-key locks to prevent concurrent Graph calls for the same folder.
+    // Without this, two parallel tasks could both miss the cache and both POST
+    // a folder create to Graph, resulting in duplicate folders.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
+
     public ContactFolderManager(GraphClientFactory graphClientFactory, ILogger<ContactFolderManager> logger)
     {
         _graphClientFactory = graphClientFactory;
@@ -37,27 +42,42 @@ public class ContactFolderManager : IContactFolderManager
         string folderName,
         CancellationToken ct)
     {
-        // Fast path: return cached folder ID without Graph call
         var cacheKey = $"{mailboxEntraId}:{folderName}";
+
+        // Fast path: return cached folder ID without Graph call
         if (_folderCache.TryGetValue(cacheKey, out var cachedId))
             return (cachedId, false);
 
-        // Slow path: hit Graph to find or create the folder
-        var (folderId, wasCreated) = await FetchOrCreateFolderFromGraphAsync(mailboxEntraId, folderName, ct);
+        // Slow path: acquire per-key lock so only one Graph call fires per folder
+        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+        await keyLock.WaitAsync(ct);
+        try
+        {
+            // Double-check after acquiring lock — another task may have populated the cache
+            if (_folderCache.TryGetValue(cacheKey, out cachedId))
+                return (cachedId, false);
 
-        _folderCache.TryAdd(cacheKey, folderId);
+            var (folderId, wasCreated) = await FetchOrCreateFolderFromGraphAsync(mailboxEntraId, folderName, ct);
 
-        _logger.LogDebug(
-            "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId} (created={Created})",
-            folderName, folderId, mailboxEntraId, wasCreated);
+            _folderCache.TryAdd(cacheKey, folderId);
 
-        return (folderId, wasCreated);
+            _logger.LogDebug(
+                "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId} (created={Created})",
+                folderName, folderId, mailboxEntraId, wasCreated);
+
+            return (folderId, wasCreated);
+        }
+        finally
+        {
+            keyLock.Release();
+        }
     }
 
     /// <inheritdoc />
     public void ResetCache()
     {
         _folderCache.Clear();
+        _keyLocks.Clear();
         _logger.LogDebug("Contact folder cache cleared for new sync run");
     }
 

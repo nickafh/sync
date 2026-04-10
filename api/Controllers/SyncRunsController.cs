@@ -30,10 +30,21 @@ public class SyncRunsController : ControllerBase
         [FromServices] AFHSyncDbContext db,
         [FromServices] IBackgroundJobClient jobs)
     {
-        // Concurrent run prevention (SCHD-05, D-10)
+        // Use a PostgreSQL advisory lock to make the "is anything running?" check
+        // and the pending run insert atomic. Without this, two simultaneous POST
+        // requests can both pass the guard and create duplicate Pending runs.
+        // InMemory database (tests) doesn't support transactions — skip gracefully.
+        var useTransaction = !db.Database.IsInMemory();
+        var tx = useTransaction ? await db.Database.BeginTransactionAsync() : null;
+        if (useTransaction)
+            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(2)");
+
         var isActive = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending);
         if (isActive)
+        {
+            if (tx != null) { await tx.RollbackAsync(); await tx.DisposeAsync(); }
             return Conflict(new { message = "A sync run is already in progress" });
+        }
 
         // Determine RunType from request
         var runType = request.IsDryRun ? RunType.DryRun : RunType.Manual;
@@ -49,6 +60,7 @@ public class SyncRunsController : ControllerBase
 
         db.SyncRuns.Add(run);
         await db.SaveChangesAsync();
+        if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
         // Enqueue Hangfire fire-and-forget job (D-09)
         // ISyncEngine.RunAsync takes int? tunnelId — pass first tunnel ID if specified, null for all

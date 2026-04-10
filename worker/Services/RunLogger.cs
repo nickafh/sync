@@ -18,7 +18,9 @@ public sealed class RunLogger(
     ILogger<RunLogger> logger) : IRunLogger
 {
     // Thread-safe buffer for per-item results collected from parallel mailbox tasks (D-14).
-    private readonly ConcurrentBag<SyncRunItem> _itemBuffer = [];
+    // Uses ConcurrentQueue (FIFO, better cross-thread perf than ConcurrentBag).
+    // Swapped atomically in FlushItemsAsync to prevent item loss.
+    private ConcurrentQueue<SyncRunItem> _itemBuffer = new();
 
     /// <summary>
     /// Creates a new SyncRun record with status=Running and records the start time (D-19).
@@ -50,7 +52,7 @@ public sealed class RunLogger(
     /// Adds a SyncRunItem to the internal thread-safe buffer (D-14).
     /// Items are NOT immediately persisted — call <see cref="FlushItemsAsync"/> to commit.
     /// </summary>
-    public void AddItem(SyncRunItem item) => _itemBuffer.Add(item);
+    public void AddItem(SyncRunItem item) => _itemBuffer.Enqueue(item);
 
     /// <summary>
     /// Batch-inserts all buffered SyncRunItems to the database (D-21).
@@ -59,7 +61,10 @@ public sealed class RunLogger(
     /// </summary>
     public async Task FlushItemsAsync(CancellationToken ct)
     {
-        var items = _itemBuffer.ToList();
+        // Atomically swap the buffer so items added by parallel tasks during flush
+        // go into a fresh queue and are not lost. The old queue is drained below.
+        var snapshot = Interlocked.Exchange(ref _itemBuffer, new ConcurrentQueue<SyncRunItem>());
+        var items = snapshot.ToList();
         if (items.Count == 0)
         {
             logger.LogDebug("FlushItemsAsync: buffer is empty, nothing to flush");
@@ -87,9 +92,6 @@ public sealed class RunLogger(
                 logger.LogWarning("FlushItemsAsync: filtered out {Count} items referencing deleted tunnels", items.Count - validItems.Count);
             await BatchInsertSqlAsync(db, validItems, ct);
         }
-
-        // Clear the buffer after successful flush.
-        while (_itemBuffer.TryTake(out _)) { }
 
         logger.LogInformation("FlushItemsAsync: flushed {Count} SyncRunItems", items.Count);
     }
