@@ -1,12 +1,22 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
 import { usePhoneLists, useCreatePhoneList } from '@/hooks/use-phone-lists';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
 
@@ -16,6 +26,8 @@ interface StepTargetsProps {
   onSelectAll: () => void;
   onDeselectAll: () => void;
   error: string | null;
+  targetUserEmails: string | null;
+  onTargetUserEmailsChange: (value: string | null) => void;
 }
 
 export function StepTargets({
@@ -24,11 +36,19 @@ export function StepTargets({
   onSelectAll,
   onDeselectAll,
   error,
+  targetUserEmails,
+  onTargetUserEmailsChange,
 }: StepTargetsProps) {
   const { data: phoneLists, isLoading } = usePhoneLists();
   const createPhoneList = useCreatePhoneList();
   const [showCreate, setShowCreate] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [mailboxSearch, setMailboxSearch] = useState('');
+  const { data: targetMailboxes } = useQuery({
+    queryKey: ['target-mailboxes'],
+    queryFn: () => api.tunnels.targetMailboxes(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const allSelected =
     phoneLists && phoneLists.length > 0 && selectedIds.length === phoneLists.length;
@@ -135,6 +155,92 @@ export function StepTargets({
               </span>
             </label>
           ))}
+        </div>
+      )}
+
+      <Separator />
+
+      {/* Target Scope */}
+      <div>
+        <Label>Target Scope</Label>
+        <p className="text-sm text-text-muted mt-1">
+          Choose whether contacts sync to all users or specific mailboxes.
+        </p>
+        <Select
+          value={targetUserEmails !== null ? 'specific' : 'all'}
+          onValueChange={(val) => {
+            onTargetUserEmailsChange(val === 'all' ? null : '[]');
+          }}
+        >
+          <SelectTrigger className="mt-2">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Users</SelectItem>
+            <SelectItem value="specific">Specific Users</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {targetUserEmails !== null && (
+        <div className="space-y-2">
+          <p className="text-xs text-text-muted">
+            {(() => {
+              const selected: string[] = JSON.parse(targetUserEmails || '[]');
+              return `${selected.length} user(s) selected`;
+            })()}
+          </p>
+          <Input
+            placeholder="Search mailboxes..."
+            value={mailboxSearch}
+            onChange={(e) => setMailboxSearch(e.target.value)}
+          />
+          <div className="border rounded-lg divide-y max-h-[250px] overflow-y-auto">
+            {targetMailboxes
+              ?.filter((m) => {
+                if (!mailboxSearch.trim()) return true;
+                const q = mailboxSearch.toLowerCase();
+                return (
+                  m.email.toLowerCase().includes(q) ||
+                  m.displayName?.toLowerCase().includes(q)
+                );
+              })
+              .map((mailbox) => {
+                const selected: string[] = JSON.parse(targetUserEmails || '[]');
+                const isSelected = selected.some(
+                  (e) => e.toLowerCase() === mailbox.email.toLowerCase()
+                );
+                return (
+                  <label
+                    key={mailbox.id}
+                    className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/50 transition-colors ${
+                      !isSelected ? 'opacity-50' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => {
+                        const current: string[] = JSON.parse(targetUserEmails || '[]');
+                        const next = isSelected
+                          ? current.filter((e) => e.toLowerCase() !== mailbox.email.toLowerCase())
+                          : [...current, mailbox.email];
+                        onTargetUserEmailsChange(JSON.stringify(next));
+                      }}
+                      className="rounded"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {mailbox.displayName || mailbox.email}
+                      </p>
+                      {mailbox.displayName && (
+                        <p className="text-xs text-text-muted truncate">{mailbox.email}</p>
+                      )}
+                    </div>
+                  </label>
+                );
+              })}
+          </div>
         </div>
       )}
 

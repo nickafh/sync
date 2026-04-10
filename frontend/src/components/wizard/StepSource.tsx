@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { DDGSearchList } from '@/components/DDGSearchList';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { api } from '@/lib/api';
 import type { DdgDto } from '@/types/ddg';
+import type { UserSearchResult } from '@/types/tunnel';
 import { X, Plus, Cable, Mail, Building2 } from 'lucide-react';
 
 export interface SourceEntry {
@@ -173,40 +175,110 @@ export function StepSource({
         </div>
       )}
 
-      {/* Mailbox email input */}
+      {/* Mailbox email input with autocomplete */}
       {addMode === 'mailbox_contacts' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">Shared Mailbox Email</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { setAddMode(null); setMailboxInput(''); }}
-            >
-              Cancel
-            </Button>
-          </div>
-          <div className="flex gap-2">
-            <Input
-              placeholder="e.g. afhstaffgal@atlantafinehomes.com"
-              value={mailboxInput}
-              onChange={(e) => setMailboxInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddMailbox()}
-              autoFocus
-            />
-            <Button
-              className="bg-gold text-white hover:bg-gold/90"
-              onClick={handleAddMailbox}
-              disabled={!mailboxInput.trim()}
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+        <MailboxAutocomplete
+          onSelect={(email, displayName) => {
+            if (sources.some((s) => s.type === 'mailbox_contacts' && s.mailboxEmail === email)) return;
+            onAddSource({
+              type: 'mailbox_contacts',
+              mailboxEmail: email,
+              label: displayName || email,
+              sublabel: displayName ? email : undefined,
+            });
+            setAddMode(null);
+            setMailboxInput('');
+          }}
+          onCancel={() => { setAddMode(null); setMailboxInput(''); }}
+        />
       )}
 
       {error && (
         <p className="text-destructive text-xs">{error}</p>
+      )}
+    </div>
+  );
+}
+
+function MailboxAutocomplete({
+  onSelect,
+  onCancel,
+}: {
+  onSelect: (email: string, displayName?: string) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<UserSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const data = await api.users.search(query);
+        setResults(data);
+      } catch {
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">Shared Mailbox Email</p>
+        <Button variant="outline" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      <Input
+        placeholder="Search by name or email..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      {searching && (
+        <p className="text-xs text-text-muted">Searching...</p>
+      )}
+      {results.length > 0 && (
+        <div className="border rounded-lg divide-y max-h-[250px] overflow-y-auto">
+          {results.map((user) => (
+            <button
+              key={user.id}
+              type="button"
+              className="flex items-center gap-3 px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+              onClick={() => onSelect(user.email, user.displayName)}
+            >
+              <Mail className="h-4 w-4 text-text-muted shrink-0" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">{user.displayName}</p>
+                <p className="text-xs text-text-muted truncate">{user.email}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {query.length >= 2 && !searching && results.length === 0 && (
+        <p className="text-xs text-text-muted">No users found. You can also type a full email and press Enter.</p>
+      )}
+      {query.includes('@') && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => onSelect(query.trim())}
+          className="w-full"
+        >
+          Use &quot;{query.trim()}&quot;
+        </Button>
       )}
     </div>
   );

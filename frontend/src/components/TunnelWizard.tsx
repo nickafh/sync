@@ -32,12 +32,14 @@ interface FormData {
   name: string;
   sources: SourceEntry[];
   targetListIds: number[];
+  targetUserEmails: string | null;
 }
 
 const initialFormData: FormData = {
   name: '',
   sources: [],
   targetListIds: [],
+  targetUserEmails: null,
 };
 
 export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
@@ -164,7 +166,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
       staleDays: 14,
       targetGroupId: null,
       targetGroupName: null,
-      targetUserEmails: null,
+      targetUserEmails: formData.targetUserEmails,
     };
 
     createTunnel.mutate(request, {
@@ -254,6 +256,10 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 onSelectAll={handleSelectAll}
                 onDeselectAll={handleDeselectAll}
                 error={errors.targets || null}
+                targetUserEmails={formData.targetUserEmails}
+                onTargetUserEmailsChange={(val) =>
+                  setFormData((prev) => ({ ...prev, targetUserEmails: val }))
+                }
               />
             )}
             {step === 3 && (
