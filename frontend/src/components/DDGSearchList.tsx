@@ -52,7 +52,7 @@ export function DDGSearchList({ onSelect, selectedId, selectedIds }: DDGSearchLi
               'px-3 py-1 text-xs font-medium rounded-full transition-colors',
               typeFilter === type
                 ? 'bg-navy text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200',
+                : 'bg-muted text-text-muted hover:bg-gray-200',
             )}
           >
             {type === 'all' ? 'All' : type}
@@ -100,7 +100,7 @@ export function DDGSearchList({ onSelect, selectedId, selectedIds }: DDGSearchLi
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs bg-gray-100 rounded-full px-2 py-0.5">
+                      <span className="text-xs bg-muted rounded-full px-2 py-0.5">
                         {ddg.memberCount} members
                       </span>
                       <span className="text-xs text-text-muted">

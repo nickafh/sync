@@ -112,10 +112,10 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={includeAll}>
+          <Button variant="outline" size="sm" onClick={includeAll} disabled={saving}>
             Include All
           </Button>
-          <Button variant="outline" size="sm" onClick={excludeAll}>
+          <Button variant="outline" size="sm" onClick={excludeAll} disabled={saving}>
             Exclude All
           </Button>
           {dirty && (
@@ -146,7 +146,7 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
           filtered.map((contact) => (
             <label
               key={contact.entraId}
-              className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${
+              className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-muted/50 transition-colors ${
                 contact.isExcluded ? 'opacity-50' : ''
               }`}
             >

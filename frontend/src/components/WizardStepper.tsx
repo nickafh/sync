@@ -30,7 +30,7 @@ export function WizardStepper({ currentStep, onStepClick }: WizardStepperProps) 
                 index === currentStep &&
                   'bg-gold text-white',
                 index > currentStep &&
-                  'bg-gray-200 text-gray-500 cursor-default opacity-50',
+                  'bg-muted text-text-muted cursor-default opacity-50',
               )}
             >
               {index < currentStep ? (
@@ -54,7 +54,7 @@ export function WizardStepper({ currentStep, onStepClick }: WizardStepperProps) 
             <div
               className={cn(
                 'flex-1 h-0.5 mx-2 self-start mt-4',
-                index < currentStep ? 'bg-gold' : 'bg-gray-200',
+                index < currentStep ? 'bg-gold' : 'bg-muted',
               )}
             />
           )}
