@@ -49,8 +49,20 @@ const photoSyncOptions = [
   },
 ];
 
+const photoScheduleOptions = [
+  { label: 'Every 6 hours', value: '0 */6 * * *' },
+  { label: 'Every 12 hours', value: '0 */12 * * *' },
+  { label: 'Daily at midnight', value: '0 0 * * *' },
+  { label: 'Daily at 3 AM', value: '0 3 * * *' },
+  { label: 'Daily at 6 AM', value: '0 6 * * *' },
+];
+
 function isKnownSchedule(cron: string): boolean {
   return scheduleOptions.some((opt) => opt.value === cron);
+}
+
+function isKnownPhotoSchedule(cron: string): boolean {
+  return photoScheduleOptions.some((opt) => opt.value === cron);
 }
 
 export default function SettingsPage() {
@@ -297,15 +309,50 @@ export default function SettingsPage() {
               <div className="space-y-4 mt-4">
                 <Separator />
                 <div className="space-y-2">
-                  <Label>Photo Sync Schedule (Cron)</Label>
-                  <Input
-                    value={photoCron}
-                    onChange={(e) => setPhotoCron(e.target.value)}
-                    placeholder="0 */6 * * *"
-                  />
-                  <p className="text-xs text-text-muted">
-                    Cron expression for photo sync schedule. Default: every 6 hours.
-                  </p>
+                  <Label>Photo Sync Schedule</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {photoScheduleOptions.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setPhotoCron(opt.value)}
+                        className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                          photoCron === opt.value
+                            ? 'border-gold bg-gold/10 text-navy font-medium'
+                            : 'border-input hover:border-gold/50'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isKnownPhotoSchedule(photoCron)) setPhotoCron('');
+                      }}
+                      className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                        !isKnownPhotoSchedule(photoCron)
+                          ? 'border-gold bg-gold/10 text-navy font-medium'
+                          : 'border-input hover:border-gold/50'
+                      }`}
+                    >
+                      Custom
+                    </button>
+                  </div>
+                  {!isKnownPhotoSchedule(photoCron) && (
+                    <div className="space-y-1">
+                      <Label htmlFor="photo-cron-expression">Cron Expression</Label>
+                      <Input
+                        id="photo-cron-expression"
+                        value={photoCron}
+                        onChange={(e) => setPhotoCron(e.target.value)}
+                        placeholder="0 */6 * * *"
+                      />
+                      <p className="text-xs text-text-muted">
+                        Standard cron format: minute hour day month weekday
+                      </p>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center justify-between">
                   <div>

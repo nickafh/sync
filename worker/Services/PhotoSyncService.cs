@@ -36,9 +36,9 @@ public class PhotoSyncService : IPhotoSyncService
     private readonly SemaphoreSlim _photoSemaphore = new(4);
 
     /// <summary>
-    /// Concurrency for photo fetches. Bounded to avoid Graph throttling.
+    /// Concurrency for photo fetches. Keep low to avoid Graph 503s.
     /// </summary>
-    private readonly SemaphoreSlim _fetchSemaphore = new(8);
+    private readonly SemaphoreSlim _fetchSemaphore = new(4);
 
     /// <summary>
     /// Batch size for initial backfill processing (D-12).
@@ -102,11 +102,34 @@ public class PhotoSyncService : IPhotoSyncService
 
         // Step b: Fetch source photos with fetch-once pattern (D-06)
         // Parallel fetches bounded by _fetchSemaphore to avoid Graph throttling.
+        // OPTIMIZATION: Skip fetching for users whose SourceUser.PhotoHash already matches
+        // all their ContactSyncState.PhotoHash entries — the photo hasn't changed.
+        Dictionary<int, string?> existingPhotoHashes;
+        {
+            await using var hashDb = await _dbContextFactory.CreateDbContextAsync(ct);
+            existingPhotoHashes = await hashDb.ContactSyncStates
+                .Where(s => s.TunnelId == tunnel.Id && s.GraphContactId != null && s.PhotoHash != null)
+                .GroupBy(s => s.SourceUserId)
+                .Select(g => new { SourceUserId = g.Key, Hash = g.Min(s => s.PhotoHash) })
+                .ToDictionaryAsync(x => x.SourceUserId, x => x.Hash, ct);
+        }
+
         var sourcePhotos = new System.Collections.Concurrent.ConcurrentDictionary<int, (byte[]? bytes, string? hash)>();
-        int fetchSuccess = 0, fetchNotFound = 0, fetchError = 0, fetchOversized = 0;
+        int fetchSuccess = 0, fetchNotFound = 0, fetchError = 0, fetchOversized = 0, fetchSkipped = 0;
 
         var fetchTasks = sourceUsers.Select(async sourceUser =>
         {
+            // Skip fetch if source photo hash matches the already-synced hash.
+            // This avoids hundreds of Graph API calls on steady-state runs.
+            if (sourceUser.PhotoHash != null
+                && existingPhotoHashes.TryGetValue(sourceUser.Id, out var syncedHash)
+                && syncedHash == sourceUser.PhotoHash)
+            {
+                sourcePhotos[sourceUser.Id] = (null, sourceUser.PhotoHash);
+                Interlocked.Increment(ref fetchSkipped);
+                return;
+            }
+
             await _fetchSemaphore.WaitAsync(ct);
             try
             {
@@ -170,8 +193,8 @@ public class PhotoSyncService : IPhotoSyncService
 
         var photosFound = sourcePhotoResults.Count(p => p.Value.bytes != null);
         _logger.LogInformation(
-            "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Found} with photos, {Missing} without (Success={Success}, NotFound404={NotFound}, Error={Error}, Oversized={Oversized})",
-            tunnel.Id, sourcePhotoResults.Count, photosFound, sourcePhotoResults.Count - photosFound,
+            "Photo fetch complete for tunnel {TunnelId}: {Total} users, {Skipped} unchanged, {Found} fetched with photos, {Missing} without (Success={Success}, NotFound404={NotFound}, Error={Error}, Oversized={Oversized})",
+            tunnel.Id, sourcePhotoResults.Count, fetchSkipped, photosFound, sourcePhotoResults.Count - photosFound - fetchSkipped,
             fetchSuccess, fetchNotFound, fetchError, fetchOversized);
 
         // Step c: Load ContactSyncState records for this tunnel where GraphContactId is not null
@@ -199,8 +222,23 @@ public class PhotoSyncService : IPhotoSyncService
             tunnel.Id, contactStates.Count, nullPhotoHashCount, contactStates.Count - nullPhotoHashCount,
             distinctMailboxes, distinctSourceUsers);
 
-        // Step d: Group by target mailbox for semaphore-bounded parallel processing (D-04)
-        var byMailbox = contactStates
+        // Step d: Filter out contacts where the photo was skipped (already matching hash).
+        // Then group by target mailbox for semaphore-bounded parallel processing (D-04).
+        var skippedSourceUserIds = sourcePhotoResults
+            .Where(p => p.Value.bytes == null && p.Value.hash != null)
+            .Select(p => p.Key)
+            .ToHashSet();
+
+        var contactsToProcess = skippedSourceUserIds.Count > 0
+            ? contactStates.Where(s => !skippedSourceUserIds.Contains(s.SourceUserId)).ToList()
+            : contactStates;
+
+        if (contactsToProcess.Count < contactStates.Count)
+            _logger.LogInformation(
+                "Photo sync for tunnel {TunnelId}: skipping {Skipped} contact states (photos unchanged), processing {Remaining}",
+                tunnel.Id, contactStates.Count - contactsToProcess.Count, contactsToProcess.Count);
+
+        var byMailbox = contactsToProcess
             .GroupBy(s => s.TargetMailboxId)
             .ToList();
 
