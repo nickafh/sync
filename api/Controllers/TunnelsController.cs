@@ -293,9 +293,10 @@ public class TunnelsController : ControllerBase
         if (tunnel is null)
             return NotFound(new { message = $"Tunnel {id} not found." });
 
-        var hasActiveSyncState = await _db.ContactSyncStates.AnyAsync(c => c.TunnelId == id);
-        if (hasActiveSyncState)
-            return Conflict(new { message = "Tunnel has active sync state. Deactivate first." });
+        // Clean up related records that don't cascade automatically
+        await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
+        await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
+        await _db.OrgContactFilters.Where(f => f.TunnelId == id).ExecuteDeleteAsync();
 
         _db.Tunnels.Remove(tunnel);
         await _db.SaveChangesAsync();

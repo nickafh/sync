@@ -31,23 +31,17 @@ interface TunnelWizardProps {
 interface FormData {
   name: string;
   sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
-  sourceDdg: DdgDto | null;
+  sourceDdgs: DdgDto[];
   sourceMailboxEmail: string;
   targetListIds: number[];
-  targetGroupId: string | null;
-  targetGroupName: string | null;
-  targetUserEmails: string[];
 }
 
 const initialFormData: FormData = {
   name: '',
   sourceType: 'ddg',
-  sourceDdg: null,
+  sourceDdgs: [],
   sourceMailboxEmail: '',
   targetListIds: [],
-  targetGroupId: null,
-  targetGroupName: null,
-  targetUserEmails: [],
 };
 
 export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
@@ -62,7 +56,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
 
   const hasData =
     formData.name.trim() !== '' ||
-    formData.sourceDdg !== null ||
+    formData.sourceDdgs.length > 0 ||
     formData.sourceMailboxEmail.trim() !== '' ||
     formData.targetListIds.length > 0;
 
@@ -87,12 +81,11 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
           }
           break;
         case 1:
-          if (formData.sourceType === 'ddg' && !formData.sourceDdg) {
-            newErrors.source = 'Select a source DDG to continue.';
+          if (formData.sourceType === 'ddg' && formData.sourceDdgs.length === 0) {
+            newErrors.source = 'Select at least one DDG to continue.';
           } else if (formData.sourceType === 'mailbox_contacts' && !formData.sourceMailboxEmail.trim()) {
             newErrors.source = 'Enter a mailbox email address to continue.';
           }
-          // org_contacts needs no additional input — always valid
           break;
         case 2:
           if (formData.targetListIds.length === 0) {
@@ -126,19 +119,33 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
     [step],
   );
 
+  const handleToggleDdg = useCallback((ddg: DdgDto) => {
+    setFormData((prev) => {
+      const exists = prev.sourceDdgs.find((d) => d.id === ddg.id);
+      return {
+        ...prev,
+        sourceDdgs: exists
+          ? prev.sourceDdgs.filter((d) => d.id !== ddg.id)
+          : [...prev.sourceDdgs, ddg],
+      };
+    });
+    setErrors((prev) => ({ ...prev, source: '' }));
+  }, []);
+
   const handleSubmit = useCallback(() => {
     const sources: CreateTunnelRequest['sources'] = [];
 
     if (formData.sourceType === 'ddg') {
-      if (!formData.sourceDdg) return;
-      sources.push({
-        sourceType: 'ddg',
-        sourceIdentifier:
-          formData.sourceDdg.graphFilter ?? formData.sourceDdg.recipientFilter,
-        sourceDisplayName: formData.sourceDdg.displayName,
-        sourceSmtpAddress: formData.sourceDdg.primarySmtpAddress,
-        sourceFilterPlain: formData.sourceDdg.recipientFilterPlain,
-      });
+      if (formData.sourceDdgs.length === 0) return;
+      for (const ddg of formData.sourceDdgs) {
+        sources.push({
+          sourceType: 'ddg',
+          sourceIdentifier: ddg.graphFilter ?? ddg.recipientFilter,
+          sourceDisplayName: ddg.displayName,
+          sourceSmtpAddress: ddg.primarySmtpAddress,
+          sourceFilterPlain: ddg.recipientFilterPlain,
+        });
+      }
     } else if (formData.sourceType === 'mailbox_contacts') {
       const email = formData.sourceMailboxEmail.trim();
       if (!email) return;
@@ -166,11 +173,9 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
       fieldProfileId: null,
       stalePolicy: 'auto_remove',
       staleDays: 14,
-      targetGroupId: formData.targetGroupId,
-      targetGroupName: formData.targetGroupName,
-      targetUserEmails: formData.targetUserEmails.length > 0
-        ? JSON.stringify(formData.targetUserEmails)
-        : null,
+      targetGroupId: null,
+      targetGroupName: null,
+      targetUserEmails: null,
     };
 
     createTunnel.mutate(request, {
@@ -181,35 +186,26 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
         router.push(`/tunnels/${data.id}`);
       },
       onError: () => {
-        toast.error('Failed to create tunnel. Please try again.');
+        toast.error('Failed to create tunnel.');
       },
     });
   }, [formData, createTunnel, resetForm, onOpenChange, router]);
 
-  const handleOpenChange = useCallback(
-    (isOpen: boolean) => {
-      if (!isOpen && hasData) {
-        setDiscardDialogOpen(true);
-      } else {
-        if (!isOpen) resetForm();
-        onOpenChange(isOpen);
-      }
-    },
-    [hasData, resetForm, onOpenChange],
-  );
+  const handleOpenChange = (isOpen: boolean) => {
+    if (!isOpen && hasData) {
+      setDiscardDialogOpen(true);
+    } else {
+      if (!isOpen) resetForm();
+      onOpenChange(isOpen);
+    }
+  };
 
-  const handleDiscard = useCallback(() => {
-    setDiscardDialogOpen(false);
-    resetForm();
-    onOpenChange(false);
-  }, [resetForm, onOpenChange]);
-
-  const handleToggleTarget = useCallback((id: number) => {
+  const handleToggleTarget = useCallback((listId: number) => {
     setFormData((prev) => ({
       ...prev,
-      targetListIds: prev.targetListIds.includes(id)
-        ? prev.targetListIds.filter((tid) => tid !== id)
-        : [...prev.targetListIds, id],
+      targetListIds: prev.targetListIds.includes(listId)
+        ? prev.targetListIds.filter((id) => id !== listId)
+        : [...prev.targetListIds, listId],
     }));
   }, []);
 
@@ -223,34 +219,33 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   }, [phoneLists]);
 
   const handleDeselectAll = useCallback(() => {
-    setFormData((prev) => ({
-      ...prev,
-      targetListIds: [],
-    }));
+    setFormData((prev) => ({ ...prev, targetListIds: [] }));
   }, []);
+
+  const steps = ['Name', 'Source', 'Targets', 'Review'];
 
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-w-3xl min-h-[600px] flex flex-col p-0 gap-0">
-          <DialogHeader className="sr-only">
-            <DialogTitle>Create Tunnel</DialogTitle>
-            <DialogDescription>
-              Create a new sync tunnel in 4 steps.
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="sr-only">Create Tunnel</DialogTitle>
+            <DialogDescription className="sr-only">
+              Step {step + 1} of {steps.length}: {steps[step]}
             </DialogDescription>
           </DialogHeader>
 
           <WizardStepper currentStep={step} onStepClick={goToStep} />
+          <Separator className="my-2" />
 
-          <Separator />
-
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="min-h-[300px]">
             {step === 0 && (
               <StepName
                 name={formData.name}
                 onChange={(name) => {
                   setFormData((prev) => ({ ...prev, name }));
-                  if (errors.name) setErrors((prev) => ({ ...prev, name: '' }));
+                  if (errors.name)
+                    setErrors((prev) => ({ ...prev, name: '' }));
                 }}
                 error={errors.name || null}
               />
@@ -258,25 +253,17 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             {step === 1 && (
               <StepSource
                 sourceType={formData.sourceType}
-                onSourceTypeChange={(type: 'ddg' | 'mailbox_contacts' | 'org_contacts') => {
-                  setFormData((prev) => ({
-                    ...prev,
-                    sourceType: type,
-                    sourceDdg: null,
-                    sourceMailboxEmail: '',
-                  }));
-                  if (errors.source)
-                    setErrors((prev) => ({ ...prev, source: '' }));
-                }}
-                selectedDdg={formData.sourceDdg}
-                onSelect={(ddg) => {
-                  setFormData((prev) => ({ ...prev, sourceDdg: ddg }));
-                  if (errors.source)
-                    setErrors((prev) => ({ ...prev, source: '' }));
-                }}
+                onSourceTypeChange={(type) =>
+                  setFormData((prev) => ({ ...prev, sourceType: type }))
+                }
+                selectedDdgs={formData.sourceDdgs}
+                onToggleDdg={handleToggleDdg}
                 mailboxEmail={formData.sourceMailboxEmail}
                 onMailboxEmailChange={(email) => {
-                  setFormData((prev) => ({ ...prev, sourceMailboxEmail: email }));
+                  setFormData((prev) => ({
+                    ...prev,
+                    sourceMailboxEmail: email,
+                  }));
                   if (errors.source)
                     setErrors((prev) => ({ ...prev, source: '' }));
                 }}
@@ -296,7 +283,7 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
               <StepReview
                 name={formData.name}
                 sourceType={formData.sourceType}
-                ddg={formData.sourceDdg}
+                ddgs={formData.sourceDdgs}
                 mailboxEmail={formData.sourceMailboxEmail}
                 targetListIds={formData.targetListIds}
                 onEdit={goToStep}
@@ -304,34 +291,29 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             )}
           </div>
 
-          <Separator />
-
-          <div className="flex items-center justify-between px-6 py-4">
-            <div>
-              {step > 0 && (
-                <Button variant="outline" onClick={handleBack}>
-                  Back
-                </Button>
-              )}
-            </div>
-            <div>
-              {step < 3 ? (
-                <Button
-                  className="bg-gold text-white hover:bg-gold/90"
-                  onClick={handleNext}
-                >
-                  Next
-                </Button>
-              ) : (
-                <Button
-                  className="bg-gold text-white hover:bg-gold/90"
-                  onClick={handleSubmit}
-                  disabled={createTunnel.isPending}
-                >
-                  {createTunnel.isPending ? 'Creating...' : 'Create Tunnel'}
-                </Button>
-              )}
-            </div>
+          <div className="flex justify-between mt-4">
+            <Button
+              variant="outline"
+              onClick={step === 0 ? () => handleOpenChange(false) : handleBack}
+            >
+              {step === 0 ? 'Cancel' : 'Back'}
+            </Button>
+            {step < steps.length - 1 ? (
+              <Button
+                className="bg-gold text-white hover:bg-gold/90"
+                onClick={handleNext}
+              >
+                Next
+              </Button>
+            ) : (
+              <Button
+                className="bg-gold text-white hover:bg-gold/90"
+                onClick={handleSubmit}
+                disabled={createTunnel.isPending}
+              >
+                {createTunnel.isPending ? 'Creating...' : 'Create Tunnel'}
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -339,12 +321,16 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
       <ConfirmDialog
         open={discardDialogOpen}
         onOpenChange={setDiscardDialogOpen}
-        title="Discard tunnel?"
+        title="Discard changes?"
         description="You have unsaved progress. Closing will discard all entered data."
-        confirmLabel="Discard Tunnel"
-        dismissLabel="Keep Editing"
+        confirmLabel="Discard"
+        dismissLabel="Cancel"
         variant="destructive"
-        onConfirm={handleDiscard}
+        onConfirm={() => {
+          setDiscardDialogOpen(false);
+          resetForm();
+          onOpenChange(false);
+        }}
       />
     </>
   );

@@ -8,7 +8,7 @@ import type { DdgDto } from '@/types/ddg';
 interface StepReviewProps {
   name: string;
   sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
-  ddg: DdgDto | null;
+  ddgs: DdgDto[];
   mailboxEmail: string;
   targetListIds: number[];
   onEdit: (step: number) => void;
@@ -17,7 +17,7 @@ interface StepReviewProps {
 export function StepReview({
   name,
   sourceType,
-  ddg,
+  ddgs,
   mailboxEmail,
   targetListIds,
   onEdit,
@@ -55,13 +55,17 @@ export function StepReview({
           <div className="flex items-start justify-between px-4 py-3">
             <div>
               <p className="text-xs text-text-muted">Source</p>
-              {sourceType === 'ddg' && ddg && (
-                <>
-                  <p className="text-sm font-medium mt-0.5">
-                    {ddg.displayName} ({ddg.memberCount} members)
-                  </p>
-                  <p className="text-xs text-text-muted">{ddg.primarySmtpAddress}</p>
-                </>
+              {sourceType === 'ddg' && ddgs.length > 0 && (
+                <div className="mt-0.5 space-y-1">
+                  {ddgs.map((ddg) => (
+                    <div key={ddg.id}>
+                      <p className="text-sm font-medium">
+                        {ddg.displayName} ({ddg.memberCount} members)
+                      </p>
+                      <p className="text-xs text-text-muted">{ddg.primarySmtpAddress}</p>
+                    </div>
+                  ))}
+                </div>
               )}
               {sourceType === 'mailbox_contacts' && mailboxEmail && (
                 <>

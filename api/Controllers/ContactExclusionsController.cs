@@ -24,39 +24,59 @@ public class ContactExclusionsController : ControllerBase
     [HttpGet("source-contacts")]
     public async Task<IActionResult> GetSourceContacts(int tunnelId)
     {
-        var exists = await _db.Tunnels.AnyAsync(t => t.Id == tunnelId);
-        if (!exists)
+        var tunnel = await _db.Tunnels
+            .Include(t => t.TunnelSources)
+            .FirstOrDefaultAsync(t => t.Id == tunnelId);
+        if (tunnel is null)
             return NotFound(new { message = $"Tunnel {tunnelId} not found." });
 
-        // Get source user IDs that have been synced for this tunnel
-        var sourceUserIds = await _db.ContactSyncStates
+        // Get source user IDs from sync state (currently synced contacts)
+        var syncedUserIds = await _db.ContactSyncStates
             .Where(s => s.TunnelId == tunnelId)
             .Select(s => s.SourceUserId)
             .Distinct()
             .ToListAsync();
 
-        // Load those source users
+        // Get excluded entra IDs
+        var exclusions = await _db.TunnelContactExclusions
+            .Where(e => e.TunnelId == tunnelId)
+            .ToListAsync();
+        var excludedEntraIds = exclusions.Select(e => e.EntraId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        // Load synced source users
         var sourceUsers = await _db.SourceUsers
-            .Where(u => sourceUserIds.Contains(u.Id))
+            .Where(u => syncedUserIds.Contains(u.Id))
             .OrderBy(u => u.DisplayName)
             .ToListAsync();
 
-        // Load current exclusions for this tunnel
-        var exclusions = await _db.TunnelContactExclusions
-            .Where(e => e.TunnelId == tunnelId)
-            .Select(e => e.EntraId)
-            .ToHashSetAsync();
+        // Also load source users that are excluded but not in sync state anymore
+        // (they were removed from sync state when excluded)
+        var syncedEntraIds = sourceUsers.Select(u => u.EntraId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingExcludedEntraIds = excludedEntraIds
+            .Where(id => !syncedEntraIds.Contains(id))
+            .ToList();
 
-        var contacts = sourceUsers.Select(u => new SourceContactDto(
-            u.Id,
-            u.EntraId,
-            u.DisplayName,
-            u.Email,
-            u.CompanyName,
-            u.JobTitle,
-            u.Department,
-            exclusions.Contains(u.EntraId)
-        )).ToList();
+        if (missingExcludedEntraIds.Count > 0)
+        {
+            var excludedUsers = await _db.SourceUsers
+                .Where(u => missingExcludedEntraIds.Contains(u.EntraId))
+                .OrderBy(u => u.DisplayName)
+                .ToListAsync();
+            sourceUsers.AddRange(excludedUsers);
+        }
+
+        var contacts = sourceUsers
+            .OrderBy(u => u.DisplayName)
+            .Select(u => new SourceContactDto(
+                u.Id,
+                u.EntraId,
+                u.DisplayName,
+                u.Email,
+                u.CompanyName,
+                u.JobTitle,
+                u.Department,
+                excludedEntraIds.Contains(u.EntraId)
+            )).ToList();
 
         return Ok(contacts);
     }

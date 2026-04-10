@@ -18,11 +18,12 @@ import type { DdgDto } from '@/types/ddg';
 interface DDGSearchListProps {
   onSelect: (ddg: DdgDto) => void;
   selectedId?: string;
+  selectedIds?: string[];
 }
 
 const typeFilters = ['all', 'Office', 'Role', 'Brand'] as const;
 
-export function DDGSearchList({ onSelect, selectedId }: DDGSearchListProps) {
+export function DDGSearchList({ onSelect, selectedId, selectedIds }: DDGSearchListProps) {
   const { data: ddgs, isLoading } = useDdgs();
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
@@ -87,7 +88,7 @@ export function DDGSearchList({ onSelect, selectedId }: DDGSearchListProps) {
                     onSelect={() => onSelect(ddg)}
                     className={cn(
                       'flex items-center justify-between gap-3 py-2.5 px-3 cursor-pointer',
-                      selectedId === ddg.id && 'bg-gold/10 border-l-2 border-gold',
+                      (selectedId === ddg.id || selectedIds?.includes(ddg.id)) && 'bg-gold/10 border-l-2 border-gold',
                     )}
                   >
                     <div className="flex flex-col min-w-0">

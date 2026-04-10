@@ -3,12 +3,13 @@
 import { DDGSearchList } from '@/components/DDGSearchList';
 import { Input } from '@/components/ui/input';
 import type { DdgDto } from '@/types/ddg';
+import { X } from 'lucide-react';
 
 interface StepSourceProps {
   sourceType: 'ddg' | 'mailbox_contacts' | 'org_contacts';
   onSourceTypeChange: (type: 'ddg' | 'mailbox_contacts' | 'org_contacts') => void;
-  selectedDdg: DdgDto | null;
-  onSelect: (ddg: DdgDto) => void;
+  selectedDdgs: DdgDto[];
+  onToggleDdg: (ddg: DdgDto) => void;
   mailboxEmail: string;
   onMailboxEmailChange: (email: string) => void;
   error: string | null;
@@ -17,8 +18,8 @@ interface StepSourceProps {
 export function StepSource({
   sourceType,
   onSourceTypeChange,
-  selectedDdg,
-  onSelect,
+  selectedDdgs,
+  onToggleDdg,
   mailboxEmail,
   onMailboxEmailChange,
   error,
@@ -78,21 +79,38 @@ export function StepSource({
         </label>
       </div>
 
-      {/* DDG source */}
+      {/* DDG source — multi-select */}
       {sourceType === 'ddg' && (
         <>
-          <DDGSearchList onSelect={onSelect} selectedId={selectedDdg?.id} />
-
-          {selectedDdg && (
-            <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-              <p className="font-medium">
-                Selected: {selectedDdg.displayName} - {selectedDdg.memberCount} members
+          {selectedDdgs.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-text-muted font-medium uppercase tracking-wide">
+                Selected ({selectedDdgs.length})
               </p>
-              <p className="text-sm text-text-muted">
-                SMTP: {selectedDdg.primarySmtpAddress}
-              </p>
+              {selectedDdgs.map((ddg) => (
+                <div
+                  key={ddg.id}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{ddg.displayName}</p>
+                    <p className="text-xs text-text-muted">{ddg.memberCount} members</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onToggleDdg(ddg)}
+                    className="text-text-muted hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
+          <DDGSearchList
+            onSelect={onToggleDdg}
+            selectedIds={selectedDdgs.map((d) => d.id)}
+          />
         </>
       )}
 
