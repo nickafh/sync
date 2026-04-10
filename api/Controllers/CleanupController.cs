@@ -2,7 +2,6 @@ using AFHSync.Shared.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;
-using Microsoft.Graph.Models;
 
 namespace AFHSync.Api.Controllers;
 
@@ -110,15 +109,25 @@ public class CleanupController : ControllerBase
             await semaphore.WaitAsync(ct);
             try
             {
-                // Graph won't delete a non-empty folder. Batch-delete all contacts first.
-                await BatchDeleteAllContactsInFolderAsync(item.EntraId, item.FolderId, ct);
-
+                // Use permanentDelete — the regular DELETE fails when Exchange has
+                // retention policies because it tries to soft-delete to recoverable items.
+                // permanentDelete bypasses retention and removes the folder + contents immediately.
+                // See: https://learn.microsoft.com/en-us/graph/api/contactfolder-permanentdelete
                 await _graphClient.Users[item.EntraId].ContactFolders[item.FolderId]
-                    .DeleteAsync(cancellationToken: ct);
+                    .PermanentDelete
+                    .PostAsync(cancellationToken: ct);
 
                 lock (counterLock) { deleted++; }
-                _logger.LogInformation("Deleted contact folder {FolderName} from {Email}",
+                _logger.LogInformation("Permanently deleted contact folder {FolderName} from {Email}",
                     item.FolderName, item.Email);
+            }
+            catch (Microsoft.Graph.Models.ODataErrors.ODataError odataEx)
+            {
+                lock (counterLock) { failed++; }
+                var code = odataEx.Error?.Code ?? "unknown";
+                var msg = odataEx.Error?.Message ?? odataEx.Message;
+                _logger.LogWarning("Failed to delete folder {FolderName} from {Email}: [{Code}] {Message}",
+                    item.FolderName, item.Email, code, msg);
             }
             catch (Exception ex)
             {
@@ -137,59 +146,6 @@ public class CleanupController : ControllerBase
         return Ok(new { deleted, failed, message = $"Deleted {deleted} folder(s), {failed} failed." });
     }
 
-    /// <summary>
-    /// Batch-deletes all contacts inside a contact folder using Graph batch API (20 per request).
-    /// Handles pagination for folders with more than 999 contacts.
-    /// </summary>
-    private async Task BatchDeleteAllContactsInFolderAsync(string entraId, string folderId, CancellationToken ct)
-    {
-        // Paginate: keep fetching and deleting until the folder is empty
-        while (true)
-        {
-            var contacts = await _graphClient.Users[entraId].ContactFolders[folderId].Contacts
-                .GetAsync(config =>
-                {
-                    config.QueryParameters.Select = ["id"];
-                    config.QueryParameters.Top = 999;
-                }, ct);
-
-            var contactIds = contacts?.Value?
-                .Where(c => c.Id != null)
-                .Select(c => c.Id!)
-                .ToList();
-
-            if (contactIds is null || contactIds.Count == 0)
-                break;
-
-            _logger.LogInformation("Batch-deleting {Count} contacts from folder {FolderId} in {EntraId}",
-                contactIds.Count, folderId, entraId);
-
-            // Process in chunks of 20 (Graph batch limit)
-            foreach (var chunk in contactIds.Chunk(20))
-            {
-                var batchContent = new BatchRequestContentCollection(_graphClient);
-
-                foreach (var contactId in chunk)
-                {
-                    var requestInfo = _graphClient.Users[entraId]
-                        .ContactFolders[folderId]
-                        .Contacts[contactId]
-                        .ToDeleteRequestInformation();
-                    await batchContent.AddBatchRequestStepAsync(requestInfo);
-                }
-
-                var response = await _graphClient.Batch.PostAsync(batchContent, ct);
-                if (response != null)
-                {
-                    var statuses = await response.GetResponsesStatusCodesAsync();
-                    var failCount = statuses.Count(s => !BatchResponseContent.IsSuccessStatusCode(s.Value));
-                    if (failCount > 0)
-                        _logger.LogWarning("{FailCount}/{Total} batch deletes failed in folder {FolderId}",
-                            failCount, chunk.Length, folderId);
-                }
-            }
-        }
-    }
 }
 
 public record CleanupScanRequest(string[]? Emails);
