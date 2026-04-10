@@ -25,7 +25,11 @@ public class DashboardController : ControllerBase
     {
         var activeTunnels = await _db.Tunnels.CountAsync(t => t.Status == TunnelStatus.Active);
         var totalPhoneLists = await _db.PhoneLists.CountAsync();
-        var totalTargetUsers = await _db.TargetMailboxes.CountAsync(m => m.IsActive);
+        // Count users that actually have contacts synced to them, not all provisioned mailboxes
+        var totalTargetUsers = await _db.ContactSyncStates
+            .Select(s => s.TargetMailboxId)
+            .Distinct()
+            .CountAsync();
 
         // Last completed SyncRun
         var lastCompletedRun = await _db.SyncRuns

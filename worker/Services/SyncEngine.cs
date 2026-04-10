@@ -118,9 +118,6 @@ public sealed class SyncEngine(
 
         try
         {
-            // Step 2b: Auto-discover target mailboxes from Graph.
-            await RefreshTargetMailboxesAsync(ct);
-
             // Step 3: Load tunnels.
             var tunnels = await LoadTunnelsAsync(tunnelId, ct);
             tunnelCount = tunnels.Count;
