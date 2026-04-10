@@ -23,17 +23,11 @@ export function ContactExclusionManager({ tunnelId }: ContactExclusionManagerPro
   useEffect(() => {
     async function load() {
       try {
-        const data = await api.contactExclusions.sourceContacts(tunnelId);
-        // If all contacts are excluded (none included), the tunnel likely hasn't synced yet
-        // and source-contacts only returned saved exclusions. Auto-resolve from Graph to
-        // get the full contact list so users can manage inclusions/exclusions properly.
-        const hasIncluded = data.some((c) => !c.isExcluded);
-        if (data.length > 0 && !hasIncluded) {
-          const resolved = await api.contactExclusions.resolve(tunnelId);
-          setContacts(resolved);
-        } else {
-          setContacts(data);
-        }
+        // Always resolve from Graph to get the complete contact list from all sources.
+        // The source-contacts endpoint only returns previously-synced contacts, which
+        // misses contacts from sources that haven't synced yet or failed.
+        const data = await api.contactExclusions.resolve(tunnelId);
+        setContacts(data);
       } catch {
         setContacts([]);
       } finally {
