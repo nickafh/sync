@@ -17,17 +17,20 @@ public class TunnelsController : ControllerBase
     private readonly IFilterConverter _filterConverter;
     private readonly GraphServiceClient _graphClient;
     private readonly IDDGResolver _ddgResolver;
+    private readonly ILogger<TunnelsController> _logger;
 
     public TunnelsController(
         AFHSyncDbContext db,
         IFilterConverter filterConverter,
         GraphServiceClient graphClient,
-        IDDGResolver ddgResolver)
+        IDDGResolver ddgResolver,
+        ILogger<TunnelsController> logger)
     {
         _db = db;
         _filterConverter = filterConverter;
         _graphClient = graphClient;
         _ddgResolver = ddgResolver;
+        _logger = logger;
     }
 
     /// <summary>
@@ -323,22 +326,34 @@ public class TunnelsController : ControllerBase
         if (tunnel is null)
             return NotFound(new { message = $"Tunnel {id} not found." });
 
-        // Wrap all deletes in a transaction so a failure mid-way doesn't leave
-        // orphaned data or a partially-deleted tunnel.
-        // InMemory database (tests) doesn't support transactions — skip gracefully.
-        var useTransaction = !_db.Database.IsInMemory();
-        var tx = useTransaction ? await _db.Database.BeginTransactionAsync() : null;
+        try
+        {
+            // Wrap all deletes in a transaction so a failure mid-way doesn't leave
+            // orphaned data or a partially-deleted tunnel.
+            // InMemory database (tests) doesn't support transactions — skip gracefully.
+            var useTransaction = !_db.Database.IsInMemory();
+            var tx = useTransaction ? await _db.Database.BeginTransactionAsync() : null;
 
-        // Clean up related records that don't cascade automatically
-        await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
-        await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
-        await _db.OrgContactFilters.Where(f => f.TunnelId == id).ExecuteDeleteAsync();
+            // Clean up related records. Order matters: clear child FKs first.
+            // SyncRunItems reference TunnelId with SetNull — null them out before tunnel delete.
+            await _db.SyncRunItems.Where(i => i.TunnelId == id)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.TunnelId, (int?)null));
+            await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
+            await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
+            await _db.OrgContactFilters.Where(f => f.TunnelId == id).ExecuteDeleteAsync();
 
-        _db.Tunnels.Remove(tunnel);
-        await _db.SaveChangesAsync();
-        if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
+            _db.Tunnels.Remove(tunnel);
+            await _db.SaveChangesAsync();
+            if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
-        return NoContent();
+            _logger.LogInformation("Deleted tunnel {TunnelId} ({TunnelName})", id, tunnel.Name);
+            return NoContent();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to delete tunnel {TunnelId} ({TunnelName})", id, tunnel.Name);
+            return StatusCode(500, new { message = $"Failed to delete tunnel: {ex.Message}" });
+        }
     }
 
     /// <summary>
