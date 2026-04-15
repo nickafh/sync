@@ -25,7 +25,7 @@ public class HealthController : ControllerBase
     {
         try
         {
-            var db = services.GetService<DbContext>();
+            var db = services.GetService<AFHSync.Shared.Data.AFHSyncDbContext>();
             if (db is null)
             {
                 return Ok(new { status = "healthy", database = "not configured" });

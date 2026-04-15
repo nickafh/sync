@@ -62,7 +62,7 @@ public class AuthController : ControllerBase
         {
             HttpOnly = true,
             SameSite = SameSiteMode.Strict,
-            Secure = false,
+            Secure = true,
             Path = "/"
         });
         return Ok(new { message = "Logged out" });

@@ -62,11 +62,21 @@ public class SyncRunsController : ControllerBase
         await db.SaveChangesAsync();
         if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
-        // Enqueue Hangfire fire-and-forget job (D-09)
-        // ISyncEngine.RunAsync takes int? tunnelId — pass first tunnel ID if specified, null for all
-        int? tunnelId = request.TunnelIds?.FirstOrDefault();
-        jobs.Enqueue<ISyncEngine>(engine =>
-            engine.RunAsync(tunnelId, runType, request.IsDryRun, CancellationToken.None));
+        // Enqueue Hangfire fire-and-forget jobs — one per tunnel, or one for all
+        if (request.TunnelIds is { Length: > 0 })
+        {
+            foreach (var tid in request.TunnelIds)
+            {
+                var tunnelId = tid;
+                jobs.Enqueue<ISyncEngine>(engine =>
+                    engine.RunAsync(tunnelId, runType, request.IsDryRun, CancellationToken.None));
+            }
+        }
+        else
+        {
+            jobs.Enqueue<ISyncEngine>(engine =>
+                engine.RunAsync(null, runType, request.IsDryRun, CancellationToken.None));
+        }
 
         return Ok(new { runId = run.Id });
     }

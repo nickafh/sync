@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     // In dev, proxy /api calls to the .NET API running natively
     return process.env.NODE_ENV === 'development'
-      ? [{ source: '/api/:path*', destination: 'http://localhost:5000/api/:path*' }]
+      ? [{ source: '/api/:path*', destination: 'http://localhost:8080/api/:path*' }]
       : [];
   },
 };
