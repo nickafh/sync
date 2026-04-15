@@ -146,7 +146,15 @@ public class PhotoSyncService : IPhotoSyncService
             await _fetchSemaphore.WaitAsync(ct);
             try
             {
-                var (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
+                // Route to the correct photo endpoint based on source type.
+                // Mailbox contacts store photos on the Contact object, not as User profile photos.
+                var mailboxSource = sourceUser.MailboxType == "MailboxContact"
+                    ? tunnel.TunnelSources?.FirstOrDefault(s => s.SourceType == AFHSync.Shared.Enums.SourceType.MailboxContacts)
+                    : null;
+
+                var (photoBytes, wasNotFound) = mailboxSource != null
+                    ? await FetchContactPhotoAsync(mailboxSource.SourceIdentifier, sourceUser.EntraId, ct)
+                    : await FetchUserPhotoAsync(sourceUser.EntraId, ct);
 
                 if (photoBytes != null)
                 {
@@ -493,6 +501,46 @@ public class PhotoSyncService : IPhotoSyncService
         {
             _logger.LogWarning("Graph photo error for user {EntraId}: {StatusCode} {Message}",
                 entraId, ex.ResponseStatusCode, ex.Message);
+            return (null, false);
+        }
+
+        return (null, true);
+    }
+
+    /// <summary>
+    /// Fetches a contact's photo from a shared mailbox via Microsoft Graph.
+    /// Shared mailbox contacts store photos on the Contact object, not as User profile photos.
+    /// Path: GET /users/{mailboxEmail}/contacts/{contactId}/photo/$value
+    /// Protected virtual for test subclassing.
+    /// </summary>
+    protected virtual async Task<(byte[]? bytes, bool wasNotFound)> FetchContactPhotoAsync(
+        string mailboxEmail, string contactId, CancellationToken ct)
+    {
+        try
+        {
+            var stream = await _graphClientFactory!.Client
+                .Users[mailboxEmail]
+                .Contacts[contactId]
+                .Photo.Content
+                .GetAsync(cancellationToken: ct);
+
+            if (stream is not null)
+            {
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms, ct);
+                _logger.LogDebug("Fetched contact photo for {ContactId} in mailbox {Mailbox}: {Size} bytes",
+                    contactId, mailboxEmail, ms.Length);
+                return (ms.ToArray(), false);
+            }
+        }
+        catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+        {
+            return (null, true);
+        }
+        catch (ODataError ex)
+        {
+            _logger.LogWarning("Graph contact photo error for {ContactId} in {Mailbox}: {StatusCode} {Message}",
+                contactId, mailboxEmail, ex.ResponseStatusCode, ex.Message);
             return (null, false);
         }
 
