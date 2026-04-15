@@ -191,8 +191,13 @@ export default function TunnelDetailPage() {
   };
 
   const doSave = () => {
+    const saveData = {
+      ...editForm,
+      targetGroupId: editForm.targetGroupId || null,
+      targetGroupName: editForm.targetGroupName || null,
+    };
     updateTunnel.mutate(
-      { id: tunnelId, data: editForm },
+      { id: tunnelId, data: saveData },
       {
         onSuccess: () => {
           toast.success('Tunnel updated successfully.');
@@ -655,12 +660,19 @@ export default function TunnelDetailPage() {
                     Target Scope
                   </label>
                   <Select
-                    value={editForm.targetUserEmails ? 'specific' : 'all'}
+                    value={editForm.targetGroupId ? 'group' : editForm.targetUserEmails ? 'specific' : 'all'}
                     onValueChange={(val) => {
                       if (val === 'all') {
-                        setEditForm((prev) => ({ ...prev, targetUserEmails: null }));
-                      } else {
-                        setEditForm((prev) => ({ ...prev, targetUserEmails: '[]' }));
+                        setEditForm((prev) => ({ ...prev, targetUserEmails: null, targetGroupId: null, targetGroupName: null }));
+                      } else if (val === 'specific') {
+                        setEditForm((prev) => ({ ...prev, targetUserEmails: '[]', targetGroupId: null, targetGroupName: null }));
+                      } else if (val === 'group') {
+                        setEditForm((prev) => ({
+                          ...prev,
+                          targetUserEmails: null,
+                          targetGroupId: prev.targetGroupId || '',
+                          targetGroupName: prev.targetGroupName,
+                        }));
                       }
                     }}
                   >
@@ -670,6 +682,7 @@ export default function TunnelDetailPage() {
                     <SelectContent>
                       <SelectItem value="all">All Users</SelectItem>
                       <SelectItem value="specific">Specific Users</SelectItem>
+                      <SelectItem value="group">Security Group</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -679,6 +692,16 @@ export default function TunnelDetailPage() {
                     emails={JSON.parse(editForm.targetUserEmails || '[]')}
                     onChange={(emails) =>
                       setEditForm((prev) => ({ ...prev, targetUserEmails: JSON.stringify(emails) }))
+                    }
+                  />
+                )}
+
+                {editForm.targetGroupId != null && (
+                  <TunnelSecurityGroupPicker
+                    targetGroupId={editForm.targetGroupId!}
+                    targetGroupName={editForm.targetGroupName ?? null}
+                    onChange={(id, name) =>
+                      setEditForm((prev) => ({ ...prev, targetGroupId: id, targetGroupName: name }))
                     }
                   />
                 )}
@@ -703,7 +726,7 @@ export default function TunnelDetailPage() {
                 </div>
                 {tunnel.targetUserEmails && (
                   <div>
-                    <p className="text-xs font-normal uppercase tracking-wide text-text-muted mb-1">Scoped to</p>
+                    <p className="text-xs font-normal uppercase tracking-wide text-text-muted mb-1">Scoped to specific users</p>
                     <div className="flex flex-wrap gap-1">
                       {(JSON.parse(tunnel.targetUserEmails) as string[]).map((email) => (
                         <span
@@ -714,6 +737,14 @@ export default function TunnelDetailPage() {
                         </span>
                       ))}
                     </div>
+                  </div>
+                )}
+                {tunnel.targetGroupId && (
+                  <div>
+                    <p className="text-xs font-normal uppercase tracking-wide text-text-muted mb-1">Scoped to security group</p>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold">
+                      {tunnel.targetGroupName || tunnel.targetGroupId}
+                    </span>
                   </div>
                 )}
               </div>
@@ -1118,6 +1149,65 @@ function TunnelTargetUserPicker({
             ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function TunnelSecurityGroupPicker({
+  targetGroupId,
+  targetGroupName,
+  onChange,
+}: {
+  targetGroupId: string;
+  targetGroupName: string | null;
+  onChange: (id: string, name: string) => void;
+}) {
+  const [groups, setGroups] = React.useState<{ id: string; displayName: string; description: string | null }[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api.securityGroups
+      .list()
+      .then((data) => { if (!cancelled) setGroups(data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return <p className="text-xs text-text-muted">Loading security groups...</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-text-muted">
+        Only members of the selected group will receive contacts.
+      </p>
+      <div className="border rounded-lg divide-y max-h-[200px] overflow-y-auto">
+        {groups.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            className={`flex items-start gap-3 px-3 py-2.5 w-full text-left transition-colors cursor-pointer ${
+              targetGroupId === group.id
+                ? 'bg-gold/10 border-l-2 border-l-gold'
+                : 'hover:bg-muted/50'
+            }`}
+            onClick={() => onChange(group.id, group.displayName)}
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{group.displayName}</p>
+              {group.description && (
+                <p className="text-xs text-text-muted truncate">{group.description}</p>
+              )}
+            </div>
+          </button>
+        ))}
+        {groups.length === 0 && (
+          <p className="text-sm text-text-muted p-3">No security groups found.</p>
+        )}
+      </div>
     </div>
   );
 }

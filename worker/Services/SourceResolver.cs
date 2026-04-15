@@ -326,6 +326,7 @@ public class SourceResolver : ISourceResolver
             Country = graphUser.Country,
             // Treat null accountEnabled as true — org users with mailboxes default to enabled
             IsEnabled = graphUser.AccountEnabled ?? true,
+            HiddenFromGal = !(graphUser.ShowInAddressList ?? true),
             MailboxType = mailboxType,
             // extensionAttribute5 holds the Entra "Notes" field (AD `info` attribute).
             // Populated by Exchange PowerShell: Get-User | % { Set-User $_.Identity -CustomAttribute5 $_.Notes }
@@ -356,6 +357,7 @@ public class SourceResolver : ISourceResolver
     {
         return users.Where(u =>
             u.IsEnabled &&
+            !u.HiddenFromGal &&
             u.MailboxType == "UserMailbox" &&
             !string.IsNullOrWhiteSpace(u.Email) &&
             !IsServiceAccount(u.Email!)
@@ -375,6 +377,11 @@ public class SourceResolver : ISourceResolver
             if (!u.IsEnabled)
             {
                 _logger.LogDebug("Filtered out {Email} ({EntraId}): disabled account", u.Email, u.EntraId);
+                continue;
+            }
+            if (u.HiddenFromGal)
+            {
+                _logger.LogDebug("Filtered out {Email} ({EntraId}): hidden from GAL", u.Email, u.EntraId);
                 continue;
             }
             if (u.MailboxType != "UserMailbox")
@@ -397,12 +404,13 @@ public class SourceResolver : ISourceResolver
 
         if (filtered.Count < userList.Count)
         {
-            _logger.LogInformation("Source filter removed {Count} users: {Disabled} disabled, {MailboxType} non-user mailbox, {NoEmail} no email, {ServiceAcct} service accounts",
+            _logger.LogInformation("Source filter removed {Count} users: {Disabled} disabled, {HiddenGal} hidden from GAL, {MailboxType} non-user mailbox, {NoEmail} no email, {ServiceAcct} service accounts",
                 userList.Count - filtered.Count,
                 userList.Count(u => !u.IsEnabled),
-                userList.Count(u => u.IsEnabled && u.MailboxType != "UserMailbox"),
-                userList.Count(u => u.IsEnabled && u.MailboxType == "UserMailbox" && string.IsNullOrWhiteSpace(u.Email)),
-                userList.Count(u => u.IsEnabled && u.MailboxType == "UserMailbox" && !string.IsNullOrWhiteSpace(u.Email) && IsServiceAccount(u.Email!)));
+                userList.Count(u => u.IsEnabled && u.HiddenFromGal),
+                userList.Count(u => u.IsEnabled && !u.HiddenFromGal && u.MailboxType != "UserMailbox"),
+                userList.Count(u => u.IsEnabled && !u.HiddenFromGal && u.MailboxType == "UserMailbox" && string.IsNullOrWhiteSpace(u.Email)),
+                userList.Count(u => u.IsEnabled && !u.HiddenFromGal && u.MailboxType == "UserMailbox" && !string.IsNullOrWhiteSpace(u.Email) && IsServiceAccount(u.Email!)));
         }
 
         return filtered;

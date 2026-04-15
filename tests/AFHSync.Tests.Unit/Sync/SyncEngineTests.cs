@@ -554,7 +554,7 @@ public class SyncEngineTests
             return Task.FromResult((0, 0));
         }
 
-        public Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct)
+        public Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct, bool skipRunningCheck = false)
         {
             RunAllCallCount++;
             return Task.CompletedTask;

@@ -17,8 +17,8 @@ import { Separator } from '@/components/ui/separator';
 import { usePhoneLists, useCreatePhoneList } from '@/hooks/use-phone-lists';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
-import { Plus, X } from 'lucide-react';
-import type { UserSearchResult } from '@/types/tunnel';
+import { Plus, X, Shield } from 'lucide-react';
+import type { UserSearchResult, SecurityGroupDto } from '@/types/tunnel';
 
 interface StepTargetsProps {
   selectedIds: number[];
@@ -28,6 +28,9 @@ interface StepTargetsProps {
   error: string | null;
   targetUserEmails: string | null;
   onTargetUserEmailsChange: (value: string | null) => void;
+  targetGroupId: string | null;
+  targetGroupName: string | null;
+  onTargetGroupChange: (id: string | null, name: string | null) => void;
 }
 
 export function StepTargets({
@@ -38,6 +41,9 @@ export function StepTargets({
   error,
   targetUserEmails,
   onTargetUserEmailsChange,
+  targetGroupId,
+  targetGroupName,
+  onTargetGroupChange,
 }: StepTargetsProps) {
   const { data: phoneLists, isLoading } = usePhoneLists();
   const createPhoneList = useCreatePhoneList();
@@ -156,9 +162,19 @@ export function StepTargets({
           Choose whether contacts sync to all users or specific mailboxes.
         </p>
         <Select
-          value={targetUserEmails !== null ? 'specific' : 'all'}
+          value={targetGroupId !== null ? 'group' : targetUserEmails !== null ? 'specific' : 'all'}
           onValueChange={(val) => {
-            onTargetUserEmailsChange(val === 'all' ? null : '[]');
+            if (val === 'all') {
+              onTargetUserEmailsChange(null);
+              onTargetGroupChange(null, null);
+            } else if (val === 'specific') {
+              onTargetUserEmailsChange('[]');
+              onTargetGroupChange(null, null);
+            } else if (val === 'group') {
+              onTargetUserEmailsChange(null);
+              // Empty string sentinel = "group mode active, no group picked yet"
+              if (!targetGroupId) onTargetGroupChange('', null);
+            }
           }}
         >
           <SelectTrigger className="mt-2">
@@ -167,6 +183,7 @@ export function StepTargets({
           <SelectContent>
             <SelectItem value="all">All Users</SelectItem>
             <SelectItem value="specific">Specific Users</SelectItem>
+            <SelectItem value="group">Security Group</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -175,6 +192,14 @@ export function StepTargets({
         <TargetUserPicker
           targetUserEmails={targetUserEmails}
           onTargetUserEmailsChange={onTargetUserEmailsChange}
+        />
+      )}
+
+      {targetGroupId !== null && (
+        <SecurityGroupPicker
+          targetGroupId={targetGroupId}
+          targetGroupName={targetGroupName}
+          onTargetGroupChange={onTargetGroupChange}
         />
       )}
 
@@ -280,6 +305,85 @@ function TargetUserPicker({
             ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SecurityGroupPicker({
+  targetGroupId,
+  targetGroupName,
+  onTargetGroupChange,
+}: {
+  targetGroupId: string | null;
+  targetGroupName: string | null;
+  onTargetGroupChange: (id: string | null, name: string | null) => void;
+}) {
+  const [groups, setGroups] = useState<SecurityGroupDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.securityGroups
+      .list()
+      .then((data) => {
+        if (!cancelled) setGroups(data);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Failed to load security groups.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-14 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <p className="text-destructive text-xs">{error}</p>;
+  }
+
+  if (groups.length === 0) {
+    return <p className="text-sm text-text-muted">No security groups found in your tenant.</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-text-muted">
+        Select a security group. Only members of this group will receive contacts.
+      </p>
+      <div className="border rounded-lg divide-y max-h-[220px] overflow-y-auto">
+        {groups.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            className={`flex items-start gap-3 px-3 py-2.5 w-full text-left transition-colors cursor-pointer ${
+              targetGroupId === group.id
+                ? 'bg-gold/10 border-l-2 border-l-gold'
+                : 'hover:bg-muted/50'
+            }`}
+            onClick={() => onTargetGroupChange(group.id, group.displayName)}
+          >
+            <Shield className="h-4 w-4 text-text-muted shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{group.displayName}</p>
+              {group.description && (
+                <p className="text-xs text-text-muted truncate">{group.description}</p>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

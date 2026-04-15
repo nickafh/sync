@@ -24,6 +24,7 @@ public interface IPhotoSyncService
     /// <summary>
     /// Entry point for separate_pass Hangfire job. Creates its own SyncRun,
     /// loads active tunnels, orchestrates per-tunnel photo sync.
+    /// Set skipRunningCheck to true when called from within an active sync (auto-trigger).
     /// </summary>
-    Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct);
+    Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct, bool skipRunningCheck = false);
 }

@@ -33,6 +33,8 @@ interface FormData {
   sources: SourceEntry[];
   targetListIds: number[];
   targetUserEmails: string | null;
+  targetGroupId: string | null;
+  targetGroupName: string | null;
 }
 
 const initialFormData: FormData = {
@@ -40,6 +42,8 @@ const initialFormData: FormData = {
   sources: [],
   targetListIds: [],
   targetUserEmails: null,
+  targetGroupId: null,
+  targetGroupName: null,
 };
 
 export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
@@ -55,7 +59,8 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   const hasData =
     formData.name.trim() !== '' ||
     formData.sources.length > 0 ||
-    formData.targetListIds.length > 0;
+    formData.targetListIds.length > 0 ||
+    formData.targetGroupId !== null;
 
   const resetForm = useCallback(() => {
     setStep(0);
@@ -91,6 +96,9 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             if (emails.length === 0) {
               newErrors.targets = 'Select at least one user, or switch scope to All Users.';
             }
+          }
+          if (formData.targetGroupId !== null && !formData.targetGroupId) {
+            newErrors.targets = 'Select a security group, or switch scope to All Users.';
           }
           break;
       }
@@ -172,8 +180,8 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
       fieldProfileId: null,
       stalePolicy: 'auto_remove',
       staleDays: 14,
-      targetGroupId: null,
-      targetGroupName: null,
+      targetGroupId: formData.targetGroupId || null,
+      targetGroupName: formData.targetGroupName || null,
       targetUserEmails: formData.targetUserEmails,
     };
 
@@ -265,6 +273,11 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
                 targetUserEmails={formData.targetUserEmails}
                 onTargetUserEmailsChange={(val) =>
                   setFormData((prev) => ({ ...prev, targetUserEmails: val }))
+                }
+                targetGroupId={formData.targetGroupId}
+                targetGroupName={formData.targetGroupName}
+                onTargetGroupChange={(id, name) =>
+                  setFormData((prev) => ({ ...prev, targetGroupId: id, targetGroupName: name }))
                 }
               />
             )}

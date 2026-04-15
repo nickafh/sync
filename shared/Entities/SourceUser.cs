@@ -26,6 +26,7 @@ public class SourceUser
     public string? ExtensionAttr3 { get; set; }
     public string? ExtensionAttr4 { get; set; }
     public bool IsEnabled { get; set; } = true;
+    public bool HiddenFromGal { get; set; }
     public string? MailboxType { get; set; }
     public DateTime? LastFetchedAt { get; set; }
     public DateTime CreatedAt { get; set; }

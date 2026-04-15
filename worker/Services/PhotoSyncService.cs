@@ -290,7 +290,7 @@ public class PhotoSyncService : IPhotoSyncService
     }
 
     /// <inheritdoc />
-    public async Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct)
+    public async Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct, bool skipRunningCheck = false)
     {
         // Read photo_sync_mode once at start (T-06-04: prevents mid-run mode switch)
         await using var settingsDb = await _dbContextFactory.CreateDbContextAsync(ct);
@@ -306,13 +306,17 @@ public class PhotoSyncService : IPhotoSyncService
             return;
         }
 
-        // Check for running sync to avoid overlap
-        var runningSync = await settingsDb.SyncRuns
-            .AnyAsync(r => r.Status == SyncStatus.Running, ct);
-        if (runningSync)
+        // Check for running sync to avoid overlap — skip when called from auto-trigger
+        // (the auto-trigger runs inside the active sync, so the check always sees itself).
+        if (!skipRunningCheck)
         {
-            _logger.LogWarning("A sync run is already in progress, skipping photo sync");
-            return;
+            var runningSync = await settingsDb.SyncRuns
+                .AnyAsync(r => r.Status == SyncStatus.Running, ct);
+            if (runningSync)
+            {
+                _logger.LogWarning("A sync run is already in progress, skipping photo sync");
+                return;
+            }
         }
 
         // Create a SyncRun for this photo sync pass

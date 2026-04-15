@@ -35,6 +35,7 @@ public class SourceUserConfiguration : IEntityTypeConfiguration<SourceUser>
         builder.Property(e => e.ExtensionAttr3).HasColumnName("extension_attr_3").HasMaxLength(200);
         builder.Property(e => e.ExtensionAttr4).HasColumnName("extension_attr_4").HasMaxLength(200);
         builder.Property(e => e.IsEnabled).HasColumnName("is_enabled").HasDefaultValue(true);
+        builder.Property(e => e.HiddenFromGal).HasColumnName("hidden_from_gal").HasDefaultValue(false);
         builder.Property(e => e.MailboxType).HasColumnName("mailbox_type").HasMaxLength(50);
         builder.Property(e => e.LastFetchedAt).HasColumnName("last_fetched_at");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
