@@ -142,7 +142,9 @@ public sealed class SyncEngine(
                 try
                 {
                     var (created, updated, skipped, failed, removed) =
-                        await ProcessTunnelAsync(tunnel, run, isDryRun, ct);
+                        await ProcessTunnelAsync(tunnel, run, isDryRun,
+                            totalCreated, totalUpdated, totalSkipped, totalFailed, totalRemoved,
+                            totalPhotosUpdated, totalPhotosFailed, ct);
 
                     totalCreated += created;
                     totalUpdated += updated;
@@ -284,6 +286,8 @@ public sealed class SyncEngine(
         Tunnel tunnel,
         SyncRun run,
         bool isDryRun,
+        int priorCreated, int priorUpdated, int priorSkipped, int priorFailed, int priorRemoved,
+        int priorPhotosUpdated, int priorPhotosFailed,
         CancellationToken ct)
     {
         logger.LogInformation("Processing tunnel {TunnelId} ({TunnelName})", tunnel.Id, tunnel.Name);
@@ -428,6 +432,12 @@ public sealed class SyncEngine(
                     failed += f;
                     removed += r;
                 }
+
+                // Write interim progress after each mailbox so the dashboard updates live
+                await UpdateRunProgressAsync(run.Id,
+                    priorCreated + created, priorUpdated + updated, priorSkipped + skipped,
+                    priorFailed + failed, priorRemoved + removed, 0, 0, 0,
+                    priorPhotosUpdated, priorPhotosFailed);
             }
             finally
             {
