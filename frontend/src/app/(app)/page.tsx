@@ -119,13 +119,18 @@ export default function DashboardPage() {
   const triggerSync = useTriggerSync();
   const { data: pollingRun, isLoading: pollingLoading } = useSyncRunPolling(activeRunId);
 
-  // Auto-detect a running/pending sync from dashboard data (e.g. after page refresh mid-sync)
+  // Always track the latest running/pending sync — picks up auto-triggered photo sync
+  // runs and any sync started outside the dashboard (scheduled, Hangfire, etc.)
   useEffect(() => {
-    if (activeRunId === null && dashboard?.recentRuns) {
+    if (dashboard?.recentRuns) {
       const active = dashboard.recentRuns.find((r) => r.status === 'running' || r.status === 'pending');
-      if (active) setActiveRunId(active.id);
+      if (active && active.id !== activeRunId) {
+        setActiveRunId(active.id);
+      } else if (!active && activeRunId !== null) {
+        setActiveRunId(null);
+      }
     }
-  }, [activeRunId, dashboard]);
+  }, [dashboard, activeRunId]);
 
   // Clear activeRunId when polling run transitions to a terminal status
   useEffect(() => {

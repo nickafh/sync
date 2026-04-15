@@ -359,6 +359,15 @@ public class ContactWriter : IContactWriter
                 contact.BusinessAddress.PostalCode = postalCode;
         }
 
+        // iOS/Android show GivenName + Surname, not DisplayName. When both are empty
+        // (common for shared mailbox contacts like "IMMY-AFH"), phones fall back to
+        // showing the email address. Populate GivenName from DisplayName as a fallback.
+        if (string.IsNullOrWhiteSpace(contact.GivenName) && string.IsNullOrWhiteSpace(contact.Surname)
+            && !string.IsNullOrWhiteSpace(contact.DisplayName))
+        {
+            contact.GivenName = contact.DisplayName;
+        }
+
         return contact;
     }
 }

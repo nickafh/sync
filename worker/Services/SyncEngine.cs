@@ -195,7 +195,7 @@ public sealed class SyncEngine(
                 if (autoTrigger == "true")
                 {
                     logger.LogInformation("Auto-triggering photo sync after contact sync (D-02)");
-                    await photoSyncService.RunAllAsync(RunType.Scheduled, isDryRun, ct, skipRunningCheck: true);
+                    await photoSyncService.RunAllAsync(RunType.PhotoSync, isDryRun, ct, skipRunningCheck: true);
                 }
             }
 
