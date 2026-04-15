@@ -104,7 +104,10 @@ public class PhotoSyncService : IPhotoSyncService
         // Parallel fetches bounded by _fetchSemaphore to avoid Graph throttling.
         // OPTIMIZATION: Skip fetching for users whose SourceUser.PhotoHash already matches
         // all their ContactSyncState.PhotoHash entries — the photo hasn't changed.
+        // IMPORTANT: Don't skip if ANY state still has null PhotoHash (e.g. wiped mailbox
+        // with freshly-created contacts that need the photo pushed).
         Dictionary<int, string?> existingPhotoHashes;
+        HashSet<int> sourceUsersNeedingPhotos;
         {
             await using var hashDb = await _dbContextFactory.CreateDbContextAsync(ct);
             existingPhotoHashes = await hashDb.ContactSyncStates
@@ -112,6 +115,13 @@ public class PhotoSyncService : IPhotoSyncService
                 .GroupBy(s => s.SourceUserId)
                 .Select(g => new { SourceUserId = g.Key, Hash = g.Min(s => s.PhotoHash) })
                 .ToDictionaryAsync(x => x.SourceUserId, x => x.Hash, ct);
+
+            sourceUsersNeedingPhotos = (await hashDb.ContactSyncStates
+                .Where(s => s.TunnelId == tunnel.Id && s.GraphContactId != null && s.PhotoHash == null)
+                .Select(s => s.SourceUserId)
+                .Distinct()
+                .ToListAsync(ct))
+                .ToHashSet();
         }
 
         var sourcePhotos = new System.Collections.Concurrent.ConcurrentDictionary<int, (byte[]? bytes, string? hash)>();
@@ -119,11 +129,14 @@ public class PhotoSyncService : IPhotoSyncService
 
         var fetchTasks = sourceUsers.Select(async sourceUser =>
         {
-            // Skip fetch if source photo hash matches the already-synced hash.
-            // This avoids hundreds of Graph API calls on steady-state runs.
+            // Skip fetch if source photo hash matches the already-synced hash
+            // AND every contact state already has the photo (no null PhotoHash).
+            // This avoids hundreds of Graph API calls on steady-state runs while
+            // still fetching when a wiped/new mailbox needs the photo.
             if (sourceUser.PhotoHash != null
                 && existingPhotoHashes.TryGetValue(sourceUser.Id, out var syncedHash)
-                && syncedHash == sourceUser.PhotoHash)
+                && syncedHash == sourceUser.PhotoHash
+                && !sourceUsersNeedingPhotos.Contains(sourceUser.Id))
             {
                 sourcePhotos[sourceUser.Id] = (null, sourceUser.PhotoHash);
                 Interlocked.Increment(ref fetchSkipped);
