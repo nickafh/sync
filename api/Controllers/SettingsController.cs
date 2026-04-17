@@ -41,6 +41,7 @@ public class SettingsController : ControllerBase
         [FromServices] AFHSyncDbContext db,
         [FromServices] IRecurringJobManager recurringJobs)
     {
+        bool photoSchedulingChanged = false;
         foreach (var setting in request.Settings)
         {
             var existing = await db.AppSettings
@@ -60,9 +61,27 @@ public class SettingsController : ControllerBase
                     engine => engine.RunAsync(null, RunType.Scheduled, false, CancellationToken.None),
                     setting.Value);
             }
+
+            if (setting.Key is "photo_sync_mode" or "photo_sync_cron" or "photo_sync_auto_trigger")
+                photoSchedulingChanged = true;
         }
 
         await db.SaveChangesAsync();
+
+        // If auto_trigger was toggled on, immediately remove the standalone photo cron so
+        // the two don't race. Re-registration (when auto_trigger goes off) is handled by
+        // the worker startup — the API project doesn't reference IPhotoSyncService directly
+        // to avoid a project dependency, so a worker restart (via ./deploy.sh) picks that
+        // branch back up. Removal is safe here because it's a string key.
+        if (photoSchedulingChanged)
+        {
+            var modeValue = (await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "photo_sync_mode"))?.Value ?? "included";
+            var autoTriggerValue = (await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "photo_sync_auto_trigger"))?.Value == "true";
+
+            if (modeValue != "separate_pass" || autoTriggerValue)
+                recurringJobs.RemoveIfExists("photo-sync-all");
+        }
+
         return Ok(new { message = "Settings updated." });
     }
 }

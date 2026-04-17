@@ -83,23 +83,38 @@ public class SyncRunsController : ControllerBase
 
     /// <summary>
     /// POST /api/sync-runs/stop — Request cancellation of the current sync run.
-    /// Sets a flag that the sync engine checks between tunnels.
+    /// Sets cancel_sync=true (graceful stop on next between-tunnel check) AND force-marks
+    /// any currently-running SyncRun as Cancelled so the UI unblocks immediately. The
+    /// worker process may still be executing Graph calls in the background — those will
+    /// complete or time out but cannot resurrect a Cancelled run since FinalizeRunAsync
+    /// preserves the Cancelled terminal status.
     /// </summary>
     [HttpPost("stop")]
     public async Task<IActionResult> StopSync([FromServices] AFHSyncDbContext db)
     {
-        var isRunning = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running);
-        if (!isRunning)
+        var runningRuns = await db.SyncRuns.Where(r => r.Status == SyncStatus.Running).ToListAsync();
+        if (runningRuns.Count == 0)
             return Ok(new { message = "No sync is currently running." });
 
+        // 1. Flip cancel_sync flag so the worker bails at its next check.
         var setting = await db.AppSettings.FirstOrDefaultAsync(s => s.Key == "cancel_sync");
         if (setting != null)
             setting.Value = "true";
         else
             db.AppSettings.Add(new AFHSync.Shared.Entities.AppSetting { Key = "cancel_sync", Value = "true" });
+
+        // 2. Force-mark running runs as Cancelled so the dashboard clears immediately.
+        var now = DateTime.UtcNow;
+        foreach (var r in runningRuns)
+        {
+            r.Status = SyncStatus.Cancelled;
+            r.CompletedAt = now;
+            r.DurationMs = r.StartedAt.HasValue ? (int)(now - r.StartedAt.Value).TotalMilliseconds : 0;
+            r.ErrorSummary = "Stop requested by user";
+        }
         await db.SaveChangesAsync();
 
-        return Ok(new { message = "Stop requested. Sync will stop after the current tunnel completes." });
+        return Ok(new { message = $"Cancelled {runningRuns.Count} run(s). Worker will exit gracefully on next checkpoint." });
     }
 
     /// <summary>

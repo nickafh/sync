@@ -368,6 +368,15 @@ public class PhotoSyncService : IPhotoSyncService
             }
         }
 
+        // Clear any stale cancel_sync flag so this run doesn't self-cancel on the first
+        // between-tunnel check. Prior killed runs may leave the flag set to true.
+        var cancelClear = await settingsDb.AppSettings.FirstOrDefaultAsync(s => s.Key == "cancel_sync", ct);
+        if (cancelClear != null && cancelClear.Value != "false")
+        {
+            cancelClear.Value = "false";
+            await settingsDb.SaveChangesAsync(ct);
+        }
+
         // Create a SyncRun for this photo sync pass
         var run = await _runLogger.CreateRunAsync(runType, isDryRun, ct);
         _logger.LogInformation("Photo sync RunAllAsync starting RunId={RunId}", run.Id);
@@ -393,6 +402,23 @@ public class PhotoSyncService : IPhotoSyncService
 
             foreach (var tunnel in tunnels)
             {
+                // Stop-sync check: if user clicked Stop Sync, bail out between tunnels
+                // the same way SyncEngine does. Respect the shared cancel_sync flag.
+                await using (var cancelCheckDb = await _dbContextFactory.CreateDbContextAsync(ct))
+                {
+                    var cancelFlag = await cancelCheckDb.AppSettings
+                        .FirstOrDefaultAsync(s => s.Key == "cancel_sync", ct);
+                    if (cancelFlag?.Value == "true")
+                    {
+                        _logger.LogInformation(
+                            "Photo sync cancelled by user — stopping after {Processed} tunnel(s)",
+                            tunnelsProcessedSoFar);
+                        cancelFlag.Value = "false";
+                        await cancelCheckDb.SaveChangesAsync(ct);
+                        break;
+                    }
+                }
+
                 // Per-tunnel opt-out (D-13)
                 if (!tunnel.PhotoSyncEnabled)
                 {

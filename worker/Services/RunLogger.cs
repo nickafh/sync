@@ -171,6 +171,18 @@ public sealed class RunLogger(
         var dbRun = await db.SyncRuns.FindAsync([run.Id], ct)
             ?? throw new InvalidOperationException($"SyncRun {run.Id} not found during finalization");
 
+        // Preserve terminal Cancelled status set by the API's Stop Sync endpoint.
+        // If the user clicked Stop while the worker was in a Graph call, the API marks
+        // the run Cancelled immediately; when the worker later reaches finalization it
+        // must not overwrite that with Success/Warning.
+        if (dbRun.Status == SyncStatus.Cancelled)
+        {
+            logger.LogInformation(
+                "SyncRun {RunId} was already Cancelled by user — skipping overwrite and preserving counts recorded at cancel time.",
+                run.Id);
+            return;
+        }
+
         var completedAt = DateTime.UtcNow;
         dbRun.Status = status;
         dbRun.CompletedAt = completedAt;

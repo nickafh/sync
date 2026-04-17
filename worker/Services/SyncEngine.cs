@@ -104,6 +104,11 @@ public sealed class SyncEngine(
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
 
+        // Clear any stale cancel_sync flag from a prior aborted run so this run
+        // doesn't immediately self-cancel. A sync that gets killed externally
+        // (Hangfire job cancel, worker crash) leaves the flag set to true.
+        await WriteAppSettingAsync("cancel_sync", "false", ct);
+
         // Reset throttle counter for this run (singleton counter, safe because concurrent
         // runs are blocked per SCHD-05 — only one sync run executes at a time).
         throttleCounter.Reset();
@@ -117,6 +122,7 @@ public sealed class SyncEngine(
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;
         int tunnelCount = 0;
         string? fatalError = null;
+        bool wasCancelled = false;
         var tunnelErrors = new List<string>();
 
         try
@@ -139,6 +145,7 @@ public sealed class SyncEngine(
                     logger.LogInformation("Sync cancelled by user — stopping after {Processed} tunnel(s)", tunnelsProcessed);
                     // Clear the flag so the next sync isn't auto-cancelled
                     await WriteAppSettingAsync("cancel_sync", "false", ct);
+                    wasCancelled = true;
                     break;
                 }
 
@@ -205,7 +212,9 @@ public sealed class SyncEngine(
         // Step 7: Determine final status.
         var finalStatus = fatalError != null
             ? SyncStatus.Failed
-            : DetermineStatus(tunnelCount, tunnelsProcessed, tunnelsWarned, tunnelsFailed, totalFailed);
+            : wasCancelled
+                ? SyncStatus.Cancelled
+                : DetermineStatus(tunnelCount, tunnelsProcessed, tunnelsWarned, tunnelsFailed, totalFailed);
 
         // Step 8: Finalize the run — always runs, even after fatal exceptions.
         try
@@ -241,23 +250,30 @@ public sealed class SyncEngine(
         // Step 9: Auto-trigger photo sync AFTER contact run is finalized (separate_pass + auto_trigger).
         // Previously ran inline before finalization, which made the UI show both runs active simultaneously.
         // Running here guarantees the contact SyncRun is already marked Success/Warning/Failed in the DB
-        // before the photo sync creates its own run.
-        try
+        // before the photo sync creates its own run. Skipped when contact sync was cancelled.
+        if (wasCancelled || finalStatus == SyncStatus.Cancelled)
         {
-            var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", CancellationToken.None);
-            if (photoSyncMode == "separate_pass")
+            logger.LogInformation("Skipping auto-trigger photo sync because contact sync was cancelled.");
+        }
+        else
+        {
+            try
             {
-                var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", CancellationToken.None);
-                if (autoTrigger == "true")
+                var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", CancellationToken.None);
+                if (photoSyncMode == "separate_pass")
                 {
-                    logger.LogInformation("Auto-triggering photo sync after contact sync (post-finalize)");
-                    await photoSyncService.RunAllAsync(RunType.PhotoSync, isDryRun, CancellationToken.None);
+                    var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", CancellationToken.None);
+                    if (autoTrigger == "true")
+                    {
+                        logger.LogInformation("Auto-triggering photo sync after contact sync (post-finalize)");
+                        await photoSyncService.RunAllAsync(RunType.PhotoSync, isDryRun, CancellationToken.None);
+                    }
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Auto-triggered photo sync failed for RunId={RunId}", run.Id);
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Auto-triggered photo sync failed for RunId={RunId}", run.Id);
+            }
         }
 
         // Return run with updated status for callers.

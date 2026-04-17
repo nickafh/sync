@@ -159,12 +159,19 @@ try
             svc => svc.CleanupAsync(),
             "*/30 * * * *"); // every 30 minutes
 
-        // Register photo sync recurring job for separate_pass mode (D-02, PHOT-03)
+        // Register photo sync recurring job for separate_pass mode (D-02, PHOT-03).
+        // Skip the cron entirely when auto-trigger is enabled — the contact sync pipeline
+        // chains photo sync post-finalization, and firing a second cron at the same time
+        // would cause simultaneous Graph pressure and 429 collisions.
         var photoModeSetting = await db.AppSettings
             .FirstOrDefaultAsync(s => s.Key == "photo_sync_mode");
         var photoSyncMode = photoModeSetting?.Value ?? "included";
 
-        if (photoSyncMode == "separate_pass")
+        var photoAutoTriggerSetting = await db.AppSettings
+            .FirstOrDefaultAsync(s => s.Key == "photo_sync_auto_trigger");
+        var photoAutoTrigger = photoAutoTriggerSetting?.Value == "true";
+
+        if (photoSyncMode == "separate_pass" && !photoAutoTrigger)
         {
             var photoCronSetting = await db.AppSettings
                 .FirstOrDefaultAsync(s => s.Key == "photo_sync_cron");
@@ -179,8 +186,11 @@ try
         }
         else
         {
-            // Remove the job if mode is not separate_pass (clean up if mode was changed)
+            // Remove the job when mode is not separate_pass OR auto-trigger is active
+            // (auto-trigger owns scheduling; no standalone cron needed).
             recurringJobManager.RemoveIfExists("photo-sync-all");
+            if (photoSyncMode == "separate_pass" && photoAutoTrigger)
+                Log.Information("photo-sync-all cron skipped: auto-trigger owns photo sync scheduling.");
         }
     }
 
