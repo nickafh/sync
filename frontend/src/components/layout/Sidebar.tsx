@@ -11,6 +11,7 @@ import {
   Settings,
   LogOut,
   Trash2,
+  UserSearch,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 
@@ -20,6 +21,7 @@ const navItems = [
   { label: 'Targets', href: '/lists', icon: Phone },
   { label: 'Field Profiles', href: '/fields', icon: SlidersHorizontal },
   { label: 'Runs & Logs', href: '/runs', icon: ClipboardList },
+  { label: 'User Lookup', href: '/users', icon: UserSearch },
   { label: 'Cleanup', href: '/cleanup', icon: Trash2 },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];

@@ -548,7 +548,8 @@ public class SyncEngineTests
 
         public Task<(int updated, int failed)> SyncPhotosForTunnelAsync(
             Tunnel tunnel, SyncRun run, List<SourceUser> sourceUsers,
-            bool isDryRun, CancellationToken ct)
+            bool isDryRun, CancellationToken ct,
+            int priorPhotosUpdated = 0, int priorPhotosFailed = 0, int priorTunnelsProcessed = 0)
         {
             SyncPhotosCallCount++;
             return Task.FromResult((0, 0));

@@ -88,7 +88,10 @@ public class PhotoSyncService : IPhotoSyncService
         SyncRun run,
         List<SourceUser> sourceUsers,
         bool isDryRun,
-        CancellationToken ct)
+        CancellationToken ct,
+        int priorPhotosUpdated = 0,
+        int priorPhotosFailed = 0,
+        int priorTunnelsProcessed = 0)
     {
         // Step a: Check Photo field SyncBehavior from field profile
         var photoBehavior = GetPhotoSyncBehavior(tunnel);
@@ -293,6 +296,50 @@ public class PhotoSyncService : IPhotoSyncService
 
         int totalUpdated = 0, totalFailed = 0;
         var counterLock = new object();
+        long lastProgressTicks = 0;
+        var progressIntervalTicks = TimeSpan.FromSeconds(5).Ticks;
+
+        // Interim progress snapshot. Time-throttled so a tunnel stuck in Graph 429 retries
+        // still shows motion on the dashboard (SyncRun row is updated every few seconds).
+        // `force=true` flushes the last in-flight deltas at mailbox boundaries.
+        async Task ReportProgressAsync(bool force)
+        {
+            int snapshotUpdated, snapshotFailed;
+            bool shouldWrite;
+            lock (counterLock)
+            {
+                snapshotUpdated = totalUpdated;
+                snapshotFailed = totalFailed;
+                var nowTicks = DateTime.UtcNow.Ticks;
+                shouldWrite = force || (nowTicks - lastProgressTicks) >= progressIntervalTicks;
+                if (shouldWrite)
+                {
+                    lastProgressTicks = nowTicks;
+                }
+            }
+            if (shouldWrite)
+            {
+                await UpdateRunProgressAsync(
+                    run.Id,
+                    priorPhotosUpdated + snapshotUpdated,
+                    priorPhotosFailed + snapshotFailed,
+                    priorTunnelsProcessed);
+            }
+        }
+
+        // Per-write callback invoked inside ProcessMailboxPhotosAsync. Atomically
+        // accumulates shared totals and triggers a throttled progress write — keeps
+        // the dashboard moving even when a single mailbox's photos take many minutes
+        // under sustained throttling.
+        async Task OnPhotoWriteAsync(int deltaUpdated, int deltaFailed)
+        {
+            lock (counterLock)
+            {
+                totalUpdated += deltaUpdated;
+                totalFailed += deltaFailed;
+            }
+            await ReportProgressAsync(force: false);
+        }
 
         // Detect backfill scenario: all contacts have null PhotoHash on their ContactSyncState
         var isBackfill = contactStates.All(s => s.PhotoHash == null);
@@ -313,15 +360,14 @@ public class PhotoSyncService : IPhotoSyncService
                 var (folderId, _) = await _contactFolderManager.GetOrCreateFolderAsync(
                     mailboxEntraId, tunnel.Name, ct);
 
-                var (updated, failed) = await ProcessMailboxPhotosAsync(
+                // Counter accumulation happens inside OnPhotoWriteAsync — the return
+                // is kept for per-mailbox diagnostic logging inside ProcessMailboxPhotosAsync.
+                await ProcessMailboxPhotosAsync(
                     tunnel, run, mailboxEntraId, folderId, states, sourcePhotoResults,
-                    photoBehavior, isBackfill, isDryRun, ct);
+                    photoBehavior, isBackfill, isDryRun, OnPhotoWriteAsync, ct);
 
-                lock (counterLock)
-                {
-                    totalUpdated += updated;
-                    totalFailed += failed;
-                }
+                // Flush the final deltas for this mailbox regardless of the time-throttle.
+                await ReportProgressAsync(force: true);
             }
             finally
             {
@@ -433,14 +479,19 @@ public class PhotoSyncService : IPhotoSyncService
                     // Load source users that have synced contacts for this tunnel
                     var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel.Id, ct);
 
+                    // Thread cumulative cross-tunnel counts so the mid-tunnel progress
+                    // writes inside SyncPhotosForTunnelAsync reflect running totals.
                     var (updated, failed) = await SyncPhotosForTunnelAsync(
-                        tunnel, run, sourceUsers, isDryRun, ct);
+                        tunnel, run, sourceUsers, isDryRun, ct,
+                        priorPhotosUpdated: totalPhotosUpdated,
+                        priorPhotosFailed: totalPhotosFailed,
+                        priorTunnelsProcessed: tunnelsProcessedSoFar);
 
                     totalPhotosUpdated += updated;
                     totalPhotosFailed += failed;
                     tunnelsProcessedSoFar++;
 
-                    // Interim progress write so the dashboard shows live photo counts.
+                    // Tunnel-boundary progress write: final flush for this tunnel.
                     await UpdateRunProgressAsync(run.Id, totalPhotosUpdated, totalPhotosFailed, tunnelsProcessedSoFar);
                 }
                 catch (Exception ex)
@@ -650,6 +701,7 @@ public class PhotoSyncService : IPhotoSyncService
         SyncBehavior photoBehavior,
         bool isBackfill,
         bool isDryRun,
+        Func<int, int, Task>? onPhotoWrite,
         CancellationToken ct)
     {
         int updated = 0, failed = 0;
@@ -735,6 +787,10 @@ public class PhotoSyncService : IPhotoSyncService
                         CreatedAt = DateTime.UtcNow
                     });
                     updated++;
+                    if (onPhotoWrite != null)
+                    {
+                        await onPhotoWrite(1, 0);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -753,6 +809,10 @@ public class PhotoSyncService : IPhotoSyncService
                         CreatedAt = DateTime.UtcNow
                     });
                     failed++;
+                    if (onPhotoWrite != null)
+                    {
+                        await onPhotoWrite(0, 1);
+                    }
                 }
             }
 

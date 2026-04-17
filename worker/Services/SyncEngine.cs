@@ -174,8 +174,14 @@ public sealed class SyncEngine(
                         try
                         {
                             var sourceUsers = await LoadSourceUsersForTunnelAsync(tunnel, ct);
+                            // Thread cumulative counts so PhotoSyncService's mid-tunnel progress
+                            // writes reflect the right running totals (avoids clobbering prior
+                            // tunnels' counts with this-tunnel-only values).
                             var (photosUpdated, photosFailed) = await photoSyncService
-                                .SyncPhotosForTunnelAsync(tunnel, run, sourceUsers, isDryRun, ct);
+                                .SyncPhotosForTunnelAsync(tunnel, run, sourceUsers, isDryRun, ct,
+                                    priorPhotosUpdated: totalPhotosUpdated,
+                                    priorPhotosFailed: totalPhotosFailed,
+                                    priorTunnelsProcessed: tunnelsProcessed + tunnelsWarned);
                             totalPhotosUpdated += photosUpdated;
                             totalPhotosFailed += photosFailed;
                         }
