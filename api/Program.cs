@@ -48,6 +48,7 @@ builder.Services.AddDbContext<AFHSyncDbContext>(options =>
             o.MapEnum<SyncStatus>("sync_status");
             o.MapEnum<TunnelStatus>("tunnel_status");
             o.MapEnum<RunType>("run_type");
+            o.MapEnum<CleanupJobStatus>("cleanup_job_status");
         }));
 
 // JWT Authentication (D-05: simple JWT, D-07: httpOnly cookie)

@@ -3,9 +3,11 @@ using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
 using AFHSync.Worker.Graph;
 using AFHSync.Worker.Services;
+using Azure.Identity;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Graph;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -41,6 +43,7 @@ try
                 o.MapEnum<SyncStatus>("sync_status");
                 o.MapEnum<TunnelStatus>("tunnel_status");
                 o.MapEnum<RunType>("run_type");
+                o.MapEnum<CleanupJobStatus>("cleanup_job_status");
             }));
 
     // Thread-safe throttle event counter — singleton shared between the singleton
@@ -60,11 +63,26 @@ try
     // Graph client factory — singleton so the GraphServiceClient is reused across requests.
     // Inject the resilience handler into the Graph HTTP pipeline so every SDK call
     // automatically benefits from retry logic (SYNC-10).
-    services.AddSingleton<GraphClientFactory>(sp =>
+    services.AddSingleton<AFHSync.Worker.Graph.GraphClientFactory>(sp =>
     {
         var config = sp.GetRequiredService<IConfiguration>();
         var resilienceHandler = sp.GetRequiredService<GraphResilienceHandler>();
-        return new GraphClientFactory(config, new DelegatingHandler[] { resilienceHandler });
+        return new AFHSync.Worker.Graph.GraphClientFactory(config, new DelegatingHandler[] { resilienceHandler });
+    });
+
+    // Plain Singleton GraphServiceClient for the cleanup runner (quick-260417-48z).
+    // Mirrors api/Program.cs:98-106 so the cleanup runner gets a vanilla Graph client
+    // without the SyncEngine resilience pipeline (Polly retries are unnecessary for
+    // one-shot folder deletes — Hangfire's automatic retry is also disabled in the
+    // runner because tenant wipes are destructive and not safe to auto-replay).
+    services.AddSingleton(sp =>
+    {
+        var config = sp.GetRequiredService<IConfiguration>();
+        var credential = new ClientSecretCredential(
+            config["Graph:TenantId"],
+            config["Graph:ClientId"],
+            config["Graph:ClientSecret"]);
+        return new GraphServiceClient(credential);
     });
 
     // Sync pipeline services — scoped per sync run invocation
@@ -77,6 +95,10 @@ try
     services.AddScoped<ISyncEngine, SyncEngine>();
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
     services.AddScoped<StaleRunCleanupService>();
+
+    // Cleanup runner (quick-260417-48z) — Hangfire resolves this via the
+    // ICleanupJobRunner interface registered in shared/.
+    services.AddScoped<ICleanupJobRunner, CleanupJobRunner>();
 
     // DDG target resolution (per quick-260417-2lb): worker resolves DDG members at sync time
     // to union with explicit emails in PhoneList.TargetUserFilter. Reuses the api project's

@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/lib/api';
 import { Trash2, Search, X, Plus } from 'lucide-react';
 import type { UserSearchResult } from '@/types/tunnel';
+import { CleanupProgressModal } from '@/components/CleanupProgressModal';
 
 interface FolderDto {
   id: string;
@@ -52,6 +53,13 @@ export default function CleanupPage() {
   const [scanResults, setScanResults] = useState<UserFoldersDto[] | null>(null);
   const [selectedFolders, setSelectedFolders] = useState<SelectedFolder[]>([]);
   const [deleting, setDeleting] = useState(false);
+  // quick-260417-48z: tracks the in-flight Hangfire job so the modal can poll
+  // /api/cleanup/jobs/{jobId}. Set on POST 202; cleared in modal onClose.
+  const [activeJob, setActiveJob] = useState<{
+    jobId: string;
+    total: number;
+    folders: SelectedFolder[];
+  } | null>(null);
 
   // Allowed folder name allowlist — only folders matching these names are returned by scan.
   // Persisted to localStorage so the admin doesn't re-type each session.
@@ -190,23 +198,19 @@ export default function CleanupPage() {
     if (selectedFolders.length === 0) return;
     if (!confirm(`Delete ${selectedFolders.length} folder(s)? This removes all contacts in those folders from users' mailboxes. This cannot be undone.`)) return;
 
+    // POST returns 202 in milliseconds — the actual Graph deletion runs in the
+    // worker via Hangfire. The modal polls progress; scanResults is pruned only
+    // when the user dismisses the modal after a terminal status.
     setDeleting(true);
     try {
       const data = await api.cleanup.delete(selectedFolders);
-      toast.success(data.message);
-      // Remove deleted folders from results
-      setScanResults((prev) =>
-        prev?.map((user) => ({
-          ...user,
-          folders: user.folders.filter(
-            (f) => !selectedFolders.some((sf) => sf.entraId === user.entraId && sf.folderId === f.id)
-          ),
-        })).filter((u) => u.folders.length > 0) ?? null
-      );
-      setSelectedFolders([]);
+      setActiveJob({
+        jobId: data.jobId,
+        total: data.total,
+        folders: [...selectedFolders],
+      });
     } catch {
-      toast.error('Failed to delete folders.');
-    } finally {
+      toast.error('Failed to enqueue cleanup job.');
       setDeleting(false);
     }
   };
@@ -535,6 +539,33 @@ export default function CleanupPage() {
             <p className="text-text-muted">No contact folders found for the selected users.</p>
           </CardContent>
         </Card>
+      )}
+
+      {activeJob && (
+        <CleanupProgressModal
+          jobId={activeJob.jobId}
+          total={activeJob.total}
+          selectedFolders={activeJob.folders}
+          onClose={(deletedKeys) => {
+            // Terminal close: the modal hands back the set of attempted folder
+            // keys so we can prune them from the visible scan results — matches
+            // the legacy optimistic-removal UX. Empty set = "Hide" while running,
+            // leaves results untouched.
+            if (deletedKeys.size > 0) {
+              setScanResults((prev) =>
+                prev?.map((u) => ({
+                  ...u,
+                  folders: u.folders.filter(
+                    (f) => !deletedKeys.has(`${u.entraId}|${f.id}`)
+                  ),
+                })).filter((u) => u.folders.length > 0) ?? null
+              );
+              setSelectedFolders([]);
+            }
+            setActiveJob(null);
+            setDeleting(false);
+          }}
+        />
       )}
     </div>
   );

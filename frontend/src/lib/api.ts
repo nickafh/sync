@@ -147,9 +147,23 @@ export const api = {
     scan: (emails: string[] | null, allowedFolderNames?: string[] | null) =>
       fetchApi<{ email: string; displayName: string | null; entraId: string; folders: { id: string; name: string }[] }[]>(
         '/cleanup/scan', { method: 'POST', body: JSON.stringify({ emails, allowedFolderNames }) }),
+    // POST /cleanup/delete now returns 202 immediately with { jobId, total } —
+    // the actual Graph deletion runs in the worker via Hangfire (quick-260417-48z).
     delete: (items: { entraId: string; email: string; folderId: string; folderName: string }[]) =>
-      fetchApi<{ deleted: number; failed: number; message: string }>(
+      fetchApi<{ jobId: string; total: number }>(
         '/cleanup/delete', { method: 'POST', body: JSON.stringify({ items }) }),
+    // Polled by CleanupProgressModal every 2s until status is terminal.
+    jobStatus: (jobId: string) =>
+      fetchApi<{
+        id: string;
+        status: 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Cancelled';
+        total: number;
+        deleted: number;
+        failed: number;
+        lastError: string | null;
+        startedAt: string | null;
+        completedAt: string | null;
+      }>(`/cleanup/jobs/${jobId}`),
   },
 
   contactExclusions: {

@@ -1,5 +1,8 @@
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
+using AFHSync.Shared.Enums;
+using AFHSync.Shared.Services;
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;
@@ -13,15 +16,23 @@ public class CleanupController : ControllerBase
 {
     private readonly AFHSyncDbContext _db;
     private readonly GraphServiceClient _graphClient;
+    private readonly IBackgroundJobClient _jobs;
     private readonly ILogger<CleanupController> _logger;
 
-    // Process multiple mailboxes concurrently for tenant-wide cleanup
+    // Process multiple mailboxes concurrently for tenant-wide scan.
+    // The DELETE path used to share this constant — that loop now lives in
+    // worker/Services/CleanupJobRunner.cs (quick-260417-48z) and has its own copy.
     private const int MailboxParallelism = 8;
 
-    public CleanupController(AFHSyncDbContext db, GraphServiceClient graphClient, ILogger<CleanupController> logger)
+    public CleanupController(
+        AFHSyncDbContext db,
+        GraphServiceClient graphClient,
+        IBackgroundJobClient jobs,
+        ILogger<CleanupController> logger)
     {
         _db = db;
         _graphClient = graphClient;
+        _jobs = jobs;
         _logger = logger;
     }
 
@@ -203,70 +214,68 @@ public class CleanupController : ControllerBase
     }
 
     /// <summary>
-    /// POST /api/cleanup/delete — Delete specified contact folders from specified users.
-    /// Empties each folder via batch API (20 deletes/request), then deletes the folder.
-    /// Processes multiple mailboxes in parallel for tenant-wide cleanup.
+    /// POST /api/cleanup/delete — Enqueue an asynchronous tenant-wide cleanup job.
+    ///
+    /// Inserts a CleanupJob row in Status=Queued, hands the work to a Hangfire job
+    /// (executed by the worker process — see worker/Services/CleanupJobRunner.cs),
+    /// and returns 202 Accepted with { jobId, total } in milliseconds. The HTTP
+    /// request is no longer bound to the Graph delete loop, which previously died
+    /// at the nginx/HTTP timeout boundary on tenant-scale wipes (4900+ folders,
+    /// 25-45 min). Frontend polls GET /api/cleanup/jobs/{jobId} for progress.
     /// </summary>
     [HttpPost("delete")]
     public async Task<IActionResult> DeleteFolders([FromBody] CleanupDeleteRequest request, CancellationToken ct)
     {
-        int deleted = 0;
-        int failed = 0;
-        var counterLock = new object();
-        using var semaphore = new SemaphoreSlim(MailboxParallelism);
+        if (request.Items is null || request.Items.Length == 0)
+            return BadRequest(new { message = "items must be a non-empty array" });
 
-        var tasks = request.Items.Select(async item =>
+        var job = new CleanupJob
         {
-            await semaphore.WaitAsync(ct);
-            try
-            {
-                // Safety: verify this is a subfolder, not the user's root Contacts folder.
-                // Root folder has ParentFolderId == null. We must never delete it.
-                var folder = await _graphClient.Users[item.EntraId].ContactFolders[item.FolderId]
-                    .GetAsync(config => config.QueryParameters.Select = ["id", "parentFolderId", "displayName"], ct);
+            Id = Guid.NewGuid(),
+            Status = CleanupJobStatus.Queued,
+            Total = request.Items.Length,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.CleanupJobs.Add(job);
+        await _db.SaveChangesAsync(ct);
 
-                if (folder?.ParentFolderId is null)
-                {
-                    lock (counterLock) { failed++; }
-                    _logger.LogWarning("BLOCKED: refusing to delete root Contacts folder for {Email}", item.Email);
-                    return;
-                }
+        // Map controller DTOs to the shared CleanupJobItem record so Hangfire
+        // serializes a payload that the worker can deserialize without a
+        // project reference back to api/.
+        var items = request.Items
+            .Select(i => new CleanupJobItem(i.EntraId, i.Email, i.FolderId, i.FolderName))
+            .ToArray();
 
-                // Use permanentDelete — the regular DELETE fails when Exchange has
-                // retention policies because it tries to soft-delete to recoverable items.
-                // permanentDelete bypasses retention and removes the folder + contents immediately.
-                // See: https://learn.microsoft.com/en-us/graph/api/contactfolder-permanentdelete
-                await _graphClient.Users[item.EntraId].ContactFolders[item.FolderId]
-                    .PermanentDelete
-                    .PostAsync(cancellationToken: ct);
+        // Hangfire serializes (jobId, items) into the job payload; the worker
+        // resolves ICleanupJobRunner from its own DI container and invokes RunAsync.
+        // CancellationToken.None is intentional — Hangfire does not propagate the
+        // request token to the worker, and v1 does not surface mid-run cancellation.
+        _jobs.Enqueue<ICleanupJobRunner>(runner => runner.RunAsync(job.Id, items, CancellationToken.None));
 
-                lock (counterLock) { deleted++; }
-                _logger.LogInformation("Permanently deleted contact folder {FolderName} from {Email}",
-                    item.FolderName, item.Email);
-            }
-            catch (Microsoft.Graph.Models.ODataErrors.ODataError odataEx)
-            {
-                lock (counterLock) { failed++; }
-                var code = odataEx.Error?.Code ?? "unknown";
-                var msg = odataEx.Error?.Message ?? odataEx.Message;
-                _logger.LogWarning("Failed to delete folder {FolderName} from {Email}: [{Code}] {Message}",
-                    item.FolderName, item.Email, code, msg);
-            }
-            catch (Exception ex)
-            {
-                lock (counterLock) { failed++; }
-                _logger.LogWarning(ex, "Failed to delete folder {FolderName} from {Email}",
-                    item.FolderName, item.Email);
-            }
-            finally
-            {
-                semaphore.Release();
-            }
-        }).ToList();
+        _logger.LogInformation("Enqueued cleanup job {JobId} with {Count} item(s)", job.Id, items.Length);
+        return Accepted(new { jobId = job.Id, total = job.Total });
+    }
 
-        await Task.WhenAll(tasks);
-
-        return Ok(new { deleted, failed, message = $"Deleted {deleted} folder(s), {failed} failed." });
+    /// <summary>
+    /// GET /api/cleanup/jobs/{jobId} — Poll endpoint for the frontend progress modal.
+    /// Returns the CleanupJob row's current status + counters; 404 if the id is
+    /// unknown (job never existed or has been purged).
+    /// </summary>
+    [HttpGet("jobs/{jobId:guid}")]
+    public async Task<IActionResult> GetJob(Guid jobId, CancellationToken ct)
+    {
+        var job = await _db.CleanupJobs.AsNoTracking().FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        if (job is null) return NotFound();
+        return Ok(new CleanupJobDto(
+            job.Id,
+            job.Status.ToString(),
+            job.Total,
+            job.Deleted,
+            job.Failed,
+            job.LastError,
+            job.StartedAt,
+            job.CompletedAt));
     }
 
 }
@@ -276,3 +285,12 @@ public record CleanupDeleteRequest(CleanupDeleteItem[] Items);
 public record CleanupDeleteItem(string EntraId, string Email, string FolderId, string FolderName);
 public record FolderDto(string Id, string Name);
 public record UserFoldersDto(string Email, string? DisplayName, string EntraId, FolderDto[] Folders);
+public record CleanupJobDto(
+    Guid Id,
+    string Status,
+    int Total,
+    int Deleted,
+    int Failed,
+    string? LastError,
+    DateTime? StartedAt,
+    DateTime? CompletedAt);
