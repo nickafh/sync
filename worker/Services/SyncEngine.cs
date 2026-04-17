@@ -971,7 +971,25 @@ public sealed class SyncEngine(
             return filtered;
         }
 
-        return allMailboxes;
+        // AllUsers scope — enumerate the live tenant via Graph and upsert into target_mailboxes
+        // before selecting. The local cache table is sparse on a fresh tenant (or one where
+        // only a subset of mailboxes have ever been auto-provisioned), so reading it directly
+        // would silently skip most users. RefreshTargetMailboxesAsync pages Graph /users,
+        // upserts every enabled Member into target_mailboxes, and swallows Graph failures
+        // (logs warning, leaves cache as-is). Mirrors api/CleanupController.EnumerateTenantMailboxesAsync.
+        logger.LogInformation(
+            "Tunnel {TunnelName}: AllUsers scope — enumerating tenant via Graph", tunnel.Name);
+        await RefreshTargetMailboxesAsync(ct);
+
+        await using var refreshedDb = await dbContextFactory.CreateDbContextAsync(ct);
+        var refreshed = await refreshedDb.TargetMailboxes
+            .Where(m => m.IsActive)
+            .ToListAsync(ct);
+
+        logger.LogInformation(
+            "Tunnel {TunnelName}: AllUsers scope resolved to {Count} target mailbox(es) (was {Cached} before refresh)",
+            tunnel.Name, refreshed.Count, allMailboxes.Count);
+        return refreshed;
     }
 
     /// <summary>
