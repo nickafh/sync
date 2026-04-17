@@ -17,12 +17,18 @@ public class GraphResilienceHandlerTests
     /// Creates a handler chain: GraphResilienceHandler → MockHttpHandler → returns queued responses.
     /// </summary>
     private static (HttpClient client, GraphResilienceHandler resilience, MockInnerHandler inner)
-        BuildChain(Queue<HttpResponseMessage> responses, Action<int>? onThrottle = null)
+        BuildChain(
+            Queue<HttpResponseMessage> responses,
+            Action<int>? onThrottle = null,
+            int maxRetryAttempts = 10)
     {
         var inner = new MockInnerHandler(responses);
+        // Tests use 1ms base delay to keep suite fast — production default is 5s.
         var resilience = new GraphResilienceHandler(
             NullLogger<GraphResilienceHandler>.Instance,
-            onThrottle)
+            onThrottle,
+            maxRetryAttempts: maxRetryAttempts,
+            delay: TimeSpan.FromMilliseconds(1))
         {
             InnerHandler = inner
         };
@@ -116,14 +122,14 @@ public class GraphResilienceHandlerTests
         Assert.Equal(3, inner.CallCount);
     }
 
-    // ── Test 5: stops after 5 retries ────────────────────────────────────────
+    // ── Test 5: stops after MaxRetryAttempts ────────────────────────────────────────
 
     [Fact]
     public async Task Handler_StopsAfter_MaxRetryAttempts_AndReturnsLastErrorResponse()
     {
-        // 6 429 responses: initial attempt + 5 retries = MaxRetryAttempts reached.
-        // Polly should return the last error response (or throw) after 5 retries.
-        const int maxRetries = 5;
+        // initial attempt + MaxRetryAttempts retries = total call count.
+        // Polly should return the last error response (or throw) after retries exhausted.
+        const int maxRetries = 10;
         var responses = new Queue<HttpResponseMessage>(
             Enumerable.Range(0, maxRetries + 1).Select(_ => Make(HttpStatusCode.TooManyRequests)));
         var (client, _, inner) = BuildChain(responses);
@@ -132,7 +138,7 @@ public class GraphResilienceHandlerTests
         var result = await client.GetAsync("/v1.0/users");
 
         Assert.Equal(HttpStatusCode.TooManyRequests, result.StatusCode);
-        Assert.Equal(maxRetries + 1, inner.CallCount); // 1 initial + 5 retries
+        Assert.Equal(maxRetries + 1, inner.CallCount); // 1 initial + MaxRetryAttempts retries
     }
 
     // ── Test 6: throttle callback invoked on each retry ──────────────────────

@@ -22,9 +22,13 @@ public class GraphResilienceHandler : DelegatingHandler
 
     public GraphResilienceHandler(
         ILogger<GraphResilienceHandler> logger,
-        Action<int>? onThrottle = null)
+        Action<int>? onThrottle = null,
+        int? maxRetryAttempts = null,
+        TimeSpan? delay = null)
     {
         _logger = logger;
+        var effectiveMaxRetries = maxRetryAttempts ?? 10;
+        var effectiveDelay = delay ?? TimeSpan.FromSeconds(5);
 
         _pipeline = new ResiliencePipelineBuilder<HttpResponseMessage>()
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
@@ -36,15 +40,19 @@ public class GraphResilienceHandler : DelegatingHandler
                         return ValueTask.FromResult(true);
                     if (statusCode == HttpStatusCode.ServiceUnavailable)
                         return ValueTask.FromResult(true);
+                    if (statusCode == HttpStatusCode.GatewayTimeout)
+                        return ValueTask.FromResult(true);
+                    if (statusCode == HttpStatusCode.BadGateway)
+                        return ValueTask.FromResult(true);
                     // Only retry transient network exceptions — not auth failures,
                     // cancellation, or deserialization errors.
                     return ValueTask.FromResult(
                         args.Outcome.Exception is HttpRequestException or IOException);
                 },
-                MaxRetryAttempts = 5,
+                MaxRetryAttempts = effectiveMaxRetries,
                 BackoffType = DelayBackoffType.Exponential,
                 UseJitter = true,
-                Delay = TimeSpan.FromSeconds(2),
+                Delay = effectiveDelay,
                 MaxDelay = TimeSpan.FromMinutes(5),
                 // Override delay when Retry-After header is present on a 429 response.
                 // Returning null tells Polly to use the calculated exponential backoff instead.
@@ -67,8 +75,9 @@ public class GraphResilienceHandler : DelegatingHandler
                         ? args.Outcome.Result.StatusCode.ToString()
                         : args.Outcome.Exception?.GetType().Name ?? "Unknown";
                     _logger.LogWarning(
-                        "Graph throttled. Retry {AttemptNumber}/5 after {DelayMs}ms. Status: {StatusCode}",
+                        "Graph throttled. Retry {AttemptNumber}/{MaxRetries} after {DelayMs}ms. Status: {StatusCode}",
                         args.AttemptNumber + 1,
+                        effectiveMaxRetries,
                         args.RetryDelay.TotalMilliseconds,
                         statusLabel);
                     return ValueTask.CompletedTask;

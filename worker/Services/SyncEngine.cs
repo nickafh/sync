@@ -147,7 +147,8 @@ public sealed class SyncEngine(
                     var (created, updated, skipped, failed, removed) =
                         await ProcessTunnelAsync(tunnel, run, isDryRun,
                             totalCreated, totalUpdated, totalSkipped, totalFailed, totalRemoved,
-                            totalPhotosUpdated, totalPhotosFailed, ct);
+                            totalPhotosUpdated, totalPhotosFailed,
+                            tunnelsProcessed, tunnelsWarned, tunnelsFailed, ct);
 
                     totalCreated += created;
                     totalUpdated += updated;
@@ -188,17 +189,6 @@ public sealed class SyncEngine(
                         tunnel.Id, tunnel.Name);
                     tunnelsFailed++;
                     tunnelErrors.Add($"{tunnel.Name}: {ex.Message}");
-                }
-            }
-
-            // Step 5b: Auto-trigger photo sync for separate_pass mode (D-02)
-            if (photoSyncMode == "separate_pass")
-            {
-                var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", ct);
-                if (autoTrigger == "true")
-                {
-                    logger.LogInformation("Auto-triggering photo sync after contact sync (D-02)");
-                    await photoSyncService.RunAllAsync(RunType.PhotoSync, isDryRun, ct, skipRunningCheck: true);
                 }
             }
 
@@ -248,6 +238,28 @@ public sealed class SyncEngine(
             "SyncRun {RunId} complete: Status={Status}, Created={Created}, Updated={Updated}, Skipped={Skipped}, Failed={Failed}, Removed={Removed}",
             run.Id, finalStatus, totalCreated, totalUpdated, totalSkipped, totalFailed, totalRemoved);
 
+        // Step 9: Auto-trigger photo sync AFTER contact run is finalized (separate_pass + auto_trigger).
+        // Previously ran inline before finalization, which made the UI show both runs active simultaneously.
+        // Running here guarantees the contact SyncRun is already marked Success/Warning/Failed in the DB
+        // before the photo sync creates its own run.
+        try
+        {
+            var photoSyncMode = await ReadAppSettingAsync("photo_sync_mode", "disabled", CancellationToken.None);
+            if (photoSyncMode == "separate_pass")
+            {
+                var autoTrigger = await ReadAppSettingAsync("photo_sync_auto_trigger", "false", CancellationToken.None);
+                if (autoTrigger == "true")
+                {
+                    logger.LogInformation("Auto-triggering photo sync after contact sync (post-finalize)");
+                    await photoSyncService.RunAllAsync(RunType.PhotoSync, isDryRun, CancellationToken.None);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Auto-triggered photo sync failed for RunId={RunId}", run.Id);
+        }
+
         // Return run with updated status for callers.
         run.Status = finalStatus;
         return run;
@@ -291,6 +303,7 @@ public sealed class SyncEngine(
         bool isDryRun,
         int priorCreated, int priorUpdated, int priorSkipped, int priorFailed, int priorRemoved,
         int priorPhotosUpdated, int priorPhotosFailed,
+        int priorTunnelsProcessed, int priorTunnelsWarned, int priorTunnelsFailed,
         CancellationToken ct)
     {
         logger.LogInformation("Processing tunnel {TunnelId} ({TunnelName})", tunnel.Id, tunnel.Name);
@@ -452,7 +465,8 @@ public sealed class SyncEngine(
                 // Write interim progress after each mailbox so the dashboard updates live
                 await UpdateRunProgressAsync(run.Id,
                     priorCreated + created, priorUpdated + updated, priorSkipped + skipped,
-                    priorFailed + failed, priorRemoved + removed, 0, 0, 0,
+                    priorFailed + failed, priorRemoved + removed,
+                    priorTunnelsProcessed, priorTunnelsWarned, priorTunnelsFailed,
                     priorPhotosUpdated, priorPhotosFailed);
             }
             finally
