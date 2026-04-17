@@ -13,7 +13,7 @@ public class CleanupJobConfiguration : IEntityTypeConfiguration<CleanupJob>
         builder.HasKey(e => e.Id);
         // No DB-side default — the API supplies Guid.NewGuid() so it can return the id in the 202 response.
         builder.Property(e => e.Id).HasColumnName("id");
-        builder.Property(e => e.Status).HasColumnName("status").HasColumnType("cleanup_job_status");
+        builder.Property(e => e.Status).HasColumnName("status").IsRequired();
         builder.Property(e => e.Total).HasColumnName("total").HasDefaultValue(0);
         builder.Property(e => e.Deleted).HasColumnName("deleted").HasDefaultValue(0);
         builder.Property(e => e.Failed).HasColumnName("failed").HasDefaultValue(0);
