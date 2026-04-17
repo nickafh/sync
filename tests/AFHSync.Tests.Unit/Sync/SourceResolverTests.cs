@@ -233,6 +233,165 @@ public class SourceResolverTests
     }
 
     // ==============================
+    // Directory Enrichment Tests
+    // ==============================
+
+    [Fact]
+    public void BuildEnrichmentCandidates_IncludesContactsWithEmptyBothPhones_AndNonEmptyEmail()
+    {
+        var contacts = new List<SourceUser>
+        {
+            CreateContact(entraId: "a", email: "a@x.com", bp: null,       mp: null),
+            CreateContact(entraId: "b", email: "b@x.com", bp: "555-0001", mp: null),
+            CreateContact(entraId: "c", email: "c@x.com", bp: null,       mp: "555-0002"),
+            CreateContact(entraId: "d", email: null,      bp: null,       mp: null),
+            CreateContact(entraId: "e", email: "e@x.com", bp: "   ",      mp: " "),
+        };
+
+        var result = SourceResolver.BuildEnrichmentCandidates(contacts);
+
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, c => c.EntraId == "a");
+        Assert.Contains(result, c => c.EntraId == "e");
+    }
+
+    [Fact]
+    public void BuildDirectoryPhoneMap_IndexesByMailAndProxyAddresses_CaseInsensitive()
+    {
+        var users = new List<User>
+        {
+            new()
+            {
+                Id = "u1",
+                Mail = "A@X.com",
+                ProxyAddresses = new List<string> { "SMTP:A@X.com", "smtp:alias@x.com" },
+                BusinessPhones = new List<string> { "555-1111" },
+                MobilePhone = "555-2222"
+            }
+        };
+
+        var map = SourceResolver.BuildDirectoryPhoneMap(users);
+
+        Assert.True(map.ContainsKey("a@x.com"));
+        Assert.True(map.ContainsKey("alias@x.com"));
+        // Case-insensitive lookup:
+        Assert.True(map.ContainsKey("A@X.COM"));
+        Assert.Equal("555-1111", map["a@x.com"].BusinessPhone);
+        Assert.Equal("555-2222", map["alias@x.com"].MobilePhone);
+    }
+
+    [Fact]
+    public void BuildDirectoryPhoneMap_StripsSmtpPrefix_AndHandlesMissingMailOrPhones()
+    {
+        var users = new List<User>
+        {
+            new()
+            {
+                Id = "u2",
+                Mail = null,
+                ProxyAddresses = new List<string> { "smtp:only@x.com" },
+                BusinessPhones = null,
+                MobilePhone = null
+            }
+        };
+
+        var map = SourceResolver.BuildDirectoryPhoneMap(users);
+
+        Assert.Single(map);
+        Assert.True(map.ContainsKey("only@x.com"));
+        Assert.Null(map["only@x.com"].BusinessPhone);
+        Assert.Null(map["only@x.com"].MobilePhone);
+    }
+
+    [Fact]
+    public void ApplyDirectoryEnrichment_BackfillsEmptyOnly_NeverOverwritesExisting()
+    {
+        var candidates = new List<SourceUser>
+        {
+            CreateContact(entraId: "a", email: "a@x.com", bp: null,       mp: " "),
+            CreateContact(entraId: "b", email: "b@x.com", bp: "555-0001", mp: null),
+            CreateContact(entraId: "c", email: "c@x.com", bp: "555-0003", mp: "555-0004"),
+        };
+        var map = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["a@x.com"] = ("AAA", "BBB"),
+            ["b@x.com"] = ("CCC", "DDD"),
+            ["c@x.com"] = ("EEE", "FFF"),
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryEnrichment(candidates, map);
+
+        Assert.Equal(3, matched);
+        Assert.Equal(0, unmatched);
+        Assert.Equal("AAA", candidates[0].BusinessPhone);
+        Assert.Equal("BBB", candidates[0].MobilePhone);
+        Assert.Equal("555-0001", candidates[1].BusinessPhone);   // preserved
+        Assert.Equal("DDD",      candidates[1].MobilePhone);     // filled
+        Assert.Equal("555-0003", candidates[2].BusinessPhone);   // preserved
+        Assert.Equal("555-0004", candidates[2].MobilePhone);     // preserved
+    }
+
+    [Fact]
+    public void ApplyDirectoryEnrichment_CountsUnmatchedWhenEmailNotInMap()
+    {
+        var candidates = new List<SourceUser>
+        {
+            CreateContact(entraId: "a", email: "a@x.com", bp: null, mp: null),
+            CreateContact(entraId: "b", email: "unknown@x.com", bp: null, mp: null),
+        };
+        var map = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["a@x.com"] = ("AAA", "BBB"),
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryEnrichment(candidates, map);
+
+        Assert.Equal(1, matched);
+        Assert.Equal(1, unmatched);
+        Assert.Equal("AAA", candidates[0].BusinessPhone);
+        Assert.Null(candidates[1].BusinessPhone);
+        Assert.Null(candidates[1].MobilePhone);
+    }
+
+    [Fact]
+    public void ChunkEmailsForFilter_ChunksToStayUnderByteBudget()
+    {
+        // Typical email length ~20 bytes; "p eq 'smtp:<email>'" ~35 bytes per term.
+        var emails = Enumerable.Range(0, 50).Select(i => $"user{i:D2}@example.com").ToList();
+
+        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxBytes: 500);
+
+        Assert.NotEmpty(chunks);
+        // Reassembly preserves all emails exactly once, in order.
+        var flattened = chunks.SelectMany(c => c).ToList();
+        Assert.Equal(emails.Count, flattened.Count);
+        Assert.Equal(emails, flattened);
+
+        // Each chunk's rendered filter fits in the budget.
+        foreach (var chunk in chunks)
+        {
+            var rendered = "proxyAddresses/any(p:" + string.Join(" or ",
+                chunk.Select(e => $"p eq 'smtp:{e}'")) + ")";
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(rendered) <= 500,
+                $"Chunk rendered to {rendered.Length} chars, exceeds 500-byte budget.");
+        }
+    }
+
+    [Fact]
+    public void ChunkEmailsForFilter_SingleEmailAlwaysEmitted()
+    {
+        var emails = new List<string> { "solo@x.com" };
+
+        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxBytes: 50);
+
+        Assert.Single(chunks);
+        Assert.Single(chunks[0]);
+        Assert.Equal("solo@x.com", chunks[0][0]);
+    }
+
+    // ==============================
     // Helper Methods
     // ==============================
 
@@ -253,4 +412,20 @@ public class SourceResolverTests
             UpdatedAt = DateTime.UtcNow
         };
     }
+
+    private static SourceUser CreateContact(
+        string entraId,
+        string? email,
+        string? bp,
+        string? mp) => new SourceUser
+        {
+            EntraId = entraId,
+            Email = email,
+            BusinessPhone = bp,
+            MobilePhone = mp,
+            IsEnabled = true,
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
 }

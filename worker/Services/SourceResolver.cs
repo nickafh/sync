@@ -77,6 +77,7 @@ public class SourceResolver : ISourceResolver
                         var contacts = await FetchMailboxContactsAsync(source.SourceIdentifier, source.ContactFolderId, ct);
                         _logger.LogInformation("Fetched {Count} contacts from mailbox {Mailbox} folder {Folder} for source {SourceId}",
                             contacts.Count, source.SourceIdentifier, source.ContactFolderName ?? "root", source.Id);
+                        await EnrichMailboxContactsFromDirectoryAsync(contacts, source.SourceIdentifier, ct);
                         allSourceUsers.AddRange(contacts);
                         break;
                     }
@@ -339,6 +340,251 @@ public class SourceResolver : ISourceResolver
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
+    }
+
+    /// <summary>
+    /// Returns the subset of mailbox contacts that need directory enrichment:
+    /// contacts with a non-empty email AND both BusinessPhone and MobilePhone null/whitespace.
+    /// MailboxContacts-sourced Contacts referencing other tenant shared mailboxes don't carry
+    /// phone fields on the Contact object — those live on the referenced User record.
+    ///
+    /// Public for unit testability.
+    /// </summary>
+    public static List<SourceUser> BuildEnrichmentCandidates(IEnumerable<SourceUser> contacts)
+    {
+        return contacts.Where(c =>
+            !string.IsNullOrWhiteSpace(c.Email) &&
+            string.IsNullOrWhiteSpace(c.BusinessPhone) &&
+            string.IsNullOrWhiteSpace(c.MobilePhone)
+        ).ToList();
+    }
+
+    /// <summary>
+    /// Indexes directory users by lowercased email from both <see cref="User.Mail"/> and
+    /// <see cref="User.ProxyAddresses"/> (with "smtp:"/"SMTP:" prefix stripped). Returns a
+    /// case-insensitive dictionary mapping email -> (BusinessPhone, MobilePhone). Multiple keys
+    /// can map to the same user. Users with no phones are still indexed (match produces a no-op).
+    ///
+    /// Public for unit testability.
+    /// </summary>
+    public static Dictionary<string, (string? BusinessPhone, string? MobilePhone)>
+        BuildDirectoryPhoneMap(IEnumerable<User> users)
+    {
+        var map = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var user in users)
+        {
+            var phones = (user.BusinessPhones?.FirstOrDefault(), user.MobilePhone);
+
+            if (!string.IsNullOrWhiteSpace(user.Mail))
+            {
+                var key = user.Mail.Trim().ToLowerInvariant();
+                map[key] = phones;
+            }
+
+            if (user.ProxyAddresses != null)
+            {
+                foreach (var proxy in user.ProxyAddresses)
+                {
+                    if (string.IsNullOrWhiteSpace(proxy))
+                        continue;
+
+                    // Strip "smtp:" / "SMTP:" prefix (case-insensitive, 5 chars)
+                    var address = proxy.StartsWith("smtp:", StringComparison.OrdinalIgnoreCase)
+                        ? proxy[5..]
+                        : proxy;
+
+                    if (string.IsNullOrWhiteSpace(address))
+                        continue;
+
+                    var key = address.Trim().ToLowerInvariant();
+                    map[key] = phones;
+                }
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Mutates candidates in place: for each candidate, if the lowercased email is in the map,
+    /// backfill BusinessPhone ONLY when the candidate's current BusinessPhone is null/whitespace,
+    /// and backfill MobilePhone ONLY when the candidate's current MobilePhone is null/whitespace.
+    /// Non-empty existing values are always preserved.
+    ///
+    /// Returns (matchedCount, unmatchedCount).
+    /// Public for unit testability.
+    /// </summary>
+    public static (int Matched, int Unmatched) ApplyDirectoryEnrichment(
+        List<SourceUser> candidates,
+        IReadOnlyDictionary<string, (string? BusinessPhone, string? MobilePhone)> map)
+    {
+        int matched = 0;
+        int unmatched = 0;
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.Email))
+            {
+                unmatched++;
+                continue;
+            }
+
+            var key = candidate.Email.Trim().ToLowerInvariant();
+            if (!map.TryGetValue(key, out var phones))
+            {
+                unmatched++;
+                continue;
+            }
+
+            matched++;
+
+            if (string.IsNullOrWhiteSpace(candidate.BusinessPhone))
+            {
+                candidate.BusinessPhone = phones.BusinessPhone;
+            }
+
+            if (string.IsNullOrWhiteSpace(candidate.MobilePhone))
+            {
+                candidate.MobilePhone = phones.MobilePhone;
+            }
+        }
+
+        return (matched, unmatched);
+    }
+
+    /// <summary>
+    /// Chunks emails so each chunk's rendered Graph filter expression
+    /// "proxyAddresses/any(p:p eq 'smtp:a' or p eq 'smtp:b' ...)" stays under <paramref name="maxBytes"/>
+    /// UTF-8 bytes. Individual emails are never split across chunks (an oversize single email is
+    /// emitted alone in its own chunk — document behavior).
+    ///
+    /// Default maxBytes=12000 leaves headroom under Graph's ~15KB filter cap.
+    /// Public for unit testability.
+    /// </summary>
+    public static List<List<string>> ChunkEmailsForFilter(IEnumerable<string> emails, int maxBytes = 12000)
+    {
+        const int WrapperBytes = 22;       // "proxyAddresses/any(p:" + ")" = 22
+        const int OrSeparatorBytes = 4;    // " or "
+
+        var chunks = new List<List<string>>();
+        var currentChunk = new List<string>();
+        int currentBytes = WrapperBytes;
+
+        foreach (var email in emails)
+        {
+            var term = $"p eq 'smtp:{email}'";
+            int termBytes = System.Text.Encoding.UTF8.GetByteCount(term);
+            int addedBytes = currentChunk.Count == 0 ? termBytes : termBytes + OrSeparatorBytes;
+
+            if (currentChunk.Count > 0 && currentBytes + addedBytes > maxBytes)
+            {
+                chunks.Add(currentChunk);
+                currentChunk = new List<string>();
+                currentBytes = WrapperBytes;
+                addedBytes = termBytes; // first in a new chunk, no separator
+            }
+
+            currentChunk.Add(email);
+            currentBytes += addedBytes;
+        }
+
+        if (currentChunk.Count > 0)
+            chunks.Add(currentChunk);
+
+        return chunks;
+    }
+
+    /// <summary>
+    /// Enriches MailboxContacts-sourced contacts by backfilling empty BusinessPhone / MobilePhone
+    /// values from the tenant directory. OWA shows phones on Contact references to shared mailboxes
+    /// via a server-side join against the User/shared-mailbox directory record; the Contact object
+    /// itself doesn't carry the phones. This method replicates that join so phones sync to phones.
+    ///
+    /// Conservative:
+    /// - Empty-only backfill (never overwrites a non-empty existing phone).
+    /// - Case-insensitive email match against User.Mail and every entry in ProxyAddresses.
+    /// - Chunked filter expressions stay under Graph's ~15KB cap.
+    /// - ConsistencyLevel: eventual on initial request + PageIterator requestConfigurator.
+    /// - Graceful degradation: a failed chunk logs a warning and continues; the whole sync is never
+    ///   blocked by enrichment failures.
+    /// </summary>
+    private async Task EnrichMailboxContactsFromDirectoryAsync(
+        List<SourceUser> contacts,
+        string mailboxEmail,
+        CancellationToken ct)
+    {
+        var candidates = BuildEnrichmentCandidates(contacts);
+        if (candidates.Count == 0)
+        {
+            _logger.LogDebug("No MailboxContacts need directory enrichment for mailbox {Mailbox}", mailboxEmail);
+            return;
+        }
+
+        // Deduplicate lowercased emails
+        var emails = candidates
+            .Select(c => c.Email!.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var chunks = ChunkEmailsForFilter(emails);
+        var allUsers = new List<User>();
+        var client = _graphClientFactory.Client;
+
+        foreach (var chunk in chunks)
+        {
+            try
+            {
+                var inner = string.Join(" or ", chunk.Select(e => $"p eq 'smtp:{e}'"));
+                var filter = $"proxyAddresses/any(p:{inner})";
+
+                var response = await client.Users.GetAsync(config =>
+                {
+                    config.QueryParameters.Filter = filter;
+                    config.QueryParameters.Top = 999;
+                    config.QueryParameters.Count = true;
+                    config.QueryParameters.Select =
+                    [
+                        "id", "mail", "proxyAddresses", "businessPhones", "mobilePhone"
+                    ];
+                    config.Headers.Add("ConsistencyLevel", "eventual");
+                }, ct);
+
+                if (response == null)
+                    continue;
+
+                var pageIterator = PageIterator<User, UserCollectionResponse>
+                    .CreatePageIterator(
+                        client,
+                        response,
+                        user =>
+                        {
+                            allUsers.Add(user);
+                            return true;
+                        },
+                        req =>
+                        {
+                            req.Headers.Add("ConsistencyLevel", "eventual");
+                            return req;
+                        });
+
+                await pageIterator.IterateAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Directory enrichment chunk failed for mailbox {Mailbox} ({ChunkSize} emails) — continuing with remaining chunks",
+                    mailboxEmail, chunk.Count);
+            }
+        }
+
+        var map = BuildDirectoryPhoneMap(allUsers);
+        var (matched, unmatched) = ApplyDirectoryEnrichment(candidates, map);
+
+        _logger.LogInformation(
+            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {ChunkCount} filter chunks",
+            mailboxEmail, candidates.Count, matched, unmatched, chunks.Count);
     }
 
     /// <summary>
