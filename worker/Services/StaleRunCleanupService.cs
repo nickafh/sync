@@ -1,14 +1,10 @@
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Enums;
+using AFHSync.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace AFHSync.Worker.Services;
-
-public interface IStaleRunCleanupService
-{
-    Task CleanupAsync();
-}
 
 /// <summary>
 /// Hangfire job that marks sync runs stuck in "Running" for over 2 hours as Failed.
