@@ -16,7 +16,8 @@ import { toast } from 'sonner';
 import { Phone, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { UserSearchResult } from '@/types/tunnel';
-import type { ContactDto, PhoneListDto } from '@/types/phone-list';
+import type { ContactDto, PhoneListDto, TargetUserFilterDdg, TargetUserFilterShape } from '@/types/phone-list';
+import { DDGSearchList } from '@/components/DDGSearchList';
 
 function mapContactDtoToCardData(dto: ContactDto): ContactCardData {
   return {
@@ -47,6 +48,10 @@ export default function PhoneListsPage() {
   const [newDescription, setNewDescription] = useState('');
   const [newScope, setNewScope] = useState('all_users');
   const [newEmails, setNewEmails] = useState<string[]>([]);
+  // quick-260417-2lb: DDGs picked here are persisted as {id, displayName} and resolved
+  // live every sync run by the worker — distinct from the EmailSearchPicker "Groups" tab,
+  // which expands a DDG into its current member emails at pick time (snapshot, not live).
+  const [newDdgs, setNewDdgs] = useState<TargetUserFilterDdg[]>([]);
 
   // Edit form state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -54,6 +59,7 @@ export default function PhoneListsPage() {
   const [editDescription, setEditDescription] = useState('');
   const [editScope, setEditScope] = useState('all_users');
   const [editEmails, setEditEmails] = useState<string[]>([]);
+  const [editDdgs, setEditDdgs] = useState<TargetUserFilterDdg[]>([]);
 
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
@@ -79,6 +85,16 @@ export default function PhoneListsPage() {
 
   const selectedList = phoneLists?.find((l) => l.id === selectedListId);
 
+  // quick-260417-2lb: build the targetUserFilter JSON from emails + ddgs, omitting
+  // empty arrays so old/back-compat consumers see {emails:[...]} when ddgs is unset.
+  const buildTargetUserFilter = (emails: string[], ddgs: TargetUserFilterDdg[]): string | null => {
+    const shape: TargetUserFilterShape = {
+      ...(emails.length > 0 ? { emails } : {}),
+      ...(ddgs.length > 0 ? { ddgs } : {}),
+    };
+    return JSON.stringify(shape);
+  };
+
   const handleCreate = () => {
     if (!newName.trim()) return;
     createPhoneList.mutate(
@@ -87,7 +103,7 @@ export default function PhoneListsPage() {
         description: newDescription.trim() || null,
         targetScope: newScope,
         targetUserFilter: newScope === 'specific_users'
-          ? JSON.stringify({ emails: newEmails })
+          ? buildTargetUserFilter(newEmails, newDdgs)
           : null,
       },
       {
@@ -98,6 +114,7 @@ export default function PhoneListsPage() {
           setNewDescription('');
           setNewScope('all_users');
           setNewEmails([]);
+          setNewDdgs([]);
         },
         onError: () => toast.error('Failed to create target.'),
       },
@@ -109,12 +126,17 @@ export default function PhoneListsPage() {
     setEditName(list.name);
     setEditDescription('');
     setEditScope(list.targetScope);
-    // Load existing emails from targetUserFilter JSON
+    // Load existing emails + ddgs from targetUserFilter JSON.
+    // Back-compat: rows containing only {emails:[...]} (no ddgs key) load with editDdgs=[].
     try {
-      const parsed = list.targetUserFilter ? JSON.parse(list.targetUserFilter) : null;
+      const parsed = (list.targetUserFilter
+        ? JSON.parse(list.targetUserFilter)
+        : null) as TargetUserFilterShape | null;
       setEditEmails(parsed?.emails ?? []);
+      setEditDdgs(parsed?.ddgs ?? []);
     } catch {
       setEditEmails([]);
+      setEditDdgs([]);
     }
   };
 
@@ -128,7 +150,7 @@ export default function PhoneListsPage() {
           description: editDescription.trim() || null,
           targetScope: editScope,
           targetUserFilter: editScope === 'specific_users'
-            ? JSON.stringify({ emails: editEmails })
+            ? buildTargetUserFilter(editEmails, editDdgs)
             : null,
         },
       },
@@ -214,10 +236,16 @@ export default function PhoneListsPage() {
               </label>
             </div>
             {newScope === 'specific_users' && (
-              <EmailSearchPicker
-                selected={newEmails}
-                onChange={setNewEmails}
-              />
+              <>
+                <EmailSearchPicker
+                  selected={newEmails}
+                  onChange={setNewEmails}
+                />
+                <DDGTargetPicker
+                  selected={newDdgs}
+                  onChange={setNewDdgs}
+                />
+              </>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -232,7 +260,7 @@ export default function PhoneListsPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => { setShowCreate(false); setNewName(''); setNewDescription(''); setNewScope('all_users'); setNewEmails([]); }}
+              onClick={() => { setShowCreate(false); setNewName(''); setNewDescription(''); setNewScope('all_users'); setNewEmails([]); setNewDdgs([]); }}
             >
               Cancel
             </Button>
@@ -293,10 +321,16 @@ export default function PhoneListsPage() {
                         </label>
                       </div>
                       {editScope === 'specific_users' && (
-                        <EmailSearchPicker
-                          selected={editEmails}
-                          onChange={setEditEmails}
-                        />
+                        <>
+                          <EmailSearchPicker
+                            selected={editEmails}
+                            onChange={setEditEmails}
+                          />
+                          <DDGTargetPicker
+                            selected={editDdgs}
+                            onChange={setEditDdgs}
+                          />
+                        </>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
@@ -587,6 +621,96 @@ function EmailSearchPicker({
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * DDGTargetPicker — quick-260417-2lb
+ *
+ * Pick one or more Exchange Dynamic Distribution Groups to deliver this phone list to.
+ * Persists ONLY {id, displayName} into targetUserFilter.ddgs (no member snapshot — the
+ * worker resolves the membership live every sync run, so adding a user to the DDG in
+ * Exchange auto-delivers the phone list on the next run with zero admin touch).
+ *
+ * Distinct from the EmailSearchPicker "Groups" tab: that flow expands a DDG into its
+ * current member emails (snapshot, frozen until the admin re-runs it). This picker is
+ * for the live-resolve path.
+ */
+function DDGTargetPicker({
+  selected,
+  onChange,
+}: {
+  selected: TargetUserFilterDdg[];
+  onChange: (next: TargetUserFilterDdg[]) => void;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+
+  const handleAdd = (ddg: { id: string; displayName: string }) => {
+    if (selected.some((d) => d.id === ddg.id)) {
+      toast.info('Already added.');
+      return;
+    }
+    onChange([...selected, { id: ddg.id, displayName: ddg.displayName }]);
+    setShowPicker(false);
+  };
+
+  const handleRemove = (id: string) => {
+    onChange(selected.filter((d) => d.id !== id));
+  };
+
+  return (
+    <div className="space-y-2 pt-3 border-t mt-2">
+      <p className="text-xs font-medium text-text-muted uppercase tracking-wide">
+        Distribution Groups (live)
+      </p>
+      <p className="text-xs text-text-muted">
+        Members are resolved on every sync — add or remove people in Exchange and the change
+        flows through automatically. {selected.length} group(s) selected.
+      </p>
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {selected.map((ddg) => (
+            <span
+              key={ddg.id}
+              className="inline-flex items-center gap-1 rounded-full bg-navy/10 px-2.5 py-0.5 text-xs text-navy"
+            >
+              {ddg.displayName}
+              <button
+                type="button"
+                onClick={() => handleRemove(ddg.id)}
+                className="hover:text-navy/70 cursor-pointer"
+                aria-label={`Remove ${ddg.displayName}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {showPicker ? (
+        <div className="border rounded-lg p-2">
+          <DDGSearchList
+            onSelect={(ddg) => handleAdd({ id: ddg.id, displayName: ddg.displayName })}
+            selectedIds={selected.map((d) => d.id)}
+          />
+          <div className="flex justify-end pt-2">
+            <Button size="sm" variant="outline" onClick={() => setShowPicker(false)}>
+              Done
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => setShowPicker(true)}
+        >
+          <Plus className="size-3.5 mr-1" />
+          Add Distribution Group
+        </Button>
       )}
     </div>
   );

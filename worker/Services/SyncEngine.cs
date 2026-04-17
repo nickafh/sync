@@ -37,7 +37,10 @@ public sealed class SyncEngine(
     IPhotoSyncService photoSyncService,
     AFHSync.Worker.Graph.GraphClientFactory graphClientFactory,
     IConfiguration configuration,
-    ILogger<SyncEngine> logger) : ISyncEngine
+    ILogger<SyncEngine> logger,
+    // quick-260417-2lb: PhoneList.TargetUserFilter may now include `ddgs` — resolved live each sync.
+    AFHSync.Api.Services.IDDGResolver ddgResolver = null!,
+    AFHSync.Api.Services.IFilterConverter filterConverter = null!) : ISyncEngine
 {
     private const int DefaultParallelism = 4;
 
@@ -327,58 +330,71 @@ public sealed class SyncEngine(
         {
             try
             {
-                var filterData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(canonicalPl.TargetUserFilter);
-                if (filterData.TryGetProperty("emails", out var emailsArr))
+                // quick-260417-2lb: parse {emails, ddgs} via the extracted helper. The helper
+                // unions explicit emails + live-resolved DDG members (case-insensitive dedupe).
+                // Old rows with only {emails: [...]} continue to work unchanged.
+                // The DDG-resolution union point — auto-provision below operates on the unioned set.
+                HashSet<string> plEmails;
+                if (ddgResolver != null && filterConverter != null)
                 {
-                    var plEmails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var el in emailsArr.EnumerateArray())
+                    plEmails = await TargetFilterResolver.ResolveAsync(
+                        canonicalPl.TargetUserFilter,
+                        ddgResolver,
+                        filterConverter,
+                        (graphFilter, innerCt) => QueryDdgMemberEmailsAsync(graphFilter, tunnel.Name, innerCt),
+                        logger,
+                        ct);
+                }
+                else
+                {
+                    // Defensive fallback for test contexts that construct SyncEngine without DDG services
+                    // (the existing SyncEngineTests use positional ctor args predating quick-260417-2lb).
+                    plEmails = ParseEmailsOnlyFallback(canonicalPl.TargetUserFilter);
+                }
+
+                if (plEmails.Count > 0)
+                {
+                    // Auto-provision missing mailboxes — DDG-resolved emails flow through
+                    // the SAME loop as explicit SpecificUsers emails (CONTEXT.md "Auto-provision — Silent").
+                    var existingEmails = new HashSet<string>(targetMailboxes.Select(m => m.Email), StringComparer.OrdinalIgnoreCase);
+                    var missingPlEmails = plEmails.Where(e => !existingEmails.Contains(e)).ToList();
+                    foreach (var email in missingPlEmails)
                     {
-                        var email = el.GetString();
-                        if (!string.IsNullOrEmpty(email)) plEmails.Add(email);
-                    }
-                    if (plEmails.Count > 0)
-                    {
-                        // Auto-provision missing mailboxes (same as tunnel-level scope)
-                        var existingEmails = new HashSet<string>(targetMailboxes.Select(m => m.Email), StringComparer.OrdinalIgnoreCase);
-                        var missingPlEmails = plEmails.Where(e => !existingEmails.Contains(e)).ToList();
-                        foreach (var email in missingPlEmails)
+                        try
                         {
-                            try
+                            var graphUser = await graphClientFactory.Client.Users[email]
+                                .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
+                            if (graphUser?.Id != null)
                             {
-                                var graphUser = await graphClientFactory.Client.Users[email]
-                                    .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
-                                if (graphUser?.Id != null)
+                                await using var provDb = await dbContextFactory.CreateDbContextAsync(ct);
+                                if (!await provDb.TargetMailboxes.AnyAsync(m => m.EntraId == graphUser.Id, ct))
                                 {
-                                    await using var provDb = await dbContextFactory.CreateDbContextAsync(ct);
-                                    if (!await provDb.TargetMailboxes.AnyAsync(m => m.EntraId == graphUser.Id, ct))
+                                    var mb = new TargetMailbox
                                     {
-                                        var mb = new TargetMailbox
-                                        {
-                                            EntraId = graphUser.Id,
-                                            Email = graphUser.Mail ?? email,
-                                            DisplayName = graphUser.DisplayName,
-                                            IsActive = true,
-                                            CreatedAt = DateTime.UtcNow,
-                                            UpdatedAt = DateTime.UtcNow
-                                        };
-                                        provDb.TargetMailboxes.Add(mb);
-                                        await provDb.SaveChangesAsync(ct);
-                                        targetMailboxes.Add(mb);
-                                        logger.LogInformation("Auto-provisioned target mailbox from phone list: {Email}", email);
-                                    }
+                                        EntraId = graphUser.Id,
+                                        Email = graphUser.Mail ?? email,
+                                        DisplayName = graphUser.DisplayName,
+                                        IsActive = true,
+                                        CreatedAt = DateTime.UtcNow,
+                                        UpdatedAt = DateTime.UtcNow
+                                    };
+                                    provDb.TargetMailboxes.Add(mb);
+                                    await provDb.SaveChangesAsync(ct);
+                                    targetMailboxes.Add(mb);
+                                    logger.LogInformation("Auto-provisioned target mailbox from phone list: {Email}", email);
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                logger.LogWarning(ex, "Failed to auto-provision target mailbox {Email}", email);
-                            }
                         }
-
-                        targetMailboxes = targetMailboxes.Where(m => plEmails.Contains(m.Email)).ToList();
-                        logger.LogInformation(
-                            "Tunnel {TunnelName}: phone list '{PhoneList}' scoped to {Count} specific user(s)",
-                            tunnel.Name, canonicalPl.Name, targetMailboxes.Count);
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to auto-provision target mailbox {Email}", email);
+                        }
                     }
+
+                    targetMailboxes = targetMailboxes.Where(m => plEmails.Contains(m.Email)).ToList();
+                    logger.LogInformation(
+                        "Tunnel {TunnelName}: phone list '{PhoneList}' scoped to {Count} specific user(s)",
+                        tunnel.Name, canonicalPl.Name, targetMailboxes.Count);
                 }
             }
             catch (Exception ex)
@@ -1218,6 +1234,96 @@ public sealed class SyncEngine(
         return await db.SourceUsers
             .Where(u => sourceUserIds.Contains(u.Id))
             .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Resolves DDG members by running a Graph users query with the converted $filter.
+    /// Pages through results (cap at 50 pages = ~50k users per T-2lb-03 in the threat model).
+    /// Quick-260417-2lb: invoked by TargetFilterResolver via a delegate to keep that helper
+    /// independent of the Graph SDK (which is hard to mock).
+    /// </summary>
+    private async Task<List<string>> QueryDdgMemberEmailsAsync(
+        string graphFilter, string tunnelName, CancellationToken ct)
+    {
+        const int MaxPages = 50;
+        var emails = new List<string>();
+
+        try
+        {
+            var page = await graphClientFactory.Client.Users.GetAsync(c =>
+            {
+                c.QueryParameters.Filter = graphFilter;
+                c.QueryParameters.Select = ["id", "mail", "userPrincipalName", "displayName"];
+                c.QueryParameters.Top = 999;
+                c.Headers.Add("ConsistencyLevel", "eventual");
+                c.QueryParameters.Count = true;
+            }, ct);
+
+            int pageCount = 0;
+            while (page?.Value != null)
+            {
+                foreach (var u in page.Value)
+                {
+                    var email = u.Mail ?? u.UserPrincipalName;
+                    if (!string.IsNullOrEmpty(email)) emails.Add(email);
+                }
+
+                pageCount++;
+                if (pageCount >= MaxPages)
+                {
+                    logger.LogWarning(
+                        "DDG query for tunnel {TunnelName} hit page cap {Cap} (~{Total} users); truncating",
+                        tunnelName, MaxPages, MaxPages * 999);
+                    break;
+                }
+
+                if (string.IsNullOrEmpty(page.OdataNextLink)) break;
+                page = await graphClientFactory.Client.Users
+                    .WithUrl(page.OdataNextLink)
+                    .GetAsync(cancellationToken: ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            // TargetFilterResolver catches per-DDG exceptions, but log here too with the full filter
+            // for diagnostics.
+            logger.LogWarning(ex,
+                "Graph query failed for DDG filter on tunnel {TunnelName}: {Filter}",
+                tunnelName, graphFilter);
+            throw;
+        }
+
+        return emails;
+    }
+
+    /// <summary>
+    /// Defensive fallback used only when SyncEngine is constructed without DDG services
+    /// (e.g. legacy unit tests that pre-date quick-260417-2lb). Reads only the `emails`
+    /// array, ignoring any `ddgs` key. Production code paths always have the DDG services
+    /// wired via DI.
+    /// </summary>
+    private static HashSet<string> ParseEmailsOnlyFallback(string targetUserFilterJson)
+    {
+        var plEmails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var filterData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(targetUserFilterJson);
+            if (filterData.ValueKind == System.Text.Json.JsonValueKind.Object
+                && filterData.TryGetProperty("emails", out var emailsArr)
+                && emailsArr.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var el in emailsArr.EnumerateArray())
+                {
+                    if (el.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var email = el.GetString();
+                        if (!string.IsNullOrWhiteSpace(email)) plEmails.Add(email.Trim());
+                    }
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException) { /* swallow — fallback path */ }
+        return plEmails;
     }
 
     private static SyncStatus DetermineStatus(

@@ -78,6 +78,14 @@ try
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
     services.AddScoped<StaleRunCleanupService>();
 
+    // DDG target resolution (per quick-260417-2lb): worker resolves DDG members at sync time
+    // to union with explicit emails in PhoneList.TargetUserFilter. Reuses the api project's
+    // resolver (ExchangeOnlineManagement PowerShell + the OPATH→Graph filter converter)
+    // to avoid duplicating the runspace + cert auth config in two assemblies.
+    // Lifetimes mirror api/Program.cs:109-110 — Scoped resolver, Singleton converter.
+    services.AddScoped<AFHSync.Api.Services.IDDGResolver, AFHSync.Api.Services.DDGResolver>();
+    services.AddSingleton<AFHSync.Api.Services.IFilterConverter, AFHSync.Api.Services.FilterConverter>();
+
     // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17)
     services.AddHangfire(config => config
         .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)

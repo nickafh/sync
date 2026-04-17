@@ -35,6 +35,25 @@ export interface CreatePhoneListRequest {
   targetUserFilter?: string | null;
 }
 
+/**
+ * quick-260417-2lb: PhoneList.targetUserFilter is a JSON string on the wire (back-compat
+ * with the API contract — keep `targetUserFilter: string | null` on PhoneListDto). When
+ * parsed, it conforms to TargetUserFilterShape: any combination of explicit emails plus
+ * a list of Exchange Dynamic Distribution Groups whose members are unioned in at sync time.
+ *
+ * Both keys are optional. Old rows containing only `{"emails":[...]}` continue to deserialize
+ * cleanly because `ddgs` simply defaults to undefined → empty.
+ */
+export interface TargetUserFilterDdg {
+  id: string;
+  displayName: string;
+}
+
+export interface TargetUserFilterShape {
+  emails?: string[];
+  ddgs?: TargetUserFilterDdg[];
+}
+
 export interface ContactDto {
   sourceUserId: number;
   displayName: string | null;
