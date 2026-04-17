@@ -455,39 +455,29 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
-    /// Chunks emails so each chunk's rendered Graph filter expression
-    /// "proxyAddresses/any(p:p eq 'smtp:a' or p eq 'smtp:b' ...)" stays under <paramref name="maxBytes"/>
-    /// UTF-8 bytes. Individual emails are never split across chunks (an oversize single email is
-    /// emitted alone in its own chunk — document behavior).
+    /// Chunks emails so each chunk stays within Graph's OR-clause limit for
+    /// <c>proxyAddresses/any(...)</c> advanced-query filters. Graph caps advanced-query
+    /// <c>$filter</c> expressions at ~15 OR clauses per <c>any()</c>. Each email emits
+    /// two OR terms (lowercase <c>smtp:</c> aliases AND uppercase <c>SMTP:</c> primary),
+    /// so each chunk holds at most <paramref name="maxOrClauses"/> / 2 emails.
     ///
-    /// Default maxBytes=12000 leaves headroom under Graph's ~15KB filter cap.
+    /// Default maxOrClauses=14 leaves one slot of headroom.
     /// Public for unit testability.
     /// </summary>
-    public static List<List<string>> ChunkEmailsForFilter(IEnumerable<string> emails, int maxBytes = 12000)
+    public static List<List<string>> ChunkEmailsForFilter(IEnumerable<string> emails, int maxOrClauses = 14)
     {
-        const int WrapperBytes = 22;       // "proxyAddresses/any(p:" + ")" = 22
-        const int OrSeparatorBytes = 4;    // " or "
-
+        var emailsPerChunk = Math.Max(1, maxOrClauses / 2);
         var chunks = new List<List<string>>();
         var currentChunk = new List<string>();
-        int currentBytes = WrapperBytes;
 
         foreach (var email in emails)
         {
-            var term = $"p eq 'smtp:{email}'";
-            int termBytes = System.Text.Encoding.UTF8.GetByteCount(term);
-            int addedBytes = currentChunk.Count == 0 ? termBytes : termBytes + OrSeparatorBytes;
-
-            if (currentChunk.Count > 0 && currentBytes + addedBytes > maxBytes)
+            if (currentChunk.Count >= emailsPerChunk)
             {
                 chunks.Add(currentChunk);
                 currentChunk = new List<string>();
-                currentBytes = WrapperBytes;
-                addedBytes = termBytes; // first in a new chunk, no separator
             }
-
             currentChunk.Add(email);
-            currentBytes += addedBytes;
         }
 
         if (currentChunk.Count > 0)
@@ -536,7 +526,12 @@ public class SourceResolver : ISourceResolver
         {
             try
             {
-                var inner = string.Join(" or ", chunk.Select(e => $"p eq 'smtp:{e}'"));
+                // Graph proxyAddresses filter is case-sensitive on the prefix:
+                //   'SMTP:' (uppercase) = primary address
+                //   'smtp:' (lowercase) = secondary/alias
+                // Emit both variants per email so we match whether the address is stored as primary or alias.
+                var inner = string.Join(" or ",
+                    chunk.SelectMany(e => new[] { $"p eq 'smtp:{e}'", $"p eq 'SMTP:{e}'" }));
                 var filter = $"proxyAddresses/any(p:{inner})";
 
                 var response = await client.Users.GetAsync(config =>

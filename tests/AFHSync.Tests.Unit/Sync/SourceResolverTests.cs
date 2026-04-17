@@ -356,12 +356,13 @@ public class SourceResolverTests
     }
 
     [Fact]
-    public void ChunkEmailsForFilter_ChunksToStayUnderByteBudget()
+    public void ChunkEmailsForFilter_StaysUnderOrClauseLimit()
     {
-        // Typical email length ~20 bytes; "p eq 'smtp:<email>'" ~35 bytes per term.
+        // Each email produces TWO OR terms (smtp: + SMTP:), so a chunk size budget
+        // of 14 OR clauses means at most 7 emails per chunk.
         var emails = Enumerable.Range(0, 50).Select(i => $"user{i:D2}@example.com").ToList();
 
-        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxBytes: 500);
+        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxOrClauses: 14);
 
         Assert.NotEmpty(chunks);
         // Reassembly preserves all emails exactly once, in order.
@@ -369,13 +370,11 @@ public class SourceResolverTests
         Assert.Equal(emails.Count, flattened.Count);
         Assert.Equal(emails, flattened);
 
-        // Each chunk's rendered filter fits in the budget.
+        // Each chunk emits ≤ maxOrClauses OR terms when each email yields 2 terms.
         foreach (var chunk in chunks)
         {
-            var rendered = "proxyAddresses/any(p:" + string.Join(" or ",
-                chunk.Select(e => $"p eq 'smtp:{e}'")) + ")";
-            Assert.True(System.Text.Encoding.UTF8.GetByteCount(rendered) <= 500,
-                $"Chunk rendered to {rendered.Length} chars, exceeds 500-byte budget.");
+            Assert.True(chunk.Count * 2 <= 14,
+                $"Chunk holds {chunk.Count} emails (=> {chunk.Count * 2} OR clauses), exceeds limit of 14.");
         }
     }
 
@@ -384,7 +383,7 @@ public class SourceResolverTests
     {
         var emails = new List<string> { "solo@x.com" };
 
-        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxBytes: 50);
+        var chunks = SourceResolver.ChunkEmailsForFilter(emails, maxOrClauses: 1);
 
         Assert.Single(chunks);
         Assert.Single(chunks[0]);
