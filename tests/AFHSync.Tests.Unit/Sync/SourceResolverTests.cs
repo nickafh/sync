@@ -391,6 +391,119 @@ public class SourceResolverTests
     }
 
     // ==============================
+    // MatchedUserEntraId capture (260417-1lx photo enrichment)
+    // ==============================
+
+    [Fact]
+    public void BuildDirectoryUserIdMap_IndexesByMailAndProxyAddresses_CaseInsensitive()
+    {
+        var users = new List<User>
+        {
+            new()
+            {
+                Id = "user-guid-1",
+                Mail = "Immy@AtlantaFineHomes.com",
+                ProxyAddresses = new List<string>
+                {
+                    "SMTP:Immy@AtlantaFineHomes.com",
+                    "smtp:immy-alias@atlantafinehomes.com"
+                }
+            },
+            new()
+            {
+                Id = "user-guid-2",
+                Mail = null,
+                ProxyAddresses = new List<string> { "smtp:otto@atlantafinehomes.com" }
+            },
+            new()
+            {
+                // No Id — should be skipped entirely.
+                Id = null,
+                Mail = "ghost@x.com",
+                ProxyAddresses = new List<string> { "smtp:ghost@x.com" }
+            }
+        };
+
+        var map = SourceResolver.BuildDirectoryUserIdMap(users);
+
+        Assert.Equal("user-guid-1", map["immy@atlantafinehomes.com"]);
+        Assert.Equal("user-guid-1", map["IMMY@ATLANTAFINEHOMES.COM"]); // case-insensitive
+        Assert.Equal("user-guid-1", map["immy-alias@atlantafinehomes.com"]);
+        Assert.Equal("user-guid-2", map["otto@atlantafinehomes.com"]);
+        Assert.False(map.ContainsKey("ghost@x.com"));
+    }
+
+    [Fact]
+    public void ApplyDirectoryEnrichment_WritesMatchedUserEntraId_WhenUserIdMapHasMatch()
+    {
+        var candidates = new List<SourceUser>
+        {
+            CreateContact(entraId: "contact-immy", email: "immy@atlantafinehomes.com", bp: null, mp: null),
+            CreateContact(entraId: "contact-no-user", email: "stub-no-link@x.com", bp: null, mp: null),
+        };
+        var phoneMap = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["immy@atlantafinehomes.com"]  = ("555-1111", "555-2222"),
+            ["stub-no-link@x.com"]         = (null, null),
+        };
+        var userIdMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["immy@atlantafinehomes.com"] = "user-guid-immy",
+            // stub-no-link is in phoneMap but NOT in userIdMap (e.g. a directory contact without a User record).
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryEnrichment(candidates, phoneMap, userIdMap);
+
+        Assert.Equal(2, matched);
+        Assert.Equal(0, unmatched);
+        Assert.Equal("user-guid-immy", candidates[0].MatchedUserEntraId);
+        Assert.Null(candidates[1].MatchedUserEntraId); // matched in phoneMap but not in userIdMap -> stays null
+    }
+
+    [Fact]
+    public void ApplyDirectoryEnrichment_LeavesMatchedUserEntraIdNull_WhenUserIdMapIsNull()
+    {
+        // Backwards-compat: 2-arg overload (and 3-arg with null userIdMap) must not touch MatchedUserEntraId.
+        var candidates = new List<SourceUser>
+        {
+            CreateContact(entraId: "a", email: "a@x.com", bp: null, mp: null),
+        };
+        var phoneMap = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["a@x.com"] = ("AAA", "BBB"),
+        };
+
+        var (matched, _) = SourceResolver.ApplyDirectoryEnrichment(candidates, phoneMap);
+
+        Assert.Equal(1, matched);
+        Assert.Equal("AAA", candidates[0].BusinessPhone);
+        Assert.Null(candidates[0].MatchedUserEntraId);
+    }
+
+    [Fact]
+    public void ApplyDirectoryEnrichment_DoesNotOverwriteExistingMatchedUserEntraId_WhenEmailUnmatched()
+    {
+        // Pre-existing MatchedUserEntraId on a candidate that doesn't match this run -> preserved.
+        var candidates = new List<SourceUser>
+        {
+            CreateContact(entraId: "x", email: "unknown@x.com", bp: null, mp: null),
+        };
+        candidates[0].MatchedUserEntraId = "previously-matched-guid";
+
+        var phoneMap = new Dictionary<string, (string? BusinessPhone, string? MobilePhone)>(
+            StringComparer.OrdinalIgnoreCase);
+        var userIdMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryEnrichment(candidates, phoneMap, userIdMap);
+
+        Assert.Equal(0, matched);
+        Assert.Equal(1, unmatched);
+        Assert.Equal("previously-matched-guid", candidates[0].MatchedUserEntraId);
+    }
+
+    // ==============================
     // Helper Methods
     // ==============================
 

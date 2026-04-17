@@ -146,15 +146,43 @@ public class PhotoSyncService : IPhotoSyncService
             await _fetchSemaphore.WaitAsync(ct);
             try
             {
-                // Route to the correct photo endpoint based on source type.
-                // Mailbox contacts store photos on the Contact object, not as User profile photos.
+                // Route to the correct photo endpoint based on source type and directory match.
+                // Stub Contacts that point to other tenant shared mailboxes (e.g. IMMY-AFH, OTTO-AFH)
+                // have no photo on the Contact endpoint — OWA renders the linked user's photo. When
+                // directory enrichment matched the contact's email to a tenant user, prefer the linked
+                // user's photo and fall back to the Contact endpoint only if the user has no photo.
                 var mailboxSource = sourceUser.MailboxType == "MailboxContact"
                     ? tunnel.TunnelSources?.FirstOrDefault(s => s.SourceType == AFHSync.Shared.Enums.SourceType.MailboxContacts)
                     : null;
 
-                var (photoBytes, wasNotFound) = mailboxSource != null
-                    ? await FetchContactPhotoAsync(mailboxSource.SourceIdentifier, sourceUser.EntraId, ct)
-                    : await FetchUserPhotoAsync(sourceUser.EntraId, ct);
+                byte[]? photoBytes;
+                bool wasNotFound;
+
+                if (mailboxSource != null && !string.IsNullOrWhiteSpace(sourceUser.MatchedUserEntraId))
+                {
+                    // Try the linked tenant user first (mirrors OWA's render-time behavior).
+                    (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.MatchedUserEntraId!, ct);
+
+                    // Conservative fallback: if the linked user has no photo (genuine 404), fall through
+                    // to the Contact endpoint so a contact-level photo (rare but possible) still wins.
+                    // Transient errors (wasNotFound == false with null bytes) are NOT retried via fallback.
+                    if (photoBytes == null && wasNotFound)
+                    {
+                        (photoBytes, wasNotFound) = await FetchContactPhotoAsync(
+                            mailboxSource.SourceIdentifier, sourceUser.EntraId, ct);
+                    }
+                }
+                else if (mailboxSource != null)
+                {
+                    // No matched user — stub Contact with no linked tenant user. Existing behavior.
+                    (photoBytes, wasNotFound) = await FetchContactPhotoAsync(
+                        mailboxSource.SourceIdentifier, sourceUser.EntraId, ct);
+                }
+                else
+                {
+                    // DDG / OrgContacts / UserMailbox — existing behavior.
+                    (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
+                }
 
                 if (photoBytes != null)
                 {
