@@ -28,6 +28,7 @@ public class SourceUser
     public bool IsEnabled { get; set; } = true;
     public bool HiddenFromGal { get; set; }
     public string? MailboxType { get; set; }
+    public string? MatchedUserEntraId { get; set; }
     public DateTime? LastFetchedAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

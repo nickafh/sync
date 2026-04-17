@@ -408,6 +408,52 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
+    /// Indexes directory users by lowercased email (from <see cref="User.Mail"/> and
+    /// <see cref="User.ProxyAddresses"/>) -> <see cref="User.Id"/>. Mirrors
+    /// <see cref="BuildDirectoryPhoneMap"/>'s key-collection strategy: strips
+    /// "smtp:"/"SMTP:" prefix, case-insensitive, multiple keys per user. Users with
+    /// null/empty Id are skipped entirely.
+    ///
+    /// Public for unit testability.
+    /// </summary>
+    public static Dictionary<string, string> BuildDirectoryUserIdMap(
+        IEnumerable<User> users)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var user in users)
+        {
+            if (string.IsNullOrWhiteSpace(user.Id))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(user.Mail))
+            {
+                map[user.Mail.Trim().ToLowerInvariant()] = user.Id;
+            }
+
+            if (user.ProxyAddresses != null)
+            {
+                foreach (var proxy in user.ProxyAddresses)
+                {
+                    if (string.IsNullOrWhiteSpace(proxy))
+                        continue;
+
+                    var address = proxy.StartsWith("smtp:", StringComparison.OrdinalIgnoreCase)
+                        ? proxy[5..]
+                        : proxy;
+
+                    if (string.IsNullOrWhiteSpace(address))
+                        continue;
+
+                    map[address.Trim().ToLowerInvariant()] = user.Id;
+                }
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
     /// Mutates candidates in place: for each candidate, if the lowercased email is in the map,
     /// backfill BusinessPhone ONLY when the candidate's current BusinessPhone is null/whitespace,
     /// and backfill MobilePhone ONLY when the candidate's current MobilePhone is null/whitespace.
@@ -419,6 +465,21 @@ public class SourceResolver : ISourceResolver
     public static (int Matched, int Unmatched) ApplyDirectoryEnrichment(
         List<SourceUser> candidates,
         IReadOnlyDictionary<string, (string? BusinessPhone, string? MobilePhone)> map)
+        => ApplyDirectoryEnrichment(candidates, map, userIdMap: null);
+
+    /// <summary>
+    /// Same backfill behavior as the 2-arg overload, plus: when <paramref name="userIdMap"/>
+    /// is non-null and contains the candidate's email, writes the matched tenant user's
+    /// Entra Id to <see cref="SourceUser.MatchedUserEntraId"/>. Used by the photo-sync
+    /// path (260417-1lx) to route MailboxContact photo fetches to the linked tenant user.
+    ///
+    /// Existing MatchedUserEntraId values on unmatched candidates are preserved
+    /// (we never null out a previously-matched value during a run that doesn't match).
+    /// </summary>
+    public static (int Matched, int Unmatched) ApplyDirectoryEnrichment(
+        List<SourceUser> candidates,
+        IReadOnlyDictionary<string, (string? BusinessPhone, string? MobilePhone)> phoneMap,
+        IReadOnlyDictionary<string, string>? userIdMap)
     {
         int matched = 0;
         int unmatched = 0;
@@ -432,7 +493,7 @@ public class SourceResolver : ISourceResolver
             }
 
             var key = candidate.Email.Trim().ToLowerInvariant();
-            if (!map.TryGetValue(key, out var phones))
+            if (!phoneMap.TryGetValue(key, out var phones))
             {
                 unmatched++;
                 continue;
@@ -448,6 +509,11 @@ public class SourceResolver : ISourceResolver
             if (string.IsNullOrWhiteSpace(candidate.MobilePhone))
             {
                 candidate.MobilePhone = phones.MobilePhone;
+            }
+
+            if (userIdMap != null && userIdMap.TryGetValue(key, out var userId))
+            {
+                candidate.MatchedUserEntraId = userId;
             }
         }
 
@@ -552,12 +618,14 @@ public class SourceResolver : ISourceResolver
             return;
         }
 
-        var map = BuildDirectoryPhoneMap(allUsers);
-        var (matched, unmatched) = ApplyDirectoryEnrichment(candidates, map);
+        var phoneMap = BuildDirectoryPhoneMap(allUsers);
+        var userIdMap = BuildDirectoryUserIdMap(allUsers);
+        var (matched, unmatched) = ApplyDirectoryEnrichment(candidates, phoneMap, userIdMap);
 
+        var matchedUsers = candidates.Count(c => !string.IsNullOrWhiteSpace(c.MatchedUserEntraId));
         _logger.LogInformation(
-            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {UserCount} tenant users scanned",
-            mailboxEmail, candidates.Count, matched, unmatched, allUsers.Count);
+            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {MatchedUsers} matched to tenant user (will use linked user photo), {UserCount} tenant users scanned",
+            mailboxEmail, candidates.Count, matched, unmatched, matchedUsers, allUsers.Count);
     }
 
     /// <summary>
@@ -765,7 +833,7 @@ public class SourceResolver : ISourceResolver
         await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
 
         const int batchSize = 25;
-        const int colCount = 26;
+        const int colCount = 27;
         const string onConflict = """
 
             ON CONFLICT (entra_id) DO UPDATE SET
@@ -787,6 +855,7 @@ public class SourceResolver : ISourceResolver
                 notes = EXCLUDED.notes,
                 is_enabled = EXCLUDED.is_enabled,
                 mailbox_type = EXCLUDED.mailbox_type,
+                matched_user_entra_id = EXCLUDED.matched_user_entra_id,
                 extension_attr_1 = EXCLUDED.extension_attr_1,
                 extension_attr_2 = EXCLUDED.extension_attr_2,
                 extension_attr_3 = EXCLUDED.extension_attr_3,
@@ -805,6 +874,7 @@ public class SourceResolver : ISourceResolver
                     business_phone, mobile_phone, job_title, department,
                     office_location, company_name, street_address, city,
                     state, postal_code, country, notes, is_enabled, mailbox_type,
+                    matched_user_entra_id,
                     extension_attr_1, extension_attr_2, extension_attr_3, extension_attr_4,
                     last_fetched_at, created_at, updated_at
                 ) VALUES
@@ -815,7 +885,7 @@ public class SourceResolver : ISourceResolver
             {
                 if (i > 0) sb.AppendLine(",");
                 var p = i * colCount;
-                sb.Append($"({{{p}}},{{{p+1}}},{{{p+2}}},{{{p+3}}},{{{p+4}}},{{{p+5}}},{{{p+6}}},{{{p+7}}},{{{p+8}}},{{{p+9}}},{{{p+10}}},{{{p+11}}},{{{p+12}}},{{{p+13}}},{{{p+14}}},{{{p+15}}},{{{p+16}}},{{{p+17}}},{{{p+18}}},{{{p+19}}},{{{p+20}}},{{{p+21}}},{{{p+22}}},{{{p+23}}},{{{p+24}}},{{{p+25}}})");
+                sb.Append($"({{{p}}},{{{p+1}}},{{{p+2}}},{{{p+3}}},{{{p+4}}},{{{p+5}}},{{{p+6}}},{{{p+7}}},{{{p+8}}},{{{p+9}}},{{{p+10}}},{{{p+11}}},{{{p+12}}},{{{p+13}}},{{{p+14}}},{{{p+15}}},{{{p+16}}},{{{p+17}}},{{{p+18}}},{{{p+19}}},{{{p+20}}},{{{p+21}}},{{{p+22}}},{{{p+23}}},{{{p+24}}},{{{p+25}}},{{{p+26}}})");
 
                 var user = batch[i];
                 parameters.AddRange([
@@ -827,6 +897,7 @@ public class SourceResolver : ISourceResolver
                     (object?)Trunc(user.StreetAddress, 500), (object?)Trunc(user.City, 100),
                     (object?)Trunc(user.State, 100), (object?)Trunc(user.PostalCode, 20),
                     (object?)Trunc(user.Country, 100), (object?)user.Notes, user.IsEnabled, (object?)Trunc(user.MailboxType, 50),
+                    (object?)Trunc(user.MatchedUserEntraId, 500),
                     (object?)Trunc(user.ExtensionAttr1, 200), (object?)Trunc(user.ExtensionAttr2, 200),
                     (object?)Trunc(user.ExtensionAttr3, 200), (object?)Trunc(user.ExtensionAttr4, 200),
                     user.LastFetchedAt, user.CreatedAt, user.UpdatedAt
