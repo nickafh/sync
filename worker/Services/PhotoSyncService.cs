@@ -374,6 +374,7 @@ public class PhotoSyncService : IPhotoSyncService
 
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;
         int tunnelsWithPhotos = 0;
+        int tunnelsProcessedSoFar = 0;
         string? fatalError = null;
 
         try
@@ -411,6 +412,10 @@ public class PhotoSyncService : IPhotoSyncService
 
                     totalPhotosUpdated += updated;
                     totalPhotosFailed += failed;
+                    tunnelsProcessedSoFar++;
+
+                    // Interim progress write so the dashboard shows live photo counts.
+                    await UpdateRunProgressAsync(run.Id, totalPhotosUpdated, totalPhotosFailed, tunnelsProcessedSoFar);
                 }
                 catch (Exception ex)
                 {
@@ -738,6 +743,26 @@ public class PhotoSyncService : IPhotoSyncService
             mailboxEntraId, states.Count, skipNoSourcePhoto, skipNoPhotoBytes, skipHashMatch, skipRemoval, attempted, updated, failed);
 
         return (updated, failed);
+    }
+
+    private async Task UpdateRunProgressAsync(int runId, int photosUpdated, int photosFailed, int tunnelsProcessed)
+    {
+        try
+        {
+            await using var db = await _dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var dbRun = await db.SyncRuns.FindAsync([runId]);
+            if (dbRun != null)
+            {
+                dbRun.PhotosUpdated = photosUpdated;
+                dbRun.PhotosFailed = photosFailed;
+                dbRun.TunnelsProcessed = tunnelsProcessed;
+                await db.SaveChangesAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to write interim photo sync progress for RunId={RunId}", runId);
+        }
     }
 
     private async Task UpdateSourceUserPhotoHashAsync(int sourceUserId, string? photoHash, CancellationToken ct)
