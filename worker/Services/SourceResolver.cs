@@ -127,13 +127,41 @@ public class SourceResolver : ISourceResolver
             }
         }
 
-        // Deduplicate by EntraId across multiple sources (case-insensitive to match DB collation).
-        // Also filter out empty EntraIds which would all conflict on the same row.
-        var deduped = allSourceUsers
+        // Deduplicate across multiple sources.
+        // - Non-MailboxContact users (DDG, OrgContacts) dedup on EntraId, case-insensitive.
+        // - MailboxContact users dedup on a composite name+email key (with EntraId fallback) so
+        //   the same person appearing in two selected mailbox folders (e.g. "Agents" + "Brokers")
+        //   only produces one contact in the resulting phone list. EntraId for MailboxContacts is
+        //   the per-folder Graph Contact.Id, which differs across folders even for the same person.
+        var (mailboxContacts, otherUsers) = allSourceUsers
+            .GroupBy(u => u.MailboxType == "MailboxContact")
+            .Aggregate(
+                (Mailbox: new List<SourceUser>(), Other: new List<SourceUser>()),
+                (acc, g) =>
+                {
+                    if (g.Key) acc.Mailbox.AddRange(g);
+                    else acc.Other.AddRange(g);
+                    return acc;
+                });
+
+        var otherDeduped = otherUsers
             .Where(u => !string.IsNullOrEmpty(u.EntraId))
             .GroupBy(u => u.EntraId, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .ToList();
+
+        var mailboxDeduped = mailboxContacts
+            .Select(u => (User: u, Key: BuildMailboxContactDedupKey(u)))
+            .Where(t => t.Key != null)
+            .GroupBy(t => t.Key!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First().User)
+            .ToList();
+
+        var deduped = otherDeduped.Concat(mailboxDeduped).ToList();
+
+        _logger.LogInformation(
+            "Tunnel {TunnelName}: MailboxContact dedup: {MailboxRaw} raw -> {MailboxDeduped} deduped; Other dedup: {OtherRaw} raw -> {OtherDeduped} deduped",
+            tunnel.Name, mailboxContacts.Count, mailboxDeduped.Count, otherUsers.Count, otherDeduped.Count);
 
         _logger.LogInformation("Tunnel {TunnelName}: {RawCount} source users from all sources, {DedupedCount} after dedup",
             tunnel.Name, allSourceUsers.Count, deduped.Count);
@@ -340,6 +368,38 @@ public class SourceResolver : ISourceResolver
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
+    }
+
+    /// <summary>
+    /// Builds a dedup key for a MailboxContact-sourced SourceUser so the same person appearing
+    /// in multiple selected mailbox folders only produces one contact in the resulting phone list.
+    ///
+    /// Key strategy (in order):
+    /// - If both DisplayName and Email are non-whitespace: composite "{name}|{email}" lowercase trimmed.
+    /// - Else if EntraId is non-empty: "id:{entraId}" (lowercase prefix avoids collision with name+email keys).
+    /// - Else: null (no usable identity — caller should skip).
+    ///
+    /// EntraId for MailboxContacts is the per-folder Graph Contact.Id, which differs across folders
+    /// even for the same person — so we cannot dedup on EntraId alone.
+    ///
+    /// Public for unit testability.
+    /// </summary>
+    public static string? BuildMailboxContactDedupKey(SourceUser user)
+    {
+        var hasName = !string.IsNullOrWhiteSpace(user.DisplayName);
+        var hasEmail = !string.IsNullOrWhiteSpace(user.Email);
+
+        if (hasName && hasEmail)
+        {
+            return $"{user.DisplayName!.Trim().ToLowerInvariant()}|{user.Email!.Trim().ToLowerInvariant()}";
+        }
+
+        if (!string.IsNullOrEmpty(user.EntraId))
+        {
+            return $"id:{user.EntraId}";
+        }
+
+        return null;
     }
 
     /// <summary>

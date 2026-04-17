@@ -191,16 +191,15 @@ export function StepSource({
       {/* Mailbox email input with autocomplete */}
       {addMode === 'mailbox_contacts' && (
         <MailboxAutocomplete
-          onSelect={(email, displayName, folderId, folderName) => {
-            if (sources.some((s) => s.type === 'mailbox_contacts' && s.mailboxEmail === email && s.contactFolderId === folderId)) return;
-            onAddSource({
-              type: 'mailbox_contacts',
-              mailboxEmail: email,
-              contactFolderId: folderId,
-              contactFolderName: folderName,
-              label: displayName || email,
-              sublabel: folderName ? `${email} / ${folderName}` : (displayName ? email : undefined),
-            });
+          onSelectMany={(entries) => {
+            for (const entry of entries) {
+              if (sources.some((s) =>
+                s.type === 'mailbox_contacts' &&
+                s.mailboxEmail === entry.mailboxEmail &&
+                s.contactFolderId === entry.contactFolderId
+              )) continue;
+              onAddSource(entry);
+            }
             setAddMode(null);
             setMailboxInput('');
           }}
@@ -351,11 +350,13 @@ function SpecificUsersPicker({
   );
 }
 
+const ROOT_FOLDER_KEY = '__root__';
+
 function MailboxAutocomplete({
-  onSelect,
+  onSelectMany,
   onCancel,
 }: {
-  onSelect: (email: string, displayName?: string, folderId?: string, folderName?: string) => void;
+  onSelectMany: (entries: SourceEntry[]) => void;
   onCancel: () => void;
 }) {
   const [step, setStep] = useState<'email' | 'folder'>('email');
@@ -366,6 +367,8 @@ function MailboxAutocomplete({
   const [searching, setSearching] = useState(false);
   const [folders, setFolders] = useState<{ id: string; name: string }[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [managedNames, setManagedNames] = useState<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
@@ -393,9 +396,15 @@ function MailboxAutocomplete({
     setSelectedDisplayName(displayName);
     setLoadingFolders(true);
     setStep('folder');
+    setChecked(new Set());
+    // Fetch folders + AFH-Sync-managed phone-list names in parallel.
     try {
-      const data = await api.graph.contactFolders(email);
-      setFolders(data);
+      const [folderData, phoneLists] = await Promise.all([
+        api.graph.contactFolders(email),
+        api.phoneLists.list().catch(() => []),
+      ]);
+      setFolders(folderData);
+      setManagedNames(new Set(phoneLists.map((p) => p.name.trim().toLowerCase())));
     } catch {
       setFolders([]);
     } finally {
@@ -403,12 +412,47 @@ function MailboxAutocomplete({
     }
   };
 
+  const toggleChecked = (key: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const handleSubmit = () => {
+    const entries: SourceEntry[] = [];
+    for (const key of checked) {
+      if (key === ROOT_FOLDER_KEY) {
+        entries.push({
+          type: 'mailbox_contacts',
+          mailboxEmail: selectedEmail,
+          label: selectedDisplayName || selectedEmail,
+          sublabel: selectedDisplayName ? `${selectedEmail} / All Contacts` : 'All Contacts',
+        });
+      } else {
+        const folder = folders.find((f) => f.id === key);
+        if (!folder) continue;
+        entries.push({
+          type: 'mailbox_contacts',
+          mailboxEmail: selectedEmail,
+          contactFolderId: folder.id,
+          contactFolderName: folder.name,
+          label: selectedDisplayName || selectedEmail,
+          sublabel: `${selectedEmail} / ${folder.name}`,
+        });
+      }
+    }
+    onSelectMany(entries);
+  };
+
   if (step === 'folder') {
     return (
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-medium">Select Contact Folder</p>
-          <Button variant="outline" size="sm" onClick={() => { setStep('email'); setQuery(''); }}>
+          <p className="text-sm font-medium">Select Contact Folders</p>
+          <Button variant="outline" size="sm" onClick={() => { setStep('email'); setQuery(''); setChecked(new Set()); }}>
             Back
           </Button>
         </div>
@@ -416,27 +460,54 @@ function MailboxAutocomplete({
         {loadingFolders ? (
           <p className="text-xs text-text-muted">Loading folders...</p>
         ) : (
-          <div className="border rounded-lg divide-y max-h-[250px] overflow-y-auto">
-            <button
-              type="button"
-              className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer font-medium"
-              onClick={() => onSelect(selectedEmail, selectedDisplayName)}
-            >
-              <Mail className="h-4 w-4 text-text-muted shrink-0" />
-              <span className="text-sm">All Contacts (root folder)</span>
-            </button>
-            {folders.map((folder) => (
-              <button
-                key={folder.id}
-                type="button"
-                className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
-                onClick={() => onSelect(selectedEmail, selectedDisplayName, folder.id, folder.name)}
+          <>
+            <div className="border rounded-lg divide-y max-h-[250px] overflow-y-auto">
+              <label
+                className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer font-medium"
               >
-                <Cable className="h-4 w-4 text-text-muted shrink-0" />
-                <span className="text-sm">{folder.name}</span>
-              </button>
-            ))}
-          </div>
+                <input
+                  type="checkbox"
+                  checked={checked.has(ROOT_FOLDER_KEY)}
+                  onChange={() => toggleChecked(ROOT_FOLDER_KEY)}
+                  className="rounded"
+                />
+                <Mail className="h-4 w-4 text-text-muted shrink-0" />
+                <span className="text-sm">All Contacts (root folder)</span>
+              </label>
+              {folders.map((folder) => {
+                const isManaged = managedNames.has(folder.name.trim().toLowerCase());
+                return (
+                  <label
+                    key={folder.id}
+                    className="flex items-center gap-3 px-3 py-2.5 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
+                    title={isManaged ? 'This folder is managed by an AFH Sync phone list. Selecting it may cause feedback loops.' : undefined}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked.has(folder.id)}
+                      onChange={() => toggleChecked(folder.id)}
+                      className="rounded"
+                    />
+                    <Cable className="h-4 w-4 text-text-muted shrink-0" />
+                    <span className="text-sm">
+                      {folder.name}
+                      {isManaged && (
+                        <span className="ml-2 text-xs text-text-muted">(synced by AFH Sync)</span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <Button
+              size="sm"
+              className="w-full bg-gold text-white hover:bg-gold/90"
+              onClick={handleSubmit}
+              disabled={checked.size === 0}
+            >
+              Add selected ({checked.size})
+            </Button>
+          </>
         )}
       </div>
     );

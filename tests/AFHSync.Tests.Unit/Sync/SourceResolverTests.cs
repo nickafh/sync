@@ -504,6 +504,178 @@ public class SourceResolverTests
     }
 
     // ==============================
+    // BuildMailboxContactDedupKey Tests
+    // ==============================
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_SameNameAndEmail_ProducesEqualKeys_CaseAndWhitespaceInsensitive()
+    {
+        var a = new SourceUser
+        {
+            EntraId = "folder-A-id",
+            DisplayName = "Jane Doe",
+            Email = "jane@x.com",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var b = new SourceUser
+        {
+            EntraId = "folder-B-id",
+            DisplayName = "  jane doe ",
+            Email = "JANE@x.com",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        var keyA = SourceResolver.BuildMailboxContactDedupKey(a);
+        var keyB = SourceResolver.BuildMailboxContactDedupKey(b);
+
+        Assert.NotNull(keyA);
+        Assert.Equal(keyA, keyB, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_SameEmailDifferentName_ProducesDifferentKeys()
+    {
+        var a = new SourceUser
+        {
+            EntraId = "id-a",
+            DisplayName = "Jane Doe",
+            Email = "jane@x.com",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var b = new SourceUser
+        {
+            EntraId = "id-b",
+            DisplayName = "J. Doe",
+            Email = "jane@x.com",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        var keyA = SourceResolver.BuildMailboxContactDedupKey(a);
+        var keyB = SourceResolver.BuildMailboxContactDedupKey(b);
+
+        Assert.NotEqual(keyA, keyB);
+    }
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_FallsBackToEntraId_WhenNameAndEmailBothEmpty()
+    {
+        var user = new SourceUser
+        {
+            EntraId = "abc-123",
+            DisplayName = null,
+            Email = null,
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        var key = SourceResolver.BuildMailboxContactDedupKey(user);
+
+        Assert.Equal("id:abc-123", key);
+    }
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_ReturnsNull_WhenNameEmailAndEntraIdAllEmpty()
+    {
+        var user = new SourceUser
+        {
+            EntraId = "",
+            DisplayName = "  ",
+            Email = "  ",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        var key = SourceResolver.BuildMailboxContactDedupKey(user);
+
+        Assert.Null(key);
+    }
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_NameOnlyOrEmailOnly_FallsBackToEntraId()
+    {
+        var nameOnly = new SourceUser
+        {
+            EntraId = "xyz",
+            DisplayName = "Jane",
+            Email = "",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var emailOnly = new SourceUser
+        {
+            EntraId = "pqr",
+            DisplayName = null,
+            Email = "jane@x.com",
+            MailboxType = "MailboxContact",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        Assert.Equal("id:xyz", SourceResolver.BuildMailboxContactDedupKey(nameOnly));
+        Assert.Equal("id:pqr", SourceResolver.BuildMailboxContactDedupKey(emailOnly));
+    }
+
+    [Fact]
+    public void BuildMailboxContactDedupKey_GroupBy_DedupsAcrossFoldersByNameAndEmail()
+    {
+        // Two MailboxContact SourceUsers with matching name+email but different EntraIds
+        // (the per-folder Graph Contact.Id) — GroupBy on the dedup key should collapse
+        // them to a single entry.
+        var users = new List<SourceUser>
+        {
+            new()
+            {
+                EntraId = "agents-folder-contact-id",
+                DisplayName = "Jane Doe",
+                Email = "jane@x.com",
+                MailboxType = "MailboxContact",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+            new()
+            {
+                EntraId = "brokers-folder-contact-id",
+                DisplayName = "JANE DOE",
+                Email = "jane@x.com",
+                MailboxType = "MailboxContact",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+            new()
+            {
+                EntraId = "other-person-contact-id",
+                DisplayName = "Alex Q",
+                Email = "alex@x.com",
+                MailboxType = "MailboxContact",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+        };
+
+        var deduped = users
+            .Select(u => (User: u, Key: SourceResolver.BuildMailboxContactDedupKey(u)))
+            .Where(t => t.Key != null)
+            .GroupBy(t => t.Key!, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First().User)
+            .ToList();
+
+        Assert.Equal(2, deduped.Count);
+        Assert.Contains(deduped, u => u.Email == "jane@x.com");
+        Assert.Contains(deduped, u => u.Email == "alex@x.com");
+    }
+
+    // ==============================
     // Helper Methods
     // ==============================
 
