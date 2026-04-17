@@ -5,13 +5,18 @@ using Microsoft.Extensions.Logging;
 
 namespace AFHSync.Worker.Services;
 
+public interface IStaleRunCleanupService
+{
+    Task CleanupAsync();
+}
+
 /// <summary>
 /// Hangfire job that marks sync runs stuck in "Running" for over 2 hours as Failed.
 /// Safety net for the rare case where even finalization fails (DB outage, OOM, etc.).
 /// </summary>
 public sealed class StaleRunCleanupService(
     IDbContextFactory<AFHSyncDbContext> dbContextFactory,
-    ILogger<StaleRunCleanupService> logger)
+    ILogger<StaleRunCleanupService> logger) : IStaleRunCleanupService
 {
     public async Task CleanupAsync()
     {

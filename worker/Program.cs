@@ -94,7 +94,7 @@ try
     services.AddScoped<IRunLogger, RunLogger>();
     services.AddScoped<ISyncEngine, SyncEngine>();
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
-    services.AddScoped<StaleRunCleanupService>();
+    services.AddScoped<IStaleRunCleanupService, StaleRunCleanupService>();
 
     // Cleanup runner (quick-260417-48z) — Hangfire resolves this via the
     // ICleanupJobRunner interface registered in shared/.
@@ -154,7 +154,7 @@ try
 
         // Stale run cleanup: mark runs stuck in "Running" for >2 hours as Failed.
         // Safety net for the rare case where even finalization fails (DB outage, OOM, etc.).
-        recurringJobManager.AddOrUpdate<StaleRunCleanupService>(
+        recurringJobManager.AddOrUpdate<IStaleRunCleanupService>(
             "stale-run-cleanup",
             svc => svc.CleanupAsync(),
             "*/30 * * * *"); // every 30 minutes
