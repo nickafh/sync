@@ -30,6 +30,21 @@ interface SelectedFolder {
   folderName: string;
 }
 
+const ALLOWED_FOLDER_NAMES_STORAGE_KEY = 'afhsync.cleanup.allowedFolderNames';
+const DEFAULT_ALLOWED_FOLDER_NAMES: string[] = [
+  'Avalon Gate Code',
+  'Blue Ridge',
+  'Buckhead',
+  'Clayton',
+  'Cobb',
+  'Intown',
+  'North Atlanta',
+  'Services',
+  'Holiday Cards 2012',
+  'Sync Contacts',
+  'Export2',
+];
+
 export default function CleanupPage() {
   const [scope, setScope] = useState<'all' | 'specific'>('specific');
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
@@ -38,11 +53,100 @@ export default function CleanupPage() {
   const [selectedFolders, setSelectedFolders] = useState<SelectedFolder[]>([]);
   const [deleting, setDeleting] = useState(false);
 
+  // Allowed folder name allowlist — only folders matching these names are returned by scan.
+  // Persisted to localStorage so the admin doesn't re-type each session.
+  const [allowedFolderNames, setAllowedFolderNames] = useState<string[]>([]);
+  const [folderNameInput, setFolderNameInput] = useState('');
+  const [bulkPasteOpen, setBulkPasteOpen] = useState(false);
+  const [bulkPasteText, setBulkPasteText] = useState('');
+  const allowedFolderNamesLoadedRef = React.useRef(false);
+
   // User search state
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const debounceRef = React.useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Load allowed folder names from localStorage on mount; pre-seed with defaults if empty.
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(ALLOWED_FOLDER_NAMES_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setAllowedFolderNames(parsed.filter((n) => typeof n === 'string'));
+          allowedFolderNamesLoadedRef.current = true;
+          return;
+        }
+      }
+    } catch {
+      // fall through to default seed
+    }
+    setAllowedFolderNames(DEFAULT_ALLOWED_FOLDER_NAMES);
+    allowedFolderNamesLoadedRef.current = true;
+  }, []);
+
+  // Persist allowed folder names whenever they change (after initial load).
+  React.useEffect(() => {
+    if (!allowedFolderNamesLoadedRef.current) return;
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        ALLOWED_FOLDER_NAMES_STORAGE_KEY,
+        JSON.stringify(allowedFolderNames),
+      );
+    } catch {
+      // ignore quota/serialization errors — non-critical
+    }
+  }, [allowedFolderNames]);
+
+  const addAllowedFolderName = (rawName: string) => {
+    const name = rawName.trim();
+    if (!name) return;
+    setAllowedFolderNames((prev) => {
+      if (prev.some((n) => n.toLowerCase() === name.toLowerCase())) return prev;
+      return [...prev, name];
+    });
+  };
+
+  const removeAllowedFolderName = (name: string) => {
+    setAllowedFolderNames((prev) => prev.filter((n) => n !== name));
+  };
+
+  const handleFolderNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addAllowedFolderName(folderNameInput);
+      setFolderNameInput('');
+    }
+  };
+
+  const handleBulkPasteApply = () => {
+    const lines = bulkPasteText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length === 0) {
+      setBulkPasteOpen(false);
+      setBulkPasteText('');
+      return;
+    }
+    setAllowedFolderNames((prev) => {
+      const seen = new Set(prev.map((n) => n.toLowerCase()));
+      const additions: string[] = [];
+      for (const line of lines) {
+        const key = line.toLowerCase();
+        if (!seen.has(key)) {
+          additions.push(line);
+          seen.add(key);
+        }
+      }
+      return [...prev, ...additions];
+    });
+    setBulkPasteText('');
+    setBulkPasteOpen(false);
+  };
 
   React.useEffect(() => {
     if (query.length < 2) {
@@ -69,7 +173,10 @@ export default function CleanupPage() {
     setScanResults(null);
     setSelectedFolders([]);
     try {
-      const data = await api.cleanup.scan(scope === 'all' ? null : selectedEmails);
+      const data = await api.cleanup.scan(
+        scope === 'all' ? null : selectedEmails,
+        allowedFolderNames.length > 0 ? allowedFolderNames : null,
+      );
       setScanResults(data);
       if (data.length === 0) toast.info('No contact folders found for selected users.');
     } catch {
@@ -230,6 +337,88 @@ export default function CleanupPage() {
               </div>
             )}
 
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Step 2: Folder names allowlist */}
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>2. Folder names to wipe</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {allowedFolderNames.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {allowedFolderNames.map((name) => (
+                  <span
+                    key={name}
+                    className="inline-flex items-center gap-1 rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold"
+                  >
+                    {name}
+                    <button
+                      type="button"
+                      onClick={() => removeAllowedFolderName(name)}
+                      className="hover:text-gold/70 cursor-pointer"
+                      aria-label={`Remove ${name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <Input
+                placeholder="Type a folder name and press Enter..."
+                value={folderNameInput}
+                onChange={(e) => setFolderNameInput(e.target.value)}
+                onKeyDown={handleFolderNameKeyDown}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkPasteOpen((v) => !v)}
+              >
+                {bulkPasteOpen ? 'Close paste' : 'Bulk paste'}
+              </Button>
+            </div>
+            {bulkPasteOpen && (
+              <div className="space-y-2">
+                <textarea
+                  className="w-full min-h-[100px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  placeholder="Paste one folder name per line..."
+                  value={bulkPasteText}
+                  onChange={(e) => setBulkPasteText(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="bg-gold text-white hover:bg-gold/90"
+                    onClick={handleBulkPasteApply}
+                  >
+                    Add names
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setBulkPasteText('');
+                      setBulkPasteOpen(false);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-text-muted">
+              Only folders matching these names will be returned. Personal folders are never shown.
+            </p>
+
             <Button
               className="bg-gold text-white hover:bg-gold/90"
               onClick={handleScan}
@@ -242,7 +431,7 @@ export default function CleanupPage() {
         </CardContent>
       </Card>
 
-      {/* Step 2: Results */}
+      {/* Step 3: Results */}
       {scanning && (
         <Card className="mt-4">
           <CardContent className="py-6">
@@ -257,7 +446,7 @@ export default function CleanupPage() {
         <Card className="mt-4">
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>2. Select Folders to Delete</CardTitle>
+              <CardTitle>3. Select Folders to Delete</CardTitle>
               <div className="flex items-center gap-2">
                 <span className="text-sm text-text-muted">{selectedFolders.length} selected</span>
                 <Button

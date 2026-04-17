@@ -1,7 +1,9 @@
 using AFHSync.Shared.Data;
+using AFHSync.Shared.Entities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 
 namespace AFHSync.Api.Controllers;
 
@@ -31,14 +33,16 @@ public class CleanupController : ControllerBase
     [HttpPost("scan")]
     public async Task<IActionResult> Scan([FromBody] CleanupScanRequest request, CancellationToken ct)
     {
-        var mailboxes = await _db.TargetMailboxes
+        var dbMailboxes = await _db.TargetMailboxes
             .Where(m => m.IsActive)
             .ToListAsync(ct);
 
+        List<TargetMailbox> mailboxes;
         if (request.Emails is { Length: > 0 })
         {
+            // === Specific Users path — UNCHANGED behavior ===
             var emailSet = new HashSet<string>(request.Emails, StringComparer.OrdinalIgnoreCase);
-            mailboxes = mailboxes.Where(m => emailSet.Contains(m.Email)).ToList();
+            mailboxes = dbMailboxes.Where(m => emailSet.Contains(m.Email)).ToList();
 
             // If any requested emails aren't in target_mailboxes yet, look them up
             // directly in Graph so cleanup works for users not yet synced.
@@ -52,7 +56,7 @@ public class CleanupController : ControllerBase
                         .GetAsync(config => config.QueryParameters.Select = ["id", "displayName", "mail"], ct);
                     if (graphUser?.Id != null)
                     {
-                        mailboxes.Add(new AFHSync.Shared.Entities.TargetMailbox
+                        mailboxes.Add(new TargetMailbox
                         {
                             EntraId = graphUser.Id,
                             Email = graphUser.Mail ?? email,
@@ -66,6 +70,21 @@ public class CleanupController : ControllerBase
                     _logger.LogWarning(ex, "Failed to look up {Email} in Graph for cleanup scan", email);
                 }
             }
+        }
+        else
+        {
+            // === All Users path — enumerate full tenant via Graph ===
+            _logger.LogInformation("Cleanup scan: enumerating full tenant via Graph...");
+            mailboxes = await EnumerateTenantMailboxesAsync(dbMailboxes, ct);
+        }
+
+        // Optional allow-list filter applied to BOTH paths so admin can never accidentally
+        // surface or delete personal contact folders. Null/empty list = no filter (back-compat).
+        HashSet<string>? allowedFolderNames = null;
+        if (request.AllowedFolderNames is { Length: > 0 })
+        {
+            allowedFolderNames = new HashSet<string>(request.AllowedFolderNames, StringComparer.OrdinalIgnoreCase);
+            _logger.LogInformation("Cleanup scan: filtering by {Count} allowed folder name(s)", request.AllowedFolderNames.Length);
         }
 
         var results = new List<UserFoldersDto>();
@@ -86,6 +105,7 @@ public class CleanupController : ControllerBase
 
                 var folders = response?.Value?
                     .Where(f => f.Id != null && f.DisplayName != null)
+                    .Where(f => allowedFolderNames == null || allowedFolderNames.Contains(f.DisplayName!))
                     .Select(f => new FolderDto(f.Id!, f.DisplayName!))
                     .OrderBy(f => f.Name)
                     .ToArray() ?? [];
@@ -116,6 +136,70 @@ public class CleanupController : ControllerBase
         await Task.WhenAll(tasks);
 
         return Ok(results.OrderBy(r => r.DisplayName ?? r.Email));
+    }
+
+    /// <summary>
+    /// Enumerates every enabled tenant user that has a mailbox-shaped <c>mail</c> value
+    /// via Graph /users (paged with PageIterator). Returns a <see cref="TargetMailbox"/> projection
+    /// suitable for the existing folder-scan loop. Display name is taken from the cached
+    /// <paramref name="dbMailboxes"/> when available, falling back to Graph's displayName.
+    /// </summary>
+    private async Task<List<TargetMailbox>> EnumerateTenantMailboxesAsync(
+        List<TargetMailbox> dbMailboxes,
+        CancellationToken ct)
+    {
+        var dbDisplayByEntraId = dbMailboxes
+            .Where(m => !string.IsNullOrEmpty(m.EntraId))
+            .GroupBy(m => m.EntraId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().DisplayName, StringComparer.OrdinalIgnoreCase);
+
+        var users = new List<User>();
+
+        var response = await _graphClient.Users.GetAsync(config =>
+        {
+            // Disabled accounts excluded server-side. The mail != null clause skips
+            // most non-mailbox directory objects (groups/contacts/unlicensed).
+            config.QueryParameters.Filter = "accountEnabled eq true and mail ne null";
+            config.QueryParameters.Top = 999;
+            config.QueryParameters.Count = true;
+            config.QueryParameters.Select = ["id", "displayName", "mail"];
+            // Required for `ne null` advanced filter + $count.
+            config.Headers.Add("ConsistencyLevel", "eventual");
+        }, ct);
+
+        if (response == null)
+            return new List<TargetMailbox>();
+
+        var pageIterator = PageIterator<User, UserCollectionResponse>
+            .CreatePageIterator(
+                _graphClient,
+                response,
+                user =>
+                {
+                    if (!string.IsNullOrEmpty(user.Id) && !string.IsNullOrEmpty(user.Mail))
+                        users.Add(user);
+                    return true;
+                },
+                req =>
+                {
+                    req.Headers.Add("ConsistencyLevel", "eventual");
+                    return req;
+                });
+
+        await pageIterator.IterateAsync(ct);
+
+        var projected = users.Select(u => new TargetMailbox
+        {
+            EntraId = u.Id!,
+            Email = u.Mail!,
+            DisplayName = (dbDisplayByEntraId.TryGetValue(u.Id!, out var cached) && !string.IsNullOrWhiteSpace(cached))
+                ? cached
+                : u.DisplayName,
+            IsActive = true
+        }).ToList();
+
+        _logger.LogInformation("Cleanup scan: tenant enumeration returned {Count} mailbox candidates", projected.Count);
+        return projected;
     }
 
     /// <summary>
@@ -187,7 +271,7 @@ public class CleanupController : ControllerBase
 
 }
 
-public record CleanupScanRequest(string[]? Emails);
+public record CleanupScanRequest(string[]? Emails, string[]? AllowedFolderNames);
 public record CleanupDeleteRequest(CleanupDeleteItem[] Items);
 public record CleanupDeleteItem(string EntraId, string Email, string FolderId, string FolderName);
 public record FolderDto(string Id, string Name);
