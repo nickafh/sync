@@ -108,14 +108,21 @@ try
     services.AddScoped<AFHSync.Api.Services.IDDGResolver, AFHSync.Api.Services.DDGResolver>();
     services.AddSingleton<AFHSync.Api.Services.IFilterConverter, AFHSync.Api.Services.FilterConverter>();
 
-    // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17)
+    // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17).
+    // InvisibilityTimeout bumped to 3h: tenant-wide syncs hitting ~965 mailboxes can
+    // exceed the 30m default and trigger spurious cancellation tokens (observed
+    // 2026-04-17 — runs canceled at 30m21s with all tunnels reporting "operation was canceled").
     services.AddHangfire(config => config
         .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
         .UseSimpleAssemblyNameTypeSerializer()
         .UseRecommendedSerializerSettings()
         .UsePostgreSqlStorage(c =>
             c.UseNpgsqlConnection(
-                configuration.GetConnectionString("Default")!)));
+                configuration.GetConnectionString("Default")!),
+            new Hangfire.PostgreSql.PostgreSqlStorageOptions
+            {
+                InvisibilityTimeout = TimeSpan.FromHours(3)
+            }));
 
     services.AddHangfireServer(options =>
     {
