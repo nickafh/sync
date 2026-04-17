@@ -512,43 +512,25 @@ public class SourceResolver : ISourceResolver
             return;
         }
 
-        // Deduplicate lowercased emails
-        var emails = candidates
-            .Select(c => c.Email!.Trim().ToLowerInvariant())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var chunks = ChunkEmailsForFilter(emails);
+        // Fetch all tenant users in one paginated call. Graph's proxyAddresses/any()
+        // advanced filter is unreliable with compound OR expressions — it returns
+        // "Unsupported Query" for many tenants. Fetching the full directory is
+        // simpler and more reliable for the small tenants this tool targets.
         var allUsers = new List<User>();
-        var client = _graphClientFactory.Client;
-
-        foreach (var chunk in chunks)
+        try
         {
-            try
+            var client = _graphClientFactory.Client;
+            var response = await client.Users.GetAsync(config =>
             {
-                // Graph proxyAddresses filter is case-sensitive on the prefix:
-                //   'SMTP:' (uppercase) = primary address
-                //   'smtp:' (lowercase) = secondary/alias
-                // Emit both variants per email so we match whether the address is stored as primary or alias.
-                var inner = string.Join(" or ",
-                    chunk.SelectMany(e => new[] { $"p eq 'smtp:{e}'", $"p eq 'SMTP:{e}'" }));
-                var filter = $"proxyAddresses/any(p:{inner})";
+                config.QueryParameters.Top = 999;
+                config.QueryParameters.Select =
+                [
+                    "id", "mail", "proxyAddresses", "businessPhones", "mobilePhone"
+                ];
+            }, ct);
 
-                var response = await client.Users.GetAsync(config =>
-                {
-                    config.QueryParameters.Filter = filter;
-                    config.QueryParameters.Top = 999;
-                    config.QueryParameters.Count = true;
-                    config.QueryParameters.Select =
-                    [
-                        "id", "mail", "proxyAddresses", "businessPhones", "mobilePhone"
-                    ];
-                    config.Headers.Add("ConsistencyLevel", "eventual");
-                }, ct);
-
-                if (response == null)
-                    continue;
-
+            if (response != null)
+            {
                 var pageIterator = PageIterator<User, UserCollectionResponse>
                     .CreatePageIterator(
                         client,
@@ -557,29 +539,25 @@ public class SourceResolver : ISourceResolver
                         {
                             allUsers.Add(user);
                             return true;
-                        },
-                        req =>
-                        {
-                            req.Headers.Add("ConsistencyLevel", "eventual");
-                            return req;
                         });
 
                 await pageIterator.IterateAsync(ct);
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Directory enrichment chunk failed for mailbox {Mailbox} ({ChunkSize} emails) — continuing with remaining chunks",
-                    mailboxEmail, chunk.Count);
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Directory enrichment fetch failed for mailbox {Mailbox} — skipping enrichment (contacts stay with current phone values)",
+                mailboxEmail);
+            return;
         }
 
         var map = BuildDirectoryPhoneMap(allUsers);
         var (matched, unmatched) = ApplyDirectoryEnrichment(candidates, map);
 
         _logger.LogInformation(
-            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {ChunkCount} filter chunks",
-            mailboxEmail, candidates.Count, matched, unmatched, chunks.Count);
+            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {UserCount} tenant users scanned",
+            mailboxEmail, candidates.Count, matched, unmatched, allUsers.Count);
     }
 
     /// <summary>
