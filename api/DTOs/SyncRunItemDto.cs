@@ -5,6 +5,8 @@ public record SyncRunItemDto(
     int? TunnelId,
     int? SourceUserId,
     string? SourceUserName,
+    int? TargetMailboxId,
+    string? TargetMailboxEmail,
     string Action,
     string? FieldChanges,
     string? ErrorMessage,

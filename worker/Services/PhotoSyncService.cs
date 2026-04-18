@@ -32,8 +32,11 @@ public class PhotoSyncService : IPhotoSyncService
 
     /// <summary>
     /// Concurrency for photo writes (D-04). Thumbnails are 5-20KB each.
+    /// Bumped from 4 → 8 to cut backfill duration roughly in half; Polly's
+    /// GraphResilienceHandler still absorbs per-call 429s so we don't need
+    /// additional client-side rate limiting at this concurrency.
     /// </summary>
-    private readonly SemaphoreSlim _photoSemaphore = new(4);
+    private readonly SemaphoreSlim _photoSemaphore = new(8);
 
     /// <summary>
     /// Concurrency for photo fetches. Keep low to avoid Graph 503s.
@@ -46,9 +49,11 @@ public class PhotoSyncService : IPhotoSyncService
     private const int BatchSize = 50;
 
     /// <summary>
-    /// Pause between batches during initial backfill (D-12).
+    /// Pause between batches during initial backfill (D-12). Reduced from 2s → 500ms
+    /// — the per-batch hash UPDATE is now batched into one round-trip instead of
+    /// 50 serial ones, so the pause is the dominant overhead on steady-state throughput.
     /// </summary>
-    private const int BatchPauseMs = 2000;
+    private const int BatchPauseMs = 500;
 
     /// <summary>
     /// Maximum photo payload size in bytes (Graph API limit: 4MB).
@@ -714,6 +719,12 @@ public class PhotoSyncService : IPhotoSyncService
         {
             var batch = states.Skip(i).Take(BatchSize).ToList();
 
+            // Accumulate hash updates across the batch so we can flush them in a single
+            // SELECT+batched-UPDATE round-trip at the end, instead of 1 SELECT + 1 UPDATE
+            // per photo write (the prior per-call helper opened a new DbContext every time,
+            // which was the dominant overhead on a 4h backfill of ~40k photos).
+            var pendingHashUpdates = new List<(int stateId, string newHash, string? previousHash)>(BatchSize);
+
             foreach (var state in batch)
             {
                 if (!sourcePhotos.TryGetValue(state.SourceUserId, out var photoData))
@@ -773,9 +784,10 @@ public class PhotoSyncService : IPhotoSyncService
                             mailboxEntraId, folderId, state.GraphContactId!, photoBytes, ct);
                     }
 
-                    // Update ContactSyncState photo hash
-                    await UpdateContactSyncStatePhotoHashAsync(
-                        state.Id, sourceHash!, state.PhotoHash, ct);
+                    // Defer the ContactSyncState hash write — flushed in one SELECT+batched-UPDATE
+                    // round-trip at the end of this 50-photo batch. If the batch flush fails, the
+                    // hashes stay stale and the next run re-writes those photos (idempotent).
+                    pendingHashUpdates.Add((state.Id, sourceHash!, state.PhotoHash));
 
                     _runLogger.AddItem(new SyncRunItem
                     {
@@ -809,12 +821,50 @@ public class PhotoSyncService : IPhotoSyncService
                         CreatedAt = DateTime.UtcNow
                     });
                     failed++;
+
+                    // Self-heal for stale graph_contact_id. When Graph reports the target contact
+                    // no longer exists (user manually deleted, folder was recreated out-of-band, or
+                    // the contact was moved), the contact_sync_state row is poison — every future
+                    // photo write hits the same 404. Delete the row so the next contact sync
+                    // recreates the contact fresh in that mailbox. Mirrors the mailbox-level
+                    // self-heal pattern in SyncEngine.ProcessMailboxAsync; fresh DbContext +
+                    // CancellationToken.None so a run-level cancel doesn't strand the cleanup.
+                    var msg = ex.Message ?? string.Empty;
+                    bool isStaleContact =
+                        (ex is ODataError oe && oe.ResponseStatusCode == 404) ||
+                        msg.Contains("not found in the store", StringComparison.OrdinalIgnoreCase);
+                    if (isStaleContact)
+                    {
+                        try
+                        {
+                            await using var healDb = await _dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+                            var dead = await healDb.ContactSyncStates
+                                .FirstOrDefaultAsync(s => s.Id == state.Id, CancellationToken.None);
+                            if (dead != null)
+                            {
+                                healDb.ContactSyncStates.Remove(dead);
+                                await healDb.SaveChangesAsync(CancellationToken.None);
+                                _logger.LogWarning(
+                                    "Self-heal: removed stale ContactSyncState {StateId} (SourceUserId={SourceUserId}, TargetMailboxId={TargetMailboxId}, GraphContactId={GraphContactId}) after Graph reported contact not found",
+                                    state.Id, state.SourceUserId, state.TargetMailboxId, state.GraphContactId);
+                            }
+                        }
+                        catch (Exception healEx)
+                        {
+                            _logger.LogWarning(healEx,
+                                "Self-heal write failed for ContactSyncState {StateId}", state.Id);
+                        }
+                    }
+
                     if (onPhotoWrite != null)
                     {
                         await onPhotoWrite(0, 1);
                     }
                 }
             }
+
+            // Flush the batch's accumulated hash updates in a single round-trip.
+            await FlushPendingPhotoHashUpdatesAsync(pendingHashUpdates, ct);
 
             // Pause between batches during backfill (D-12)
             if (isBackfill && i + BatchSize < states.Count)
@@ -871,25 +921,43 @@ public class PhotoSyncService : IPhotoSyncService
         }
     }
 
-    private async Task UpdateContactSyncStatePhotoHashAsync(
-        int stateId, string newHash, string? previousHash, CancellationToken ct)
+    /// <summary>
+    /// Batched replacement for the former per-photo UpdateContactSyncStatePhotoHashAsync.
+    /// Loads all affected ContactSyncState rows in one SELECT, applies hash/timestamp
+    /// changes in-memory, then saves them in one batched UPDATE round-trip. A batch
+    /// failure is logged but not rethrown — the hashes remain stale and the next run
+    /// will re-attempt the photo writes (idempotent).
+    /// </summary>
+    private async Task FlushPendingPhotoHashUpdatesAsync(
+        List<(int stateId, string newHash, string? previousHash)> pending,
+        CancellationToken ct)
     {
+        if (pending.Count == 0) return;
         try
         {
             await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
-            var state = await db.ContactSyncStates.FindAsync([stateId], ct);
-            if (state != null)
+            var ids = pending.Select(p => p.stateId).ToList();
+            var tracked = await db.ContactSyncStates
+                .Where(s => ids.Contains(s.Id))
+                .ToListAsync(ct);
+            var map = pending.ToDictionary(p => p.stateId);
+            var now = DateTime.UtcNow;
+            foreach (var s in tracked)
             {
-                state.PreviousPhotoHash = previousHash;
-                state.PhotoHash = newHash;
-                state.UpdatedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(ct);
+                if (map.TryGetValue(s.Id, out var p))
+                {
+                    s.PreviousPhotoHash = p.previousHash;
+                    s.PhotoHash = p.newHash;
+                    s.UpdatedAt = now;
+                }
             }
+            await db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to update PhotoHash for ContactSyncState {Id}", stateId);
+                "Batched PhotoHash flush failed for {Count} states — next run will re-write those photos",
+                pending.Count);
         }
     }
 

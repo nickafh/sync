@@ -62,20 +62,32 @@ public class SyncRunsController : ControllerBase
         await db.SaveChangesAsync();
         if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
-        // Enqueue Hangfire fire-and-forget jobs — one per tunnel, or one for all
+        // Enqueue Hangfire fire-and-forget jobs — one per tunnel, or one for all.
+        // Capture the returned job IDs so StopSync / StaleRunCleanupService can call
+        // BackgroundJob.Delete on queued-but-not-yet-started jobs instead of only
+        // relying on the cancel_sync flag being observed at the next boundary check.
+        var enqueuedJobIds = new List<string>();
         if (request.TunnelIds is { Length: > 0 })
         {
             foreach (var tid in request.TunnelIds)
             {
                 var tunnelId = tid;
-                jobs.Enqueue<ISyncEngine>(engine =>
+                var jobId = jobs.Enqueue<ISyncEngine>(engine =>
                     engine.RunAsync(tunnelId, runType, request.IsDryRun, CancellationToken.None));
+                if (!string.IsNullOrEmpty(jobId)) enqueuedJobIds.Add(jobId);
             }
         }
         else
         {
-            jobs.Enqueue<ISyncEngine>(engine =>
+            var jobId = jobs.Enqueue<ISyncEngine>(engine =>
                 engine.RunAsync(null, runType, request.IsDryRun, CancellationToken.None));
+            if (!string.IsNullOrEmpty(jobId)) enqueuedJobIds.Add(jobId);
+        }
+
+        if (enqueuedJobIds.Count > 0)
+        {
+            run.HangfireJobIds = string.Join(",", enqueuedJobIds);
+            await db.SaveChangesAsync();
         }
 
         return Ok(new { runId = run.Id });
@@ -90,7 +102,9 @@ public class SyncRunsController : ControllerBase
     /// preserves the Cancelled terminal status.
     /// </summary>
     [HttpPost("stop")]
-    public async Task<IActionResult> StopSync([FromServices] AFHSyncDbContext db)
+    public async Task<IActionResult> StopSync(
+        [FromServices] AFHSyncDbContext db,
+        [FromServices] IBackgroundJobClient jobs)
     {
         var runningRuns = await db.SyncRuns.Where(r => r.Status == SyncStatus.Running).ToListAsync();
         if (runningRuns.Count == 0)
@@ -113,6 +127,21 @@ public class SyncRunsController : ControllerBase
             r.ErrorSummary = "Stop requested by user";
         }
         await db.SaveChangesAsync();
+
+        // 3. Belt-and-suspenders: ask Hangfire to delete the tracked job IDs. If the
+        // job hasn't started yet, Delete removes it from the queue outright. If it is
+        // already running, Delete flips it to a deleted state and signals the worker's
+        // job-cancellation token — on top of the cancel_sync flag above. Delete is
+        // idempotent (returns false if the job was already finished) so we don't care
+        // about the bool return.
+        foreach (var r in runningRuns)
+        {
+            if (string.IsNullOrWhiteSpace(r.HangfireJobIds)) continue;
+            foreach (var id in r.HangfireJobIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                try { jobs.Delete(id); } catch { /* best-effort */ }
+            }
+        }
 
         return Ok(new { message = $"Cancelled {runningRuns.Count} run(s). Worker will exit gracefully on next checkpoint." });
     }
@@ -290,6 +319,7 @@ public class SyncRunsController : ControllerBase
                 i.Id,
                 i.TunnelId,
                 i.SourceUserId,
+                i.TargetMailboxId,
                 i.Action,
                 i.FieldChanges,
                 i.ErrorMessage,
@@ -310,12 +340,29 @@ public class SyncRunsController : ControllerBase
                 .ToDictionaryAsync(u => u.Id, u => u.DisplayName)
             : new Dictionary<int, string?>();
 
+        // Resolve target mailbox emails similarly so the run-detail Failed tab can show
+        // the specific mailbox a folder-level failure belongs to.
+        var targetMailboxIds = rawItems
+            .Where(i => i.TargetMailboxId.HasValue)
+            .Select(i => i.TargetMailboxId!.Value)
+            .Distinct()
+            .ToList();
+
+        var mailboxEmails = targetMailboxIds.Count > 0
+            ? await db.TargetMailboxes
+                .Where(m => targetMailboxIds.Contains(m.Id))
+                .ToDictionaryAsync(m => m.Id, m => m.Email)
+            : new Dictionary<int, string>();
+
         var items = rawItems.Select(i => new SyncRunItemDto(
             i.Id,
             i.TunnelId,
             i.SourceUserId,
             i.SourceUserId.HasValue && userNames.TryGetValue(i.SourceUserId.Value, out var name)
                 ? name : null,
+            i.TargetMailboxId,
+            i.TargetMailboxId.HasValue && mailboxEmails.TryGetValue(i.TargetMailboxId.Value, out var email)
+                ? email : null,
             i.Action,
             i.FieldChanges,
             i.ErrorMessage,

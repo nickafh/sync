@@ -18,6 +18,15 @@ public class GraphClientFactory
 {
     public GraphServiceClient Client { get; }
 
+    /// <summary>
+    /// Per-request timeout applied to the underlying HttpClient. Caps how long a single
+    /// Graph call (including Polly retries in GraphResilienceHandler) can hang before
+    /// HttpClient force-cancels it — otherwise a stuck TCP read could silently block
+    /// a sync until the 2h / 6h StaleRunCleanupService cutoff. 10 min accommodates
+    /// large photo writes and long DDG pagination runs with retry backoff.
+    /// </summary>
+    private static readonly TimeSpan GraphHttpClientTimeout = TimeSpan.FromMinutes(10);
+
     public GraphClientFactory(IConfiguration config, IEnumerable<DelegatingHandler>? handlers = null)
     {
         var tenantId = config["Graph:TenantId"]
@@ -29,25 +38,24 @@ public class GraphClientFactory
 
         var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
 
+        // Always construct via the SDK factory so we can own the HttpClient and
+        // enforce a finite Timeout. The no-handler branch (production startup before
+        // Plan 02 shipped, and tests) used to build the client from the credential
+        // alone, which meant no outer timeout at all.
+        var defaults = Microsoft.Graph.GraphClientFactory.CreateDefaultHandlers()
+            .Where(h => h is not Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler)
+            .ToList();
+
+        var allHandlers = new List<DelegatingHandler>();
         if (handlers?.Any() == true)
         {
-            // Start with the SDK's default middleware (redirect, compress, etc.)
-            // then remove the built-in RetryHandler since we replace it with our
-            // Polly-based GraphResilienceHandler.
-            var defaults = Microsoft.Graph.GraphClientFactory.CreateDefaultHandlers()
-                .Where(h => h is not Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler)
-                .ToList();
-
             // Prepend our custom handlers (e.g. GraphResilienceHandler) before SDK defaults.
-            var allHandlers = new List<DelegatingHandler>(handlers);
-            allHandlers.AddRange(defaults);
+            allHandlers.AddRange(handlers);
+        }
+        allHandlers.AddRange(defaults);
 
-            var httpClient = Microsoft.Graph.GraphClientFactory.Create(handlers: allHandlers.ToArray());
-            Client = new GraphServiceClient(httpClient, credential);
-        }
-        else
-        {
-            Client = new GraphServiceClient(credential);
-        }
+        var httpClient = Microsoft.Graph.GraphClientFactory.Create(handlers: allHandlers.ToArray());
+        httpClient.Timeout = GraphHttpClientTimeout;
+        Client = new GraphServiceClient(httpClient, credential);
     }
 }

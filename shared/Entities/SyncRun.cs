@@ -23,6 +23,16 @@ public class SyncRun
     public int PhotosFailed { get; set; }
     public int ThrottleEvents { get; set; }
     public string? ErrorSummary { get; set; }
+
+    /// <summary>
+    /// Comma-separated list of Hangfire background-job IDs enqueued for this run.
+    /// A single manual sync fan-outs to N jobs (one per tunnel) but only the first
+    /// to claim the Pending row runs the sync; tracking all IDs lets the stop
+    /// endpoint / StaleRunCleanupService call BackgroundJob.Delete on the whole set
+    /// so queued-but-not-yet-started jobs don't resurrect a cancelled run.
+    /// </summary>
+    public string? HangfireJobIds { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     // Navigation properties

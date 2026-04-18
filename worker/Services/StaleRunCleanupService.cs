@@ -2,6 +2,7 @@ using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -12,12 +13,15 @@ namespace AFHSync.Worker.Services;
 /// Thresholds are run-type aware — photo backfills legitimately run for hours, while
 /// contact syncs should finish within ~30 min. When a run is flipped, also raises the
 /// <c>cancel_sync</c> flag so any still-running worker bails at its next tunnel/mailbox
-/// boundary check instead of continuing to hammer Graph. The flag is auto-cleared at
-/// the start of every subsequent sync run, so it does not affect future syncs.
-/// Safety net for the rare case where even finalization fails (DB outage, OOM, etc.).
+/// boundary check, and additionally asks Hangfire to Delete the tracked background
+/// job IDs so a stuck worker is actively cancelled instead of only signalled.
+/// The cancel_sync flag is auto-cleared at the start of every subsequent sync run,
+/// so it does not affect future syncs. Safety net for the rare case where even
+/// finalization fails (DB outage, OOM, etc.).
 /// </summary>
 public sealed class StaleRunCleanupService(
     IDbContextFactory<AFHSyncDbContext> dbContextFactory,
+    IBackgroundJobClient backgroundJobs,
     ILogger<StaleRunCleanupService> logger) : IStaleRunCleanupService
 {
     private static readonly TimeSpan ContactRunStaleAfter = TimeSpan.FromHours(2);
@@ -66,5 +70,22 @@ public sealed class StaleRunCleanupService(
             db.AppSettings.Add(new AppSetting { Key = "cancel_sync", Value = "true" });
 
         await db.SaveChangesAsync();
+
+        // Belt-and-suspenders: actively delete tracked Hangfire jobs so a worker blocked
+        // in a Graph call can be cancelled via Hangfire's job-cancellation token, rather
+        // than waiting to notice cancel_sync on the next tunnel/mailbox boundary. Delete
+        // is idempotent — if the job already finished or was never recorded, it's a no-op.
+        foreach (var run in staleRuns)
+        {
+            if (string.IsNullOrWhiteSpace(run.HangfireJobIds)) continue;
+            foreach (var id in run.HangfireJobIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                try { backgroundJobs.Delete(id); }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to delete Hangfire job {JobId} for stale run {RunId}", id, run.Id);
+                }
+            }
+        }
     }
 }

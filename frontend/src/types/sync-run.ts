@@ -58,6 +58,8 @@ export interface SyncRunItemDto {
   tunnelId: number | null;
   sourceUserId: number | null;
   sourceUserName: string | null;
+  targetMailboxId: number | null;
+  targetMailboxEmail: string | null;
   action: SyncItemAction;
   fieldChanges: string | null;
   errorMessage: string | null;

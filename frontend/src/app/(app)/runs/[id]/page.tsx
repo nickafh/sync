@@ -60,6 +60,11 @@ const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
     cell: ({ row }) => row.original.sourceUserName ?? row.original.sourceUserId ?? '--',
   },
   {
+    accessorKey: 'targetMailboxEmail',
+    header: 'Mailbox',
+    cell: ({ row }) => row.original.targetMailboxEmail ?? '--',
+  },
+  {
     accessorKey: 'action',
     header: 'Action',
     cell: ({ getValue }) => {
@@ -81,9 +86,20 @@ const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
       if (!value) return '--';
       try {
         const parsed = JSON.parse(value);
-        const count = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
+        // Backend wraps changes in a { previousHash, fields } envelope — unwrap so
+        // the count reflects real field changes instead of the two envelope keys.
+        // Falls through cleanly if the payload is already flat.
+        const isEnvelope =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'fields' in parsed;
+        const fields = isEnvelope ? parsed.fields : parsed;
+        const keys =
+          fields && typeof fields === 'object' && !Array.isArray(fields)
+            ? Object.keys(fields)
+            : [];
+        const count = Array.isArray(fields) ? fields.length : keys.length;
+        const title = keys.join(', ') || value;
         return (
-          <span title={value} className="cursor-help">
+          <span title={title} className="cursor-help">
             {count} field{count !== 1 ? 's' : ''} changed
           </span>
         );

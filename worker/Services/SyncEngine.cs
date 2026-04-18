@@ -549,6 +549,35 @@ public sealed class SyncEngine(
                 ErrorMessage = $"Folder '{tunnel.Name}': {ex.Message}",
                 CreatedAt = DateTime.UtcNow
             });
+
+            // Self-heal for dead mailboxes the reconciliation pass can't catch. These accounts
+            // appear in /users (so RefreshTargetMailboxesAsync leaves them active) but their
+            // mailboxes are soft-deleted / on-prem / unlicensed — service accounts, hybrid users,
+            // etc. Detect the specific Graph error and mark the mailbox inactive so subsequent
+            // tunnels skip it via the LoadTargetMailboxesAsync IsActive filter. Fresh DbContext +
+            // CancellationToken.None so a run-level cancel doesn't interrupt the self-heal write.
+            if (ex.Message.Contains("inactive, soft-deleted, or is hosted on-premise", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await using var healDb = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+                    var deadMb = await healDb.TargetMailboxes.FirstOrDefaultAsync(m => m.Id == mailbox.Id, CancellationToken.None);
+                    if (deadMb != null && deadMb.IsActive)
+                    {
+                        deadMb.IsActive = false;
+                        deadMb.UpdatedAt = DateTime.UtcNow;
+                        await healDb.SaveChangesAsync(CancellationToken.None);
+                        logger.LogWarning(
+                            "Self-heal: deactivated stale target mailbox {Email} (Id={MailboxId}) after Graph reported it inactive / on-prem / soft-deleted",
+                            deadMb.Email, deadMb.Id);
+                    }
+                }
+                catch (Exception healEx)
+                {
+                    logger.LogWarning(healEx, "Self-heal write failed for MailboxId={MailboxId}", mailbox.Id);
+                }
+            }
+
             failed++;
             return (created, updated, skipped, failed, removed);
         }
