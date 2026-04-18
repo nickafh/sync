@@ -124,7 +124,7 @@ const ACTION_TABS = [
   { label: 'All', value: 'all' },
   { label: 'Created', value: 'created' },
   { label: 'Updated', value: 'updated' },
-  { label: 'Failed', value: 'failed' },
+  { label: 'Failed', value: 'failed,photo_failed' },
   { label: 'Removed', value: 'removed' },
   { label: 'Skipped', value: 'skipped' },
   { label: 'Photo Updated', value: 'photo_updated' },

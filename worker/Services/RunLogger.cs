@@ -183,6 +183,19 @@ public sealed class RunLogger(
             return;
         }
 
+        // Preserve terminal Failed status set by StaleRunCleanupService (or any other
+        // external terminator). A run flipped to Failed with CompletedAt populated has
+        // already been judged stuck by cleanup — a late-arriving worker must not rewrite
+        // that verdict to Success/Warning hours later when it finally returns from a
+        // long Graph call.
+        if (dbRun.Status == SyncStatus.Failed && dbRun.CompletedAt != null)
+        {
+            logger.LogWarning(
+                "SyncRun {RunId} was already terminated externally (Status=Failed, ErrorSummary={ErrorSummary}) — skipping overwrite to preserve cleanup verdict.",
+                run.Id, dbRun.ErrorSummary);
+            return;
+        }
+
         var completedAt = DateTime.UtcNow;
         dbRun.Status = status;
         dbRun.CompletedAt = completedAt;

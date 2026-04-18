@@ -270,7 +270,12 @@ public class SyncRunsController : ControllerBase
             .Where(i => i.SyncRunId == id);
 
         if (!string.IsNullOrWhiteSpace(action))
-            query = query.Where(i => i.Action == action);
+        {
+            // Accept a comma-separated list so the frontend can express unions like
+            // "failed,photo_failed" — a single value still works (one-element CSV).
+            var actions = action.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            query = query.Where(i => actions.Contains(i.Action));
+        }
 
         // Two-step query: fetch items first, then resolve source user names.
         // Previous single-query approach used navigation property access
