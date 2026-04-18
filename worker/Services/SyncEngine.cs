@@ -535,6 +535,20 @@ public sealed class SyncEngine(
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
+            // Record as a SyncRunItem so the failure shows up in the run-detail "Failed" tab.
+            // Without this, the mailbox-level failure only increments the aggregate counter,
+            // producing "Failed: N" on the dashboard with an empty items table.
+            runLogger.AddItem(new SyncRunItem
+            {
+                SyncRunId = run.Id,
+                TunnelId = tunnel.Id,
+                PhoneListId = canonicalPhoneList.Id,
+                TargetMailboxId = mailbox.Id,
+                SourceUserId = null,
+                Action = "failed",
+                ErrorMessage = $"Folder '{tunnel.Name}': {ex.Message}",
+                CreatedAt = DateTime.UtcNow
+            });
             failed++;
             return (created, updated, skipped, failed, removed);
         }
@@ -1156,9 +1170,35 @@ public sealed class SyncEngine(
                 }
             }
 
+            // Reconciliation: deactivate mailboxes no longer present in Graph (deleted / on-prem /
+            // soft-deleted). Safety-gated so a partial/throttled Graph response can't mass-disable
+            // the tenant — require Graph to return both a nontrivial count and at least half of
+            // the existing cached set before we trust it as authoritative.
+            var graphEntraIds = graphUsers.Select(u => u.id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            int deactivated = 0;
+            if (graphUsers.Count >= 100 && graphUsers.Count >= existing.Count / 2)
+            {
+                foreach (var mb in existing.Values)
+                {
+                    if (mb.IsActive && !graphEntraIds.Contains(mb.EntraId))
+                    {
+                        mb.IsActive = false;
+                        mb.UpdatedAt = now;
+                        deactivated++;
+                    }
+                }
+            }
+            else if (existing.Count > 0)
+            {
+                logger.LogWarning(
+                    "Skipping stale-mailbox deactivation — Graph response too small ({GraphCount} vs {ExistingCount} existing) to trust as authoritative",
+                    graphUsers.Count, existing.Count);
+            }
+
             await db.SaveChangesAsync(ct);
-            logger.LogInformation("Target mailbox refresh complete: {Total} Graph users, {Added} new, {Existing} existing",
-                graphUsers.Count, added, existing.Count);
+            logger.LogInformation(
+                "Target mailbox refresh complete: {Total} Graph users, {Added} new, {Existing} existing, {Deactivated} deactivated (stale)",
+                graphUsers.Count, added, existing.Count, deactivated);
         }
         catch (Exception ex)
         {
