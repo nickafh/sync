@@ -1138,8 +1138,8 @@ public sealed class SyncEngine(
 
             var response = await graphClientFactory.Client.Users.GetAsync(config =>
             {
-                config.QueryParameters.Filter = "accountEnabled eq true and userType eq 'Member'";
-                config.QueryParameters.Select = ["id", "mail", "displayName"];
+                config.QueryParameters.Filter = "accountEnabled eq true";
+                config.QueryParameters.Select = ["id", "mail", "displayName", "userType"];
                 config.QueryParameters.Top = 999;
                 config.Headers.Add("ConsistencyLevel", "eventual");
                 config.QueryParameters.Count = true;
@@ -1153,8 +1153,14 @@ public sealed class SyncEngine(
                         response,
                         user =>
                         {
-                            if (user.Id != null && !string.IsNullOrEmpty(user.Mail))
-                                graphUsers.Add((user.Id, user.Mail, user.DisplayName));
+                            if (user.Id == null || string.IsNullOrEmpty(user.Mail))
+                                return true;
+                            // Treat null/empty userType as Member — on-prem synced users may not have userType set
+                            // (matches SourceResolver.MapGraphUserToSourceUser behavior)
+                            var userType = user.UserType;
+                            if (!string.IsNullOrEmpty(userType) && userType != "Member")
+                                return true;
+                            graphUsers.Add((user.Id, user.Mail, user.DisplayName));
                             return true;
                         },
                         req =>
@@ -1196,6 +1202,16 @@ public sealed class SyncEngine(
                 {
                     var mb = existing[id];
                     mb.LastVerifiedAt = now;
+                    // Reactivate if previously deactivated and now visible in Graph again
+                    // (e.g. recovered from a false deactivation bug, or user was re-enabled)
+                    if (!mb.IsActive)
+                    {
+                        mb.IsActive = true;
+                        mb.UpdatedAt = now;
+                        logger.LogInformation(
+                            "Reactivating target mailbox {Email} ({EntraId}) — returned to Graph",
+                            mb.Email, mb.EntraId);
+                    }
                 }
             }
 
@@ -1205,6 +1221,7 @@ public sealed class SyncEngine(
             // the existing cached set before we trust it as authoritative.
             var graphEntraIds = graphUsers.Select(u => u.id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             int deactivated = 0;
+            var deactivatedList = new List<string>();
             if (graphUsers.Count >= 100 && graphUsers.Count >= existing.Count / 2)
             {
                 foreach (var mb in existing.Values)
@@ -1214,7 +1231,14 @@ public sealed class SyncEngine(
                         mb.IsActive = false;
                         mb.UpdatedAt = now;
                         deactivated++;
+                        deactivatedList.Add($"{mb.Email} ({mb.EntraId})");
                     }
+                }
+                if (deactivatedList.Count > 0)
+                {
+                    logger.LogInformation(
+                        "Deactivated {Count} stale target mailboxes: {Mailboxes}",
+                        deactivated, string.Join(", ", deactivatedList));
                 }
             }
             else if (existing.Count > 0)
