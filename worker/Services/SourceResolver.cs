@@ -202,7 +202,7 @@ public class SourceResolver : ISourceResolver
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
-                "showInAddressList", "aboutMe", "onPremisesExtensionAttributes"
+                "showInAddressList", "onPremisesExtensionAttributes"
             ];
             // Required for advanced filters on extension attributes and $count
             config.Headers.Add("ConsistencyLevel", "eventual");
