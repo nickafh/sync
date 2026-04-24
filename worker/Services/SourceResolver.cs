@@ -202,7 +202,7 @@ public class SourceResolver : ISourceResolver
                 "businessPhones", "mobilePhone", "jobTitle", "department",
                 "officeLocation", "companyName", "streetAddress", "city",
                 "state", "postalCode", "country", "accountEnabled", "userType",
-                "showInAddressList", "onPremisesExtensionAttributes"
+                "showInAddressList", "aboutMe", "onPremisesExtensionAttributes"
             ];
             // Required for advanced filters on extension attributes and $count
             config.Headers.Add("ConsistencyLevel", "eventual");
@@ -357,9 +357,11 @@ public class SourceResolver : ISourceResolver
             IsEnabled = graphUser.AccountEnabled ?? true,
             HiddenFromGal = !(graphUser.ShowInAddressList ?? true),
             MailboxType = mailboxType,
-            // extensionAttribute5 holds the Entra "Notes" field (AD `info` attribute).
-            // Populated by Exchange PowerShell: Get-User | % { Set-User $_.Identity -CustomAttribute5 $_.Notes }
-            Notes = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute5,
+            // Cloud-only: Graph's User.aboutMe is the "Notes" field visible in Teams/OWA contact
+            // cards and edited via M365 admin center / Entra portal. Falls back to
+            // onPremisesExtensionAttributes.extensionAttribute5 for any remaining AD-synced users
+            // whose on-prem `info` attribute still flows up via AD Connect.
+            Notes = graphUser.AboutMe ?? graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute5,
             ExtensionAttr1 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute1,
             ExtensionAttr2 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute2,
             ExtensionAttr3 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute3,
