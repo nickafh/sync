@@ -109,6 +109,7 @@ builder.Services.AddSingleton(sp =>
 // DDG resolution services (per D-01, D-02)
 builder.Services.AddScoped<IDDGResolver, DDGResolver>();
 builder.Services.AddSingleton<IFilterConverter, FilterConverter>();
+builder.Services.AddScoped<IContactExportService, ContactExportService>();
 
 var app = builder.Build();
 

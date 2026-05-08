@@ -12,6 +12,7 @@ import {
   LogOut,
   Trash2,
   UserSearch,
+  Download,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 
@@ -22,6 +23,7 @@ const navItems = [
   { label: 'Field Profiles', href: '/fields', icon: SlidersHorizontal },
   { label: 'Runs & Logs', href: '/runs', icon: ClipboardList },
   { label: 'User Lookup', href: '/users', icon: UserSearch },
+  { label: 'Export', href: '/exports', icon: Download },
   { label: 'Cleanup', href: '/cleanup', icon: Trash2 },
   { label: 'Settings', href: '/settings', icon: Settings },
 ];
