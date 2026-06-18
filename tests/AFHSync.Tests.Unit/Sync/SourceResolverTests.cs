@@ -504,6 +504,103 @@ public class SourceResolverTests
     }
 
     // ==============================
+    // Directory display-name refresh (rename propagation)
+    // MailboxContact stubs store a stale DisplayName when the underlying directory
+    // object is renamed in Exchange (same email). These refresh the stored name from
+    // the live directory record (directory-always-wins), matching by mail or proxy alias.
+    // ==============================
+
+    [Fact]
+    public void BuildDirectoryNameMap_IndexesByMailAndProxyAddresses_CaseInsensitive()
+    {
+        var users = new List<User>
+        {
+            new()
+            {
+                Id = "u1",
+                DisplayName = "AFHSIR Relo Services",
+                Mail = "Relocation@AtlantaFineHomes.com",
+                ProxyAddresses = new List<string>
+                {
+                    "SMTP:Relocation@AtlantaFineHomes.com",
+                    "smtp:relocation@appriver3651000721.onmicrosoft.com"
+                }
+            }
+        };
+
+        var map = SourceResolver.BuildDirectoryNameMap(users);
+
+        Assert.Equal("AFHSIR Relo Services", map["relocation@atlantafinehomes.com"]);
+        // Case-insensitive lookup:
+        Assert.Equal("AFHSIR Relo Services", map["RELOCATION@ATLANTAFINEHOMES.COM"]);
+        // Matchable by the onmicrosoft alias too (smtp: prefix stripped):
+        Assert.Equal("AFHSIR Relo Services", map["relocation@appriver3651000721.onmicrosoft.com"]);
+    }
+
+    [Fact]
+    public void ApplyDirectoryNameRefresh_OverridesStaleDisplayName_WhenMatched_DirectoryWins()
+    {
+        // The real scenario: stub stored old name "Relocation", directory was renamed
+        // to "AFHSIR Relo Services". Same email (matched via primary SMTP).
+        var contacts = new List<SourceUser>
+        {
+            CreateContact(entraId: "stub", email: "relocation@atlantafinehomes.com",
+                bp: "555-0001", mp: null, display: "Relocation"),
+        };
+        var nameMap = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["relocation@atlantafinehomes.com"] = "AFHSIR Relo Services",
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryNameRefresh(contacts, nameMap);
+
+        Assert.Equal(1, matched);
+        Assert.Equal(0, unmatched);
+        Assert.Equal("AFHSIR Relo Services", contacts[0].DisplayName);
+    }
+
+    [Fact]
+    public void ApplyDirectoryNameRefresh_NeverBlanksName_WhenDirectoryDisplayNameEmpty()
+    {
+        // A directory entry with no display name must not wipe the stub's existing name.
+        var contacts = new List<SourceUser>
+        {
+            CreateContact(entraId: "stub", email: "a@x.com", bp: null, mp: null, display: "Existing Name"),
+        };
+        var nameMap = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["a@x.com"] = "   ",
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryNameRefresh(contacts, nameMap);
+
+        Assert.Equal(1, matched);
+        Assert.Equal(0, unmatched);
+        Assert.Equal("Existing Name", contacts[0].DisplayName);
+    }
+
+    [Fact]
+    public void ApplyDirectoryNameRefresh_LeavesUnmatchedContactsUnchanged()
+    {
+        var contacts = new List<SourceUser>
+        {
+            CreateContact(entraId: "stub", email: "unknown@x.com", bp: null, mp: null, display: "Keep Me"),
+            CreateContact(entraId: "noemail", email: null, bp: null, mp: null, display: "Also Keep"),
+        };
+        var nameMap = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["someone@x.com"] = "Directory Name",
+        };
+
+        var (matched, unmatched) = SourceResolver.ApplyDirectoryNameRefresh(contacts, nameMap);
+
+        Assert.Equal(0, matched);
+        Assert.Equal(2, unmatched);
+        Assert.Equal("Keep Me", contacts[0].DisplayName);
+        Assert.Equal("Also Keep", contacts[1].DisplayName);
+    }
+
+    // ==============================
     // BuildMailboxContactDedupKey Tests
     // ==============================
 
@@ -701,10 +798,12 @@ public class SourceResolverTests
         string entraId,
         string? email,
         string? bp,
-        string? mp) => new SourceUser
+        string? mp,
+        string? display = null) => new SourceUser
         {
             EntraId = entraId,
             Email = email,
+            DisplayName = display,
             BusinessPhone = bp,
             MobilePhone = mp,
             IsEnabled = true,

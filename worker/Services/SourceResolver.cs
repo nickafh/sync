@@ -422,6 +422,37 @@ public class SourceResolver : ISourceResolver
     }
 
     /// <summary>
+    /// Yields the lowercased, trimmed email keys a directory user should be indexed under:
+    /// <see cref="User.Mail"/> plus every <see cref="User.ProxyAddresses"/> entry with the
+    /// "smtp:"/"SMTP:" prefix stripped (case-insensitive, 5 chars). Empty/whitespace values
+    /// are skipped. Shared by the directory map builders so alias-matching stays consistent.
+    /// </summary>
+    private static IEnumerable<string> EnumerateEmailKeys(User user)
+    {
+        if (!string.IsNullOrWhiteSpace(user.Mail))
+            yield return user.Mail.Trim().ToLowerInvariant();
+
+        if (user.ProxyAddresses != null)
+        {
+            foreach (var proxy in user.ProxyAddresses)
+            {
+                if (string.IsNullOrWhiteSpace(proxy))
+                    continue;
+
+                // Strip "smtp:" / "SMTP:" prefix (case-insensitive, 5 chars)
+                var address = proxy.StartsWith("smtp:", StringComparison.OrdinalIgnoreCase)
+                    ? proxy[5..]
+                    : proxy;
+
+                if (string.IsNullOrWhiteSpace(address))
+                    continue;
+
+                yield return address.Trim().ToLowerInvariant();
+            }
+        }
+    }
+
+    /// <summary>
     /// Indexes directory users by lowercased email from both <see cref="User.Mail"/> and
     /// <see cref="User.ProxyAddresses"/> (with "smtp:"/"SMTP:" prefix stripped). Returns a
     /// case-insensitive dictionary mapping email -> (BusinessPhone, MobilePhone). Multiple keys
@@ -439,30 +470,9 @@ public class SourceResolver : ISourceResolver
         {
             var phones = (user.BusinessPhones?.FirstOrDefault(), user.MobilePhone);
 
-            if (!string.IsNullOrWhiteSpace(user.Mail))
+            foreach (var key in EnumerateEmailKeys(user))
             {
-                var key = user.Mail.Trim().ToLowerInvariant();
                 map[key] = phones;
-            }
-
-            if (user.ProxyAddresses != null)
-            {
-                foreach (var proxy in user.ProxyAddresses)
-                {
-                    if (string.IsNullOrWhiteSpace(proxy))
-                        continue;
-
-                    // Strip "smtp:" / "SMTP:" prefix (case-insensitive, 5 chars)
-                    var address = proxy.StartsWith("smtp:", StringComparison.OrdinalIgnoreCase)
-                        ? proxy[5..]
-                        : proxy;
-
-                    if (string.IsNullOrWhiteSpace(address))
-                        continue;
-
-                    var key = address.Trim().ToLowerInvariant();
-                    map[key] = phones;
-                }
             }
         }
 
@@ -488,31 +498,82 @@ public class SourceResolver : ISourceResolver
             if (string.IsNullOrWhiteSpace(user.Id))
                 continue;
 
-            if (!string.IsNullOrWhiteSpace(user.Mail))
+            foreach (var key in EnumerateEmailKeys(user))
             {
-                map[user.Mail.Trim().ToLowerInvariant()] = user.Id;
-            }
-
-            if (user.ProxyAddresses != null)
-            {
-                foreach (var proxy in user.ProxyAddresses)
-                {
-                    if (string.IsNullOrWhiteSpace(proxy))
-                        continue;
-
-                    var address = proxy.StartsWith("smtp:", StringComparison.OrdinalIgnoreCase)
-                        ? proxy[5..]
-                        : proxy;
-
-                    if (string.IsNullOrWhiteSpace(address))
-                        continue;
-
-                    map[address.Trim().ToLowerInvariant()] = user.Id;
-                }
+                map[key] = user.Id;
             }
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// Indexes directory users by lowercased email (from <see cref="User.Mail"/> and
+    /// <see cref="User.ProxyAddresses"/>) -> <see cref="User.DisplayName"/>. Mirrors
+    /// <see cref="BuildDirectoryPhoneMap"/>'s key-collection strategy: strips "smtp:"/"SMTP:"
+    /// prefix, case-insensitive, multiple keys per user. Used to refresh stale MailboxContact
+    /// stub names when the underlying directory object is renamed in Exchange (same email).
+    ///
+    /// Public for unit testability.
+    /// </summary>
+    public static Dictionary<string, string?> BuildDirectoryNameMap(IEnumerable<User> users)
+    {
+        var map = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var user in users)
+        {
+            var name = user.DisplayName;
+
+            foreach (var key in EnumerateEmailKeys(user))
+            {
+                map[key] = name;
+            }
+        }
+
+        return map;
+    }
+
+    /// <summary>
+    /// Mutates contacts in place: for each contact whose lowercased email is in the map AND the
+    /// directory display name is non-empty, overwrites <see cref="SourceUser.DisplayName"/> with
+    /// the directory value (directory-always-wins). MailboxContact stubs that point at a renamed
+    /// directory object keep the old stored name; this propagates the rename to phones. Never
+    /// blanks an existing name when the directory display name is null/whitespace.
+    ///
+    /// Returns (matchedCount, unmatchedCount).
+    /// Public for unit testability.
+    /// </summary>
+    public static (int Matched, int Unmatched) ApplyDirectoryNameRefresh(
+        List<SourceUser> contacts,
+        IReadOnlyDictionary<string, string?> nameMap)
+    {
+        int matched = 0;
+        int unmatched = 0;
+
+        foreach (var contact in contacts)
+        {
+            if (string.IsNullOrWhiteSpace(contact.Email))
+            {
+                unmatched++;
+                continue;
+            }
+
+            var key = contact.Email.Trim().ToLowerInvariant();
+            if (!nameMap.TryGetValue(key, out var directoryName))
+            {
+                unmatched++;
+                continue;
+            }
+
+            matched++;
+
+            if (!string.IsNullOrWhiteSpace(directoryName))
+            {
+                contact.DisplayName = directoryName;
+            }
+        }
+
+        return (matched, unmatched);
     }
 
     /// <summary>
@@ -634,7 +695,9 @@ public class SourceResolver : ISourceResolver
         CancellationToken ct)
     {
         var candidates = BuildEnrichmentCandidates(contacts);
-        if (candidates.Count == 0)
+        // Name refresh applies to every contact with an email (not just phone-empty
+        // candidates), so proceed whenever any contact carries an email to match on.
+        if (!contacts.Any(c => !string.IsNullOrWhiteSpace(c.Email)))
         {
             _logger.LogDebug("No MailboxContacts need directory enrichment for mailbox {Mailbox}", mailboxEmail);
             return;
@@ -653,7 +716,7 @@ public class SourceResolver : ISourceResolver
                 config.QueryParameters.Top = 999;
                 config.QueryParameters.Select =
                 [
-                    "id", "mail", "proxyAddresses", "businessPhones", "mobilePhone"
+                    "id", "mail", "proxyAddresses", "businessPhones", "mobilePhone", "displayName"
                 ];
             }, ct);
 
@@ -675,7 +738,7 @@ public class SourceResolver : ISourceResolver
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Directory enrichment fetch failed for mailbox {Mailbox} — skipping enrichment (contacts stay with current phone values)",
+                "Directory enrichment fetch failed for mailbox {Mailbox} — skipping enrichment (contacts stay with current values)",
                 mailboxEmail);
             return;
         }
@@ -684,10 +747,15 @@ public class SourceResolver : ISourceResolver
         var userIdMap = BuildDirectoryUserIdMap(allUsers);
         var (matched, unmatched) = ApplyDirectoryEnrichment(candidates, phoneMap, userIdMap);
 
+        // Refresh stale stub display names from the directory (directory-always-wins).
+        // Runs over all contacts — a stub can have phones yet a renamed name.
+        var nameMap = BuildDirectoryNameMap(allUsers);
+        var (nameMatched, _) = ApplyDirectoryNameRefresh(contacts, nameMap);
+
         var matchedUsers = candidates.Count(c => !string.IsNullOrWhiteSpace(c.MatchedUserEntraId));
         _logger.LogInformation(
-            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} candidates, {Matched} matched from directory, {Unmatched} unmatched, {MatchedUsers} matched to tenant user (will use linked user photo), {UserCount} tenant users scanned",
-            mailboxEmail, candidates.Count, matched, unmatched, matchedUsers, allUsers.Count);
+            "MailboxContacts directory enrichment for mailbox {Mailbox}: {Candidates} phone candidates, {Matched} matched from directory, {Unmatched} unmatched, {MatchedUsers} matched to tenant user (will use linked user photo), {NameMatched} names refreshed from directory, {UserCount} tenant users scanned",
+            mailboxEmail, candidates.Count, matched, unmatched, matchedUsers, nameMatched, allUsers.Count);
     }
 
     /// <summary>
