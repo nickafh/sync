@@ -1,7 +1,10 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# Use `npm install` (not `npm ci`): the lockfile is generated on macOS and can't fully
+# describe linux-only optional deps (rollup/vitest native bindings, @emnapi/*), which makes
+# the stricter `npm ci` fail here. `npm install` resolves the correct deps for this platform.
+RUN npm install --no-audit --no-fund
 
 FROM node:22-alpine AS builder
 WORKDIR /app
