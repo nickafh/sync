@@ -19,6 +19,10 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.5" />
     <PackageReference Include="Microsoft.Graph" Version="5.103.0" />
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.0" />
+    <!-- Pin to the version ExchangeOnlineManagement (loaded in-process by DDGResolver)
+         demands, so Connect-ExchangeOnline doesn't die on a System.IdentityModel.Tokens.Jwt
+         8.17.0.0 assembly-manifest mismatch (which breaks all Get-DynamicDistributionGroup). -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.17.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />

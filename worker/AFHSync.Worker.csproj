@@ -16,6 +16,11 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.5" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.5" />
     <PackageReference Include="Microsoft.Graph" Version="5.103.0" />
+    <!-- Pin to the version ExchangeOnlineManagement (loaded in-process by DDGResolver)
+         demands. Without this, the PowerShell SDK / Graph stack loads a different
+         System.IdentityModel.Tokens.Jwt first and Connect-ExchangeOnline dies with an
+         assembly-manifest mismatch (8.17.0.0), so every Get-DynamicDistributionGroup fails. -->
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.17.0" />
     <!-- 13.0.4 (was 13.0.3) per quick-260417-2lb: api ProjectReference brings in
          Microsoft.PowerShell.SDK which transitively requires Newtonsoft.Json 13.0.4. -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
