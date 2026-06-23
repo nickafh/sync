@@ -4,6 +4,7 @@ using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -55,9 +56,15 @@ public sealed class SyncEngine(
         SyncRun run;
         await using (var guardDb = await dbContextFactory.CreateDbContextAsync(ct))
         {
-            await using var tx = await guardDb.Database.BeginTransactionAsync(ct);
-            // Advisory lock key 1 = sync run start serialization
-            await guardDb.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1)", ct);
+            // Advisory lock key 1 = sync run start serialization. It's Postgres-specific and
+            // transaction-scoped, so skip it on non-relational providers (e.g. the in-memory
+            // provider used by unit tests) — mirrors the IsInMemory checks elsewhere.
+            IDbContextTransaction? tx = guardDb.Database.IsRelational()
+                ? await guardDb.Database.BeginTransactionAsync(ct)
+                : null;
+            await using var _tx = tx;
+            if (tx is not null)
+                await guardDb.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1)", ct);
 
             var alreadyRunning = await guardDb.SyncRuns
                 .AnyAsync(r => r.Status == SyncStatus.Running, ct);
@@ -95,7 +102,8 @@ public sealed class SyncEngine(
                 run = newRun;
             }
 
-            await tx.CommitAsync(ct);
+            if (tx is not null)
+                await tx.CommitAsync(ct);
         }
         logger.LogInformation(
             "SyncEngine starting RunId={RunId}, TunnelId={TunnelId}, IsDryRun={IsDryRun}",
@@ -490,6 +498,31 @@ public sealed class SyncEngine(
                     priorFailed + failed, priorRemoved + removed,
                     priorTunnelsProcessed, priorTunnelsWarned, priorTunnelsFailed,
                     priorPhotosUpdated, priorPhotosFailed);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A single mailbox's unexpected error (e.g. a DB write failure) must not abort the
+                // whole tunnel. Contain it as one failure for this mailbox and keep going, so one
+                // bad mailbox can't turn into "N failed" across every mailbox in the tunnel.
+                logger.LogError(ex,
+                    "Unhandled error processing mailbox {MailboxId} ({Email}) for tunnel {TunnelId}; counting as a single failure and continuing",
+                    mailbox.Id, mailbox.Email, tunnel.Id);
+
+                runLogger.AddItem(new SyncRunItem
+                {
+                    SyncRunId = run.Id,
+                    TunnelId = tunnel.Id,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    Action = "failed",
+                    ErrorMessage = $"Mailbox '{mailbox.Email}': {ex.Message}",
+                    CreatedAt = DateTime.UtcNow
+                });
+
+                lock (counterLock)
+                {
+                    failed += 1;
+                }
             }
             finally
             {

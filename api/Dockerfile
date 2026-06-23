@@ -7,15 +7,10 @@ COPY api/ api/
 COPY shared/ shared/
 RUN dotnet publish "api/AFHSync.Api.csproj" -c Release -o /app/publish
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libkrb5-3 curl wget apt-transport-https && \
-    wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb && \
-    dpkg -i /tmp/packages-microsoft-prod.deb && rm /tmp/packages-microsoft-prod.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends powershell && \
-    pwsh -c "Set-PSRepository PSGallery -InstallationPolicy Trusted; Install-Module ExchangeOnlineManagement -Force -AcceptLicense -Scope AllUsers" && \
-    rm -rf /var/lib/apt/lists/*
+# Runtime PowerShell + ExchangeOnlineManagement live in the shared afh-runtime-base
+# image (see base/Dockerfile), built once on the box. Bump the tag here + in
+# worker/Dockerfile + deploy.sh's BASE_IMAGE when you rebuild the base.
+FROM afh-runtime-base:1 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
 EXPOSE 8080

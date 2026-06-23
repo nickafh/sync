@@ -97,6 +97,36 @@ public class FilterConverterTests
         Assert.Contains("SomeUnknownAttr", result.Warning);
     }
 
+    // Test 9: Exchange auto-appends a GAL-visibility clause to most DDG RecipientFilters.
+    // 'HiddenFromAddressListsEnabled' is not a Graph user property; passing it through makes
+    // Graph 400, collapsing the DDG to ZERO members. It must be stripped so the remaining
+    // filter is valid and the DDG resolves its real members.
+    [Fact]
+    public void Convert_StripsHiddenFromAddressListsEnabledClause_QuotedBoolean()
+    {
+        var result = _converter.Convert(
+            "((Office -eq 'Blue Ridge') -and (CustomAttribute3 -eq 'Staff')) -and (HiddenFromAddressListsEnabled -eq 'False')");
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain("HiddenFromAddressListsEnabled", result.Filter);
+        Assert.Contains("officeLocation eq 'Blue Ridge'", result.Filter);
+        Assert.Contains("onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'", result.Filter);
+        Assert.Null(result.Warning);
+    }
+
+    // Test 10: same clause in PowerShell $false form (some DDGs render it this way).
+    [Fact]
+    public void Convert_StripsHiddenFromAddressListsEnabledClause_DollarBoolean()
+    {
+        var result = _converter.Convert(
+            "(Office -eq 'Sandy Springs') -and (HiddenFromAddressListsEnabled -eq $false)");
+
+        Assert.True(result.Success);
+        Assert.DoesNotContain("HiddenFromAddressListsEnabled", result.Filter);
+        Assert.Contains("officeLocation eq 'Sandy Springs'", result.Filter);
+        Assert.Null(result.Warning);
+    }
+
     // Test 9: Empty/null input returns failure
     [Theory]
     [InlineData(null)]

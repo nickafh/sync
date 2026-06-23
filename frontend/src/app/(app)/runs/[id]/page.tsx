@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
+import { SyncErrorGroups, summarizeErrorCounts } from '@/components/SyncErrorGroups';
 import { Search, ClipboardList } from 'lucide-react';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { SyncRunItemDto } from '@/types/sync-run';
@@ -280,10 +281,8 @@ export default function RunDetailPage() {
           {run.errorSummary && (
             <>
               <Separator className="my-4" />
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <h4 className="text-red-700 font-bold text-sm">Error Summary</h4>
-                <p className="text-red-600 text-sm mt-1">{run.errorSummary}</p>
-              </div>
+              <h4 className="font-bold text-sm">Error Summary</h4>
+              <SyncErrorGroups errors={[run.errorSummary]} />
             </>
           )}
         </CardContent>
@@ -297,15 +296,24 @@ export default function RunDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {run.tunnelSummaries.map((ts, idx) => (
+              {run.tunnelSummaries.map((ts, idx) => {
+                const { failed, autoSkipped } = summarizeErrorCounts(ts.errors);
+                return (
                 <div key={ts.tunnelId ?? idx}>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <h4 className="font-medium text-sm">{ts.tunnelName}</h4>
-                    {ts.contactsFailed > 0 && (
-                      <span className="text-xs text-red-600 font-medium">
-                        {ts.contactsFailed} failed
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {failed > 0 && (
+                        <span className="text-xs text-red-600 font-medium">
+                          {failed} failed
+                        </span>
+                      )}
+                      {autoSkipped > 0 && (
+                        <span className="text-xs text-amber-600 font-medium">
+                          {autoSkipped} auto-skipped
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mt-2">
                     <div className="text-center">
@@ -326,7 +334,7 @@ export default function RunDetailPage() {
                     </div>
                     <div className="text-center">
                       <p className="text-xs text-text-muted">Failed</p>
-                      <p className={`text-sm font-medium ${ts.contactsFailed > 0 ? 'text-red-600' : ''}`}>
+                      <p className={`text-sm font-medium ${failed > 0 ? 'text-red-600' : autoSkipped > 0 ? 'text-amber-600' : ''}`}>
                         {ts.contactsFailed}
                       </p>
                     </div>
@@ -335,26 +343,13 @@ export default function RunDetailPage() {
                       <p className="text-sm font-medium">{ts.photosUpdated}</p>
                     </div>
                   </div>
-                  {ts.errors.length > 0 && (
-                    <div className="mt-2 bg-red-50 border border-red-200 rounded-lg p-3">
-                      <p className="text-xs font-medium text-red-700 mb-1">Errors:</p>
-                      <ul className="text-xs text-red-600 space-y-1">
-                        {ts.errors.slice(0, 5).map((err, errIdx) => (
-                          <li key={errIdx}>{err}</li>
-                        ))}
-                        {ts.errors.length > 5 && (
-                          <li className="text-red-400">
-                            ...and {ts.errors.length - 5} more
-                          </li>
-                        )}
-                      </ul>
-                    </div>
-                  )}
+                  <SyncErrorGroups errors={ts.errors} />
                   {idx < run.tunnelSummaries.length - 1 && (
                     <Separator className="mt-4" />
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>

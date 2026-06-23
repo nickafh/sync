@@ -1,0 +1,10 @@
+# Frontend build context (compose context is ./frontend; the builder does COPY . .).
+# node_modules comes from the deps stage — never copy the host's over it.
+node_modules
+.next
+.git
+.gitignore
+npm-debug.log*
+Dockerfile
+.dockerignore
+README.md

@@ -91,6 +91,19 @@ public class FilterConverter : IFilterConverter
             filter = Regex.Replace(filter,
                 @"\(?\s*RecipientType\s+-eq\s+'[^']*'\)?\s*-and\s+",
                 string.Empty, RegexOptions.IgnoreCase);
+            // Strip Exchange's GAL-visibility clause. Exchange auto-appends
+            // "-and (HiddenFromAddressListsEnabled -eq 'False')" (or '$false') to most DDG
+            // RecipientFilters. It is NOT a Graph user property, so passing it through makes
+            // Graph 400 and the DDG resolves to ZERO members. GAL-hidden filtering already
+            // happens client-side in SourceResolver, so dropping it lets the DDG resolve its
+            // real members. Trailing form: "... -and (HiddenFromAddressListsEnabled -eq 'False')"
+            filter = Regex.Replace(filter,
+                @"\s*-and\s+\(?\s*HiddenFromAddressListsEnabled\s+-eq\s+'?\$?(?:false|true)'?\s*\)?",
+                string.Empty, RegexOptions.IgnoreCase);
+            // Leading form: "(HiddenFromAddressListsEnabled -eq 'False') -and ..."
+            filter = Regex.Replace(filter,
+                @"\(?\s*HiddenFromAddressListsEnabled\s+-eq\s+'?\$?(?:false|true)'?\s*\)?\s*-and\s+",
+                string.Empty, RegexOptions.IgnoreCase);
 
             // Clean up redundant nested parentheses
             // Repeatedly collapse ((x)) to (x)

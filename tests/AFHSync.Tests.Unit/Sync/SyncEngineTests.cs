@@ -3,6 +3,7 @@ using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Worker.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -22,6 +23,9 @@ public class SyncEngineTests
     {
         var options = new DbContextOptionsBuilder<AFHSyncDbContext>()
             .UseInMemoryDatabase(dbName)
+            // The in-memory provider can't honor the transactions SyncEngine uses; ignore the
+            // warning (test-only) instead of letting EF escalate it to an exception.
+            .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
         return new AFHSyncDbContext(options);
     }
@@ -43,7 +47,7 @@ public class SyncEngineTests
         FakeContactPayloadBuilder? payloadBuilder = null,
         FakeContactWriter? contactWriter = null,
         FakeContactFolderManager? folderManager = null,
-        FakeStaleContactHandler? staleHandler = null,
+        IStaleContactHandler? staleHandler = null,
         FakeRunLogger? runLogger = null,
         ThrottleCounter? throttleCounter = null,
         FakePhotoSyncService? photoSyncService = null)
@@ -78,9 +82,10 @@ public class SyncEngineTests
         // Act
         var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
 
-        // Assert: run created and finalized
+        // Assert: run created (persisted by the advisory-lock guard, not via runLogger) and finalized
         Assert.NotNull(run);
-        Assert.True(runLogger.WasCreated);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.True(await verifyCtx.SyncRuns.AnyAsync());
         Assert.True(runLogger.WasFinalized);
     }
 
@@ -429,6 +434,45 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Test 12: one mailbox's unhandled error must not abort the whole tunnel
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_OneMailboxThrows_ContainsFailureWithoutAbortingTunnel()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using var seedCtx = MakeDbContext(dbName);
+        var tunnel = new Tunnel { Id = 1, Name = "Resilient", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+        var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+        var mb1 = new TargetMailbox { Id = 1, EntraId = "e1", Email = "a@contoso.com", IsActive = true };
+        var mb2 = new TargetMailbox { Id = 2, EntraId = "e2", Email = "b@contoso.com", IsActive = true };
+        var tpl = new TunnelPhoneList { TunnelId = 1, PhoneListId = 1, Tunnel = tunnel, PhoneList = phoneList };
+        tunnel.TunnelPhoneLists.Add(tpl);
+        seedCtx.Tunnels.Add(tunnel);
+        seedCtx.PhoneLists.Add(phoneList);
+        seedCtx.TargetMailboxes.AddRange(mb1, mb2);
+        seedCtx.TunnelPhoneLists.Add(tpl);
+        await seedCtx.SaveChangesAsync();
+
+        var sourceUsers = new List<SourceUser> { new() { Id = 1, EntraId = "u1", DisplayName = "Alice" } };
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(
+            dbName,
+            sourceResolver: new FakeSourceResolver(sourceUsers),
+            staleHandler: new ThrowingStaleContactHandler(),
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        // Each mailbox's error is contained as that mailbox's single failure; the tunnel
+        // completes (not marked failed), so a single bad mailbox can't nuke the run.
+        Assert.True(runLogger.WasFinalized);
+        Assert.Equal(0, runLogger.FinalizedTunnelsFailed);
+        Assert.Equal(2, runLogger.FinalizedFailed);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -570,6 +614,8 @@ public class SyncEngineTests
         public int FinalizedCreated { get; private set; }
         public int FinalizedUpdated { get; private set; }
         public int FinalizedSkipped { get; private set; }
+        public int FinalizedFailed { get; private set; }
+        public int FinalizedTunnelsFailed { get; private set; }
         public int FinalizedThrottleEvents { get; private set; }
 
         private int _nextRunId = 1;
@@ -603,8 +649,20 @@ public class SyncEngineTests
             FinalizedCreated = contactsCreated;
             FinalizedUpdated = contactsUpdated;
             FinalizedSkipped = contactsSkipped;
+            FinalizedFailed = contactsFailed;
+            FinalizedTunnelsFailed = tunnelsFailed;
             FinalizedThrottleEvents = throttleEvents;
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>Stale handler that always throws — simulates an unexpected error in the
+    /// post-folder region of ProcessMailboxAsync (e.g. a DB write failure).</summary>
+    private sealed class ThrowingStaleContactHandler : IStaleContactHandler
+    {
+        public Task<StaleResult> HandleStaleAsync(
+            Tunnel tunnel, int phoneListId, int targetMailboxId,
+            string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
+            => throw new InvalidOperationException("simulated mailbox-level failure");
     }
 }

@@ -111,7 +111,8 @@ public class ContactWriterTests
         Assert.Equal("Buckhead", contact.Department);
         Assert.Equal("Buckhead", contact.OfficeLocation);
         Assert.Equal("+1 404-555-9999", contact.MobilePhone);
-        Assert.Equal("Test notes", contact.PersonalNotes);
+        // PersonalNotes is prefixed with the office line (iOS has no dedicated office field).
+        Assert.Equal("Office: Buckhead\nTest notes", contact.PersonalNotes);
     }
 
     // ── Test 6: Missing fields do not set properties (no exceptions) ──────────

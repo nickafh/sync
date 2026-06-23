@@ -29,7 +29,12 @@ public class ContactSyncStateConfiguration : IEntityTypeConfiguration<ContactSyn
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
 
-        builder.HasIndex(e => new { e.SourceUserId, e.PhoneListId, e.TargetMailboxId }).IsUnique();
+        // Unique per (source, phone list, mailbox, TUNNEL). TunnelId is part of the key because
+        // each tunnel writes contacts to its own folder (folder name = tunnel.Name) and tracks
+        // them with its own ContactSyncState row. Without TunnelId, two tunnels that share a
+        // phone list and target the same mailbox collide on insert (Postgres 23505), and the
+        // unhandled error aborts the whole tunnel. See idx_contact_sync_state_composite below.
+        builder.HasIndex(e => new { e.SourceUserId, e.PhoneListId, e.TargetMailboxId, e.TunnelId }).IsUnique();
 
         builder.HasOne(e => e.SourceUser)
             .WithMany()
@@ -55,7 +60,7 @@ public class ContactSyncStateConfiguration : IEntityTypeConfiguration<ContactSyn
         builder.HasIndex(e => e.TargetMailboxId).HasDatabaseName("idx_contact_sync_state_target");
         builder.HasIndex(e => e.PhoneListId).HasDatabaseName("idx_contact_sync_state_list");
         builder.HasIndex(e => e.IsStale).HasDatabaseName("idx_contact_sync_state_stale").HasFilter("is_stale = TRUE");
-        builder.HasIndex(e => new { e.SourceUserId, e.PhoneListId, e.TargetMailboxId }).HasDatabaseName("idx_contact_sync_state_composite");
+        builder.HasIndex(e => new { e.SourceUserId, e.PhoneListId, e.TargetMailboxId, e.TunnelId }).HasDatabaseName("idx_contact_sync_state_composite");
 
         // Hot-path index for ProcessMailboxAsync: loads all sync state for a tunnel+mailbox
         // filtered by phone list IDs. Covers the WHERE clause exactly.

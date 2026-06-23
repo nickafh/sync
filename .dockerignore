@@ -1,0 +1,20 @@
+# Build context for api + worker images (compose context is repo root).
+# Keep this lean: the Dockerfiles use selective COPYs, but bin/obj/.git would
+# otherwise ride along in `COPY worker/ worker/` etc. and bust the build cache.
+.git
+.gitignore
+.github
+**/bin
+**/obj
+**/node_modules
+frontend/.next
+frontend/node_modules
+.planning
+.vscode
+.idea
+*.md
+**/*.md
+# Secrets / runtime-only assets (mounted as volumes, never built in)
+*.pfx
+.env
+.env.*
