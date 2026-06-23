@@ -113,11 +113,15 @@ public sealed class StaleContactHandler(
 
             foreach (var (key, graphContactId, state) in pendingDeletes)
             {
-                if (batchResults.TryGetValue(key, out var result) && result.Success)
+                // A 404 (NotFound) means the contact is already gone — that's exactly the goal of
+                // removal, so treat it as success and clear the stale state. Otherwise the row
+                // lingers and 404s on every future run.
+                if (batchResults.TryGetValue(key, out var result) && (result.Success || result.NotFound))
                 {
                     logger.LogInformation(
-                        "{Policy}: deleted contact {GraphContactId} for SourceUserId={SourceUserId} in mailbox {MailboxId}",
-                        tunnel.StalePolicy, graphContactId, state.SourceUserId, targetMailboxId);
+                        "{Policy}: {Outcome} contact {GraphContactId} for SourceUserId={SourceUserId} in mailbox {MailboxId}",
+                        tunnel.StalePolicy, result.NotFound ? "cleared already-deleted" : "deleted",
+                        graphContactId, state.SourceUserId, targetMailboxId);
                     db.ContactSyncStates.Remove(state);
                     removed++;
                 }

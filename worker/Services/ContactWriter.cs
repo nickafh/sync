@@ -261,7 +261,10 @@ public class ContactWriter : IContactWriter
                 _logger.LogWarning(
                     "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
                     stepId, key, (int)statusCode);
-                results[key] = new BatchOperationResult(false, Error: $"HTTP {(int)statusCode}");
+                results[key] = new BatchOperationResult(
+                    false,
+                    Error: $"HTTP {(int)statusCode}",
+                    NotFound: (int)statusCode == 404);
             }
         }
     }

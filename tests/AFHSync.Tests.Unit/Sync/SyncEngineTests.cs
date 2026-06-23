@@ -473,6 +473,54 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Test 13: a 404 on update means the contact was deleted on the device — self-heal
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_UpdateReturns404_ClearsDeadStateForRecreate_NotCountedFailed()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using var seedCtx = MakeDbContext(dbName);
+        var tunnel = new Tunnel { Id = 1, Name = "T", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+        var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+        var mailbox = new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true };
+        var tpl = new TunnelPhoneList { TunnelId = 1, PhoneListId = 1, Tunnel = tunnel, PhoneList = phoneList };
+        tunnel.TunnelPhoneLists.Add(tpl);
+        seedCtx.Tunnels.Add(tunnel);
+        seedCtx.PhoneLists.Add(phoneList);
+        seedCtx.TargetMailboxes.Add(mailbox);
+        seedCtx.TunnelPhoneLists.Add(tpl);
+        // Existing state with an OLD hash → FakeContactPayloadBuilder returns "new-hash", so this
+        // classifies as an UPDATE. The contact, however, was deleted on the device → update 404s.
+        seedCtx.ContactSyncStates.Add(new ContactSyncState
+        {
+            Id = 1,
+            SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1,
+            GraphContactId = "gone-contact", DataHash = "old-hash",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var sourceUsers = new List<SourceUser> { new() { Id = 1, EntraId = "u1", DisplayName = "Alice" } };
+        var writer = new FakeContactWriter { UpdateReturnsNotFound = true };
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(
+            dbName,
+            sourceResolver: new FakeSourceResolver(sourceUsers),
+            contactWriter: writer,
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        // A 404 means the contact is gone; clear the dead state so it recreates next run, and
+        // don't count it as a permanent failure (it would 404 forever otherwise).
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        using var verifyCtx = MakeDbContext(dbName);
+        Assert.Empty(await verifyCtx.ContactSyncStates.Where(s => s.GraphContactId == "gone-contact").ToListAsync());
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -508,6 +556,9 @@ public class SyncEngineTests
         public List<string> CreatedContactIds { get; } = [];
         public List<string> UpdatedContactIds { get; } = [];
         public List<string> DeletedContactIds { get; } = [];
+
+        /// <summary>When true, batch updates return a 404 NotFound (contact deleted on the device).</summary>
+        public bool UpdateReturnsNotFound { get; init; }
 
         public Task<string> CreateContactAsync(string mailboxEntraId, string folderId, SortedDictionary<string, string> payload, CancellationToken ct)
         {
@@ -550,7 +601,9 @@ public class SyncEngineTests
             foreach (var (key, graphContactId, _) in operations)
             {
                 UpdatedContactIds.Add(graphContactId);
-                results[key] = new BatchOperationResult(true);
+                results[key] = UpdateReturnsNotFound
+                    ? new BatchOperationResult(false, Error: "HTTP 404", NotFound: true)
+                    : new BatchOperationResult(true);
             }
             return Task.FromResult(results);
         }

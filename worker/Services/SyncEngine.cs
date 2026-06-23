@@ -743,6 +743,9 @@ public sealed class SyncEngine(
         // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
         var statesToAdd = new List<ContactSyncState>();
         var statesToUpdate = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
+        // Sync-state IDs whose contact 404'd on update (deleted on the device). We drop the dead
+        // state row here so the next run recreates the contact, instead of failing forever.
+        var statesToHeal = new List<int>();
 
         if (!isDryRun && pendingCreates.Count > 0)
         {
@@ -866,6 +869,28 @@ public sealed class SyncEngine(
                     });
                     updated++;
                 }
+                else if (result is { NotFound: true })
+                {
+                    // The contact was deleted on the device. Drop the dead sync-state so it
+                    // recreates next run, rather than 404'ing on every future update.
+                    logger.LogInformation(
+                        "Contact gone (404) for SourceUserId={SourceUserId} in mailbox {MailboxId}; clearing state to recreate next run",
+                        pending.sourceUserId, mailbox.Id);
+
+                    statesToHeal.Add(pending.stateId);
+
+                    runLogger.AddItem(new SyncRunItem
+                    {
+                        SyncRunId = run.Id,
+                        TunnelId = tunnel.Id,
+                        PhoneListId = canonicalPhoneList.Id,
+                        TargetMailboxId = mailbox.Id,
+                        SourceUserId = pending.sourceUserId,
+                        Action = "removed",
+                        CreatedAt = DateTime.UtcNow
+                    });
+                    removed++;
+                }
                 else
                 {
                     var error = result?.Error ?? "No batch result returned";
@@ -915,13 +940,22 @@ public sealed class SyncEngine(
         // (ProcessTunnelAsync caller) which has access to the overall totals.
 
         // Save new/updated ContactSyncState records using a fresh tracked context.
-        if (statesToAdd.Count > 0 || statesToUpdate.Count > 0)
+        if (statesToAdd.Count > 0 || statesToUpdate.Count > 0 || statesToHeal.Count > 0)
         {
             await using var writeDb = await dbContextFactory.CreateDbContextAsync(ct);
 
             if (statesToAdd.Count > 0)
             {
                 writeDb.ContactSyncStates.AddRange(statesToAdd);
+            }
+
+            if (statesToHeal.Count > 0)
+            {
+                // Contact 404'd on update — drop the dead state so the next run recreates it.
+                var healStates = await writeDb.ContactSyncStates
+                    .Where(s => statesToHeal.Contains(s.Id))
+                    .ToListAsync(ct);
+                writeDb.ContactSyncStates.RemoveRange(healStates);
             }
 
             if (statesToUpdate.Count > 0)

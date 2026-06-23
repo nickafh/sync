@@ -6,7 +6,8 @@ namespace AFHSync.Worker.Services;
 public record BatchOperationResult(
     bool Success,
     string? GraphContactId = null,
-    string? Error = null);
+    string? Error = null,
+    bool NotFound = false);
 
 /// <summary>
 /// Writes contacts to a target mailbox's contact folder via Microsoft Graph.

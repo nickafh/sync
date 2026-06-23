@@ -132,6 +132,44 @@ public class StaleContactHandlerTests
     }
 
     // ==============================
+    // Test 2b: a 404 on delete means the contact is already gone — self-heal
+    // ==============================
+
+    [Fact]
+    public async Task HandleStaleAsync_AutoRemove_DeleteReturns404_StillRemovesStateAndCountsRemoved()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        seedCtx.ContactSyncStates.Add(
+            new ContactSyncState
+            {
+                Id = 1,
+                SourceUserId = 99,
+                TunnelId = 1,
+                PhoneListId = 1,
+                TargetMailboxId = 1,
+                GraphContactId = "already-deleted-on-phone",
+                IsStale = false
+            }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var writer = new FakeContactWriter { DeleteReturnsNotFound = true };
+        var factory = CreateFactory(dbName);
+        var handler = new StaleContactHandler(factory, writer, NullLogger<StaleContactHandler>.Instance);
+
+        var tunnel = CreateTunnel(1, StalePolicy.AutoRemove);
+
+        var result = await handler.HandleStaleAsync(tunnel, phoneListId: 1, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: new HashSet<int>(), ct: CancellationToken.None);
+
+        // The contact is already gone — that's the goal of removal, so count it removed and
+        // clear the stale state instead of leaving a row that 404s forever.
+        Assert.Equal(1, result.Removed);
+        using var verifyCtx = MakeDbContext(dbName);
+        Assert.Empty(await verifyCtx.ContactSyncStates.ToListAsync());
+    }
+
+    // ==============================
     // Test 3: FlagHold sets IsStale=true on first detection
     // ==============================
 
@@ -344,6 +382,9 @@ public class StaleContactHandlerTests
         public List<string> CreatedContactIds { get; } = [];
         public List<string> UpdatedContactIds { get; } = [];
 
+        /// <summary>When true, batch deletes return a 404 NotFound result (contact already gone).</summary>
+        public bool DeleteReturnsNotFound { get; init; }
+
         public Task<string> CreateContactAsync(string mailboxEntraId, string folderId, SortedDictionary<string, string> payload, CancellationToken ct)
         {
             var id = Guid.NewGuid().ToString();
@@ -398,7 +439,9 @@ public class StaleContactHandlerTests
             foreach (var (key, graphContactId) in operations)
             {
                 DeletedContactIds.Add(graphContactId);
-                results[key] = new BatchOperationResult(true);
+                results[key] = DeleteReturnsNotFound
+                    ? new BatchOperationResult(false, Error: "HTTP 404", NotFound: true)
+                    : new BatchOperationResult(true);
             }
             return Task.FromResult(results);
         }
