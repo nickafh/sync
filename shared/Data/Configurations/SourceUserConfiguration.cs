@@ -30,6 +30,7 @@ public class SourceUserConfiguration : IEntityTypeConfiguration<SourceUser>
         builder.Property(e => e.Country).HasColumnName("country").HasMaxLength(100);
         builder.Property(e => e.Notes).HasColumnName("notes");
         builder.Property(e => e.PhotoHash).HasColumnName("photo_hash").HasMaxLength(64);
+        builder.Property(e => e.PhotoCheckedAt).HasColumnName("photo_checked_at");
         builder.Property(e => e.ExtensionAttr1).HasColumnName("extension_attr_1").HasMaxLength(200);
         builder.Property(e => e.ExtensionAttr2).HasColumnName("extension_attr_2").HasMaxLength(200);
         builder.Property(e => e.ExtensionAttr3).HasColumnName("extension_attr_3").HasMaxLength(200);

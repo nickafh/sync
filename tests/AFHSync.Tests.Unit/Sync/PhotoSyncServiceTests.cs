@@ -321,10 +321,12 @@ public class PhotoSyncServiceTests
         using var seedCtx = MakeDbContext(dbName);
         SeedDefaultFieldProfile(seedCtx);
 
-        // Source user had a photo before but now returns null from Graph
+        // Source user had a photo before (verified over a week ago, so the fetch-skip
+        // window has lapsed) but now returns null from Graph
         var sourceUser = new SourceUser
         {
-            Id = 1, EntraId = "user-1", DisplayName = "Alice", PhotoHash = "old-hash"
+            Id = 1, EntraId = "user-1", DisplayName = "Alice", PhotoHash = "old-hash",
+            PhotoCheckedAt = DateTime.UtcNow.AddDays(-8)
         };
         seedCtx.SourceUsers.Add(sourceUser);
 
@@ -445,6 +447,199 @@ public class PhotoSyncServiceTests
     }
 
     // ==============================
+    // Test 12: RunAllAsync routes MailboxContact photo fetch via the matched user
+    // ==============================
+
+    [Fact]
+    public async Task RunAllAsync_RoutesMailboxContactPhotoFetch_ViaMatchedUser()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var photoBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 };
+
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+
+        seedCtx.AppSettings.Add(new AppSetting
+        {
+            Id = 100, Key = "photo_sync_mode", Value = "separate_pass",
+            Description = "Test", UpdatedAt = DateTime.UtcNow
+        });
+
+        seedCtx.Tunnels.Add(new Tunnel
+        {
+            Id = 1, Name = "Test Tunnel", Status = TunnelStatus.Active,
+            PhotoSyncEnabled = true, FieldProfileId = 1
+        });
+        seedCtx.TunnelSources.Add(new TunnelSource
+        {
+            Id = 1, TunnelId = 1, SourceType = SourceType.MailboxContacts,
+            SourceIdentifier = "phone-contacts@test.com", CreatedAt = DateTime.UtcNow
+        });
+
+        // Stub contact from the shared mailbox: EntraId is an Exchange item ID
+        // (not a directory object), but enrichment matched it to a tenant user.
+        seedCtx.SourceUsers.Add(new SourceUser
+        {
+            Id = 1, EntraId = "exchange-item-id-1", DisplayName = "OTTO",
+            MailboxType = "MailboxContact", MatchedUserEntraId = "matched-user-guid"
+        });
+
+        seedCtx.TargetMailboxes.Add(new TargetMailbox
+        {
+            Id = 1, EntraId = "mbx-1", Email = "mbx@test.com", IsActive = true
+        });
+        seedCtx.ContactSyncStates.Add(new ContactSyncState
+        {
+            Id = 1, SourceUserId = 1, PhoneListId = 1, TargetMailboxId = 1,
+            TunnelId = 1, GraphContactId = "contact-1", PhotoHash = null,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        // The photo exists ONLY under the matched user's directory ID. Fetching with
+        // the Exchange item ID (the bug) finds nothing and writes nothing.
+        var testable = CreateTestableService(dbName);
+        testable.SetPhoto("matched-user-guid", photoBytes);
+
+        await testable.Service.RunAllAsync(RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Contains("matched-user-guid", testable.Service.FetchedUserEntraIds);
+        Assert.Equal(1, testable.PhotoPutCount);
+    }
+
+    // ==============================
+    // Test 13: SyncPhotosForTunnelAsync flushes run items mid-run so the UI shows live progress
+    // ==============================
+
+    [Fact]
+    public async Task SyncPhotosForTunnelAsync_FlushesRunItemsDuringRun()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var photoBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 };
+
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+
+        var sourceUser = new SourceUser { Id = 1, EntraId = "user-1", DisplayName = "Alice" };
+        seedCtx.SourceUsers.Add(sourceUser);
+
+        var mailbox = new TargetMailbox { Id = 1, EntraId = "mbx-1", Email = "mbx@test.com", IsActive = true };
+        seedCtx.TargetMailboxes.Add(mailbox);
+        seedCtx.ContactSyncStates.Add(new ContactSyncState
+        {
+            Id = 1, SourceUserId = 1, PhoneListId = 1, TargetMailboxId = 1,
+            TunnelId = 1, GraphContactId = "contact-1", PhotoHash = null,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var tunnel = CreateTunnelWithDefaultProfile(seedCtx);
+        var run = new SyncRun { Id = 1, Status = SyncStatus.Running };
+
+        var testable = CreateTestableService(dbName);
+        testable.SetPhoto("user-1", photoBytes);
+
+        await testable.Service.SyncPhotosForTunnelAsync(
+            tunnel, run, new List<SourceUser> { sourceUser }, isDryRun: false, CancellationToken.None);
+
+        // The run detail page derives its per-tunnel photo breakdown and item feed from
+        // persisted sync_run_items — a photo write must flush during the pass, not only
+        // at RunAllAsync's end-of-run flush.
+        Assert.True(testable.RunLogger.FlushCount >= 1,
+            $"Expected at least one mid-run item flush, got {testable.RunLogger.FlushCount}");
+    }
+
+    // ==============================
+    // Test 15: dry run must not persist state photo hashes (would suppress real writes)
+    // ==============================
+
+    [Fact]
+    public async Task SyncPhotosForTunnelAsync_DryRun_DoesNotPersistStatePhotoHash()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var photoBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 };
+
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+
+        var sourceUser = new SourceUser { Id = 1, EntraId = "user-1", DisplayName = "Alice" };
+        seedCtx.SourceUsers.Add(sourceUser);
+
+        var mailbox = new TargetMailbox { Id = 1, EntraId = "mbx-1", Email = "mbx@test.com", IsActive = true };
+        seedCtx.TargetMailboxes.Add(mailbox);
+        seedCtx.ContactSyncStates.Add(new ContactSyncState
+        {
+            Id = 1, SourceUserId = 1, PhoneListId = 1, TargetMailboxId = 1,
+            TunnelId = 1, GraphContactId = "contact-1", PhotoHash = null,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var tunnel = CreateTunnelWithDefaultProfile(seedCtx);
+        var run = new SyncRun { Id = 1, Status = SyncStatus.Running };
+
+        var testable = CreateTestableService(dbName);
+        testable.SetPhoto("user-1", photoBytes);
+
+        await testable.Service.SyncPhotosForTunnelAsync(
+            tunnel, run, new List<SourceUser> { sourceUser }, isDryRun: true, CancellationToken.None);
+
+        // A dry run must leave the state untouched — persisting the hash here would make
+        // the next real run believe the photo was already written and skip it.
+        using var verifyCtx = MakeDbContext(dbName);
+        var state = await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 1);
+        Assert.Null(state.PhotoHash);
+    }
+
+    // ==============================
+    // Test 14: fetch-skip optimization holds while the photo was verified recently
+    // ==============================
+
+    [Fact]
+    public async Task SyncPhotosForTunnelAsync_SkipsFetch_WhenPhotoRecentlyVerified()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var photoBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 };
+        var photoHash = PhotoSyncService.ComputePhotoHash(photoBytes);
+
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+
+        // Steady state: source hash matches the synced state hash and the photo
+        // was verified within the recheck window — no Graph fetch should happen.
+        var sourceUser = new SourceUser
+        {
+            Id = 1, EntraId = "user-1", DisplayName = "Alice", PhotoHash = photoHash,
+            PhotoCheckedAt = DateTime.UtcNow.AddHours(-1)
+        };
+        seedCtx.SourceUsers.Add(sourceUser);
+
+        var mailbox = new TargetMailbox { Id = 1, EntraId = "mbx-1", Email = "mbx@test.com", IsActive = true };
+        seedCtx.TargetMailboxes.Add(mailbox);
+        seedCtx.ContactSyncStates.Add(new ContactSyncState
+        {
+            Id = 1, SourceUserId = 1, PhoneListId = 1, TargetMailboxId = 1,
+            TunnelId = 1, GraphContactId = "contact-1", PhotoHash = photoHash,
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var tunnel = CreateTunnelWithDefaultProfile(seedCtx);
+        var run = new SyncRun { Id = 1, Status = SyncStatus.Running };
+
+        var testable = CreateTestableService(dbName);
+        testable.SetPhoto("user-1", photoBytes);
+
+        var (updated, failed) = await testable.Service.SyncPhotosForTunnelAsync(
+            tunnel, run, new List<SourceUser> { sourceUser }, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(0, updated);
+        Assert.Equal(0, failed);
+        Assert.Equal(0, testable.PhotoFetchCount);
+        Assert.Equal(0, testable.PhotoPutCount);
+    }
+
+    // ==============================
     // Test helpers
     // ==============================
 
@@ -513,6 +708,7 @@ public class PhotoSyncServiceTests
         public int PhotoFetchCount { get; private set; }
         public int PhotoPutCount { get; private set; }
         public bool FailPuts { get; set; }
+        public List<string> FetchedUserEntraIds { get; } = [];
 
         public TestablePhotoSyncService(
             IDbContextFactory<AFHSyncDbContext> dbContextFactory,
@@ -529,6 +725,7 @@ public class PhotoSyncServiceTests
         protected override Task<(byte[]? bytes, bool wasNotFound)> FetchUserPhotoAsync(string entraId, CancellationToken ct)
         {
             PhotoFetchCount++;
+            FetchedUserEntraIds.Add(entraId);
             if (_photos.TryGetValue(entraId, out var bytes))
                 return Task.FromResult<(byte[]? bytes, bool wasNotFound)>((bytes, false));
             return Task.FromResult<(byte[]? bytes, bool wasNotFound)>((null, true));
@@ -558,6 +755,7 @@ public class PhotoSyncServiceTests
     {
         public bool WasCreated { get; private set; }
         public bool WasFinalized { get; private set; }
+        public int FlushCount { get; private set; }
         public List<SyncRunItem> AddedItems { get; } = [];
 
         private int _nextRunId = 1;
@@ -578,7 +776,12 @@ public class PhotoSyncServiceTests
         }
 
         public void AddItem(SyncRunItem item) => AddedItems.Add(item);
-        public Task FlushItemsAsync(CancellationToken ct) => Task.CompletedTask;
+
+        public Task FlushItemsAsync(CancellationToken ct)
+        {
+            FlushCount++;
+            return Task.CompletedTask;
+        }
 
         public Task FinalizeRunAsync(
             SyncRun run, SyncStatus status, string? errorSummary,

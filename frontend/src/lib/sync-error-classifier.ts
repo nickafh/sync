@@ -9,6 +9,7 @@ export type SyncErrorSeverity = 'error' | 'warning' | 'info';
 export type SyncErrorCategory =
   | 'mailbox-removed'
   | 'user-invalid'
+  | 'contact-recreated'
   | 'internal'
   | 'rate-limit'
   | 'unknown';
@@ -60,6 +61,18 @@ const RULES: Rule[] = [
     guidance:
       'This user account no longer exists in Microsoft 365. It is skipped automatically — no action needed.',
     test: /requested user .* is invalid/i,
+  },
+  {
+    category: 'contact-recreated',
+    severity: 'info',
+    title: 'Contact was removed at the mailbox',
+    guidance:
+      'This contact was deleted from the mailbox outside of AFH Sync, so its photo could not be written. The stale record is cleared automatically and the contact is recreated on the next sync — no action needed.',
+    // Matches Exchange ErrorItemNotFound ("The specified object was not found in
+    // the store."). The worker self-heals this in PhotoSyncService (removes the
+    // stale ContactSyncState so the contact is recreated next run), so it should
+    // read as auto-handled here rather than a red "Unexpected error".
+    test: /not found in the store/i,
   },
   {
     category: 'rate-limit',
@@ -147,5 +160,10 @@ export function groupSyncErrors(rawErrors: string[]): SyncErrorGroup[] {
 
 /** True for categories that are auto-handled and shouldn't read as red "failures". */
 export function isAutoSkipped(category: SyncErrorCategory): boolean {
-  return category === 'mailbox-removed' || category === 'user-invalid' || category === 'rate-limit';
+  return (
+    category === 'mailbox-removed' ||
+    category === 'user-invalid' ||
+    category === 'contact-recreated' ||
+    category === 'rate-limit'
+  );
 }

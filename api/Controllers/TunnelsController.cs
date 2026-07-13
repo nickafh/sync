@@ -330,17 +330,33 @@ public class TunnelsController : ControllerBase
         {
             // Wrap all deletes in a transaction so a failure mid-way doesn't leave
             // orphaned data or a partially-deleted tunnel.
-            // InMemory database (tests) doesn't support transactions — skip gracefully.
-            var useTransaction = !_db.Database.IsInMemory();
-            var tx = useTransaction ? await _db.Database.BeginTransactionAsync() : null;
+            // InMemory database (tests) supports neither transactions nor
+            // ExecuteUpdate/ExecuteDelete — both paths branch on this.
+            var isRelational = !_db.Database.IsInMemory();
+            var tx = isRelational ? await _db.Database.BeginTransactionAsync() : null;
 
             // Clean up related records. Order matters: clear child FKs first.
             // SyncRunItems reference TunnelId with SetNull — null them out before tunnel delete.
-            await _db.SyncRunItems.Where(i => i.TunnelId == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(i => i.TunnelId, (int?)null));
-            await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
-            await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
-            await _db.OrgContactFilters.Where(f => f.TunnelId == id).ExecuteDeleteAsync();
+            if (isRelational)
+            {
+                // Relational path: bulk SQL, no change tracking — tunnel deletes can touch
+                // 100k+ contact_sync_state rows.
+                await _db.SyncRunItems.Where(i => i.TunnelId == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(i => i.TunnelId, (int?)null));
+                await _db.ContactSyncStates.Where(c => c.TunnelId == id).ExecuteDeleteAsync();
+                await _db.TunnelContactExclusions.Where(e => e.TunnelId == id).ExecuteDeleteAsync();
+                await _db.OrgContactFilters.Where(f => f.TunnelId == id).ExecuteDeleteAsync();
+            }
+            else
+            {
+                // InMemory (tests) doesn't support ExecuteUpdate/ExecuteDelete —
+                // fall back to tracked operations.
+                var items = await _db.SyncRunItems.Where(i => i.TunnelId == id).ToListAsync();
+                items.ForEach(i => i.TunnelId = null);
+                _db.ContactSyncStates.RemoveRange(_db.ContactSyncStates.Where(c => c.TunnelId == id));
+                _db.TunnelContactExclusions.RemoveRange(_db.TunnelContactExclusions.Where(e => e.TunnelId == id));
+                _db.OrgContactFilters.RemoveRange(_db.OrgContactFilters.Where(f => f.TunnelId == id));
+            }
 
             _db.Tunnels.Remove(tunnel);
             await _db.SaveChangesAsync();

@@ -66,6 +66,20 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>
 
             services.AddSingleton<IBackgroundJobClient>(new NoOpBackgroundJobClient());
             services.AddSingleton<IRecurringJobManager>(new NoOpRecurringJobManager());
+
+            // Replace the GraphServiceClient singleton: the production factory builds a
+            // ClientSecretCredential from Graph:TenantId/ClientId/ClientSecret, which are
+            // absent in the test host — resolving it throws "Invalid tenant id" and turns
+            // every controller that injects GraphServiceClient into a 500. Controllers
+            // under test never call Graph; an anonymous client that would fail only at
+            // actual HTTP time is sufficient.
+            var graphClient = services.SingleOrDefault(
+                d => d.ServiceType == typeof(Microsoft.Graph.GraphServiceClient));
+            if (graphClient != null) services.Remove(graphClient);
+
+            services.AddSingleton(new Microsoft.Graph.GraphServiceClient(
+                new HttpClient(),
+                new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider()));
         });
 
         builder.UseEnvironment("Development");

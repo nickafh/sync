@@ -20,6 +20,16 @@ describe('classifySyncError', () => {
     expect(c.title).toBe('User account not found');
   });
 
+  it('classifies a deleted-at-mailbox photo failure as auto-handled contact-recreated (info)', () => {
+    const c = classifySyncError(
+      'The specified object was not found in the store., The process failed to get the correct properties.',
+    );
+    expect(c.category).toBe('contact-recreated');
+    expect(c.severity).toBe('info');
+    expect(c.title).toBe('Contact was removed at the mailbox');
+    expect(c.guidance).toMatch(/no action needed/i);
+  });
+
   it('classifies an EF duplicate-key / save error as an internal error (red)', () => {
     const c = classifySyncError(
       'Blue Ridge: An error occurred while saving the entity changes. See the inner exception for details.',

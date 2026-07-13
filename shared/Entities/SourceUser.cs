@@ -21,6 +21,12 @@ public class SourceUser
     public string? Country { get; set; }
     public string? Notes { get; set; }
     public string? PhotoHash { get; set; }
+    /// <summary>
+    /// When the source photo was last actually fetched from Graph (success or 404).
+    /// Bounds the photo fetch-skip optimization: a hash match only skips the fetch
+    /// while this is recent, so photos changed at the source still propagate.
+    /// </summary>
+    public DateTime? PhotoCheckedAt { get; set; }
     public string? ExtensionAttr1 { get; set; }
     public string? ExtensionAttr2 { get; set; }
     public string? ExtensionAttr3 { get; set; }

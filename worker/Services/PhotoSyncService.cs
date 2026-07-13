@@ -61,6 +61,14 @@ public class PhotoSyncService : IPhotoSyncService
     /// </summary>
     private const int MaxPhotoSizeBytes = 4 * 1024 * 1024;
 
+    /// <summary>
+    /// How long a hash-match may skip the source photo fetch. Without this bound the
+    /// skip is permanent — nothing else refreshes SourceUser.PhotoHash, so a photo
+    /// changed at the source would never re-sync. A week keeps steady-state runs cheap
+    /// (each photo re-verified ~once/week instead of every run) while capping staleness.
+    /// </summary>
+    private static readonly TimeSpan PhotoRecheckInterval = TimeSpan.FromDays(7);
+
     public PhotoSyncService(
         IDbContextFactory<AFHSyncDbContext> dbContextFactory,
         GraphClientFactory graphClientFactory,
@@ -138,10 +146,14 @@ public class PhotoSyncService : IPhotoSyncService
         var fetchTasks = sourceUsers.Select(async sourceUser =>
         {
             // Skip fetch if source photo hash matches the already-synced hash
-            // AND every contact state already has the photo (no null PhotoHash).
+            // AND every contact state already has the photo (no null PhotoHash)
+            // AND the source photo was re-verified recently (PhotoRecheckInterval).
             // This avoids hundreds of Graph API calls on steady-state runs while
-            // still fetching when a wiped/new mailbox needs the photo.
+            // still fetching when a wiped/new mailbox needs the photo — and still
+            // picking up photos changed at the source once the recheck window lapses.
             if (sourceUser.PhotoHash != null
+                && sourceUser.PhotoCheckedAt is { } checkedAt
+                && DateTime.UtcNow - checkedAt < PhotoRecheckInterval
                 && existingPhotoHashes.TryGetValue(sourceUser.Id, out var syncedHash)
                 && syncedHash == sourceUser.PhotoHash
                 && !sourceUsersNeedingPhotos.Contains(sourceUser.Id))
@@ -189,6 +201,13 @@ public class PhotoSyncService : IPhotoSyncService
                 else
                 {
                     // DDG / OrgContacts / UserMailbox — existing behavior.
+                    // A MailboxContact here means TunnelSources wasn't loaded (or the source was
+                    // removed): EntraId is an Exchange item ID, so the user-photo fetch 404s and
+                    // reads as "no photo". Warn loudly — this failure mode is otherwise invisible.
+                    if (sourceUser.MailboxType == "MailboxContact")
+                        _logger.LogWarning(
+                            "MailboxContact source user {SourceUserId} ({DisplayName}) fell through to the user-photo endpoint — tunnel {TunnelId} has no loaded MailboxContacts source, photo fetch will 404",
+                            sourceUser.Id, sourceUser.DisplayName, tunnel.Id);
                     (photoBytes, wasNotFound) = await FetchUserPhotoAsync(sourceUser.EntraId, ct);
                 }
 
@@ -208,11 +227,11 @@ public class PhotoSyncService : IPhotoSyncService
                     sourcePhotos[sourceUser.Id] = (photoBytes, hash);
                     Interlocked.Increment(ref fetchSuccess);
 
-                    if (sourceUser.PhotoHash != hash)
-                    {
-                        sourceUser.PhotoHash = hash;
-                        await UpdateSourceUserPhotoHashAsync(sourceUser.Id, hash, ct);
-                    }
+                    // Stamp every successful fetch (even when the hash is unchanged) so the
+                    // recheck window restarts and steady-state runs can keep skipping.
+                    sourceUser.PhotoHash = hash;
+                    sourceUser.PhotoCheckedAt = DateTime.UtcNow;
+                    await UpdateSourceUserPhotoStateAsync(sourceUser.Id, hash, ct);
                 }
                 else
                 {
@@ -223,10 +242,14 @@ public class PhotoSyncService : IPhotoSyncService
                     else
                         Interlocked.Increment(ref fetchError);
 
+                    // Only persist on the had-photo → no-photo transition. Photo-less users
+                    // are re-fetched every run regardless (their states never carry a hash),
+                    // so re-stamping them each run would just be DB churn.
                     if (sourceUser.PhotoHash != null)
                     {
                         sourceUser.PhotoHash = null;
-                        await UpdateSourceUserPhotoHashAsync(sourceUser.Id, null, ct);
+                        sourceUser.PhotoCheckedAt = DateTime.UtcNow;
+                        await UpdateSourceUserPhotoStateAsync(sourceUser.Id, null, ct);
                     }
                 }
             }
@@ -329,6 +352,20 @@ public class PhotoSyncService : IPhotoSyncService
                     priorPhotosUpdated + snapshotUpdated,
                     priorPhotosFailed + snapshotFailed,
                     priorTunnelsProcessed);
+
+                // Also flush buffered run items so the run detail page's per-tunnel photo
+                // breakdown and item feed populate live instead of only at end-of-run.
+                // FlushItemsAsync swaps the buffer atomically, so concurrent calls from
+                // parallel mailbox tasks are safe. CancellationToken.None so a mid-run
+                // cancel doesn't discard already-buffered items.
+                try
+                {
+                    await _runLogger.FlushItemsAsync(CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Mid-run item flush failed for RunId={RunId} — that snapshot of items is dropped (run counters unaffected)", run.Id);
+                }
             }
         }
 
@@ -447,6 +484,7 @@ public class PhotoSyncService : IPhotoSyncService
                     .ThenInclude(fp => fp!.FieldProfileFields)
                 .Include(t => t.TunnelPhoneLists)
                     .ThenInclude(tpl => tpl.PhoneList)
+                .Include(t => t.TunnelSources)
                 .ToListAsync(ct);
 
             tunnelsWithPhotos = tunnels.Count(t => t.PhotoSyncEnabled);
@@ -782,12 +820,14 @@ public class PhotoSyncService : IPhotoSyncService
                     {
                         await WriteContactPhotoAsync(
                             mailboxEntraId, folderId, state.GraphContactId!, photoBytes, ct);
-                    }
 
-                    // Defer the ContactSyncState hash write — flushed in one SELECT+batched-UPDATE
-                    // round-trip at the end of this 50-photo batch. If the batch flush fails, the
-                    // hashes stay stale and the next run re-writes those photos (idempotent).
-                    pendingHashUpdates.Add((state.Id, sourceHash!, state.PhotoHash));
+                        // Defer the ContactSyncState hash write — flushed in one SELECT+batched-UPDATE
+                        // round-trip at the end of this 50-photo batch. If the batch flush fails, the
+                        // hashes stay stale and the next run re-writes those photos (idempotent).
+                        // Dry runs must NOT record the hash: doing so marks the photo as synced and
+                        // the next real run would skip the actual write.
+                        pendingHashUpdates.Add((state.Id, sourceHash!, state.PhotoHash));
+                    }
 
                     _runLogger.AddItem(new SyncRunItem
                     {
@@ -901,7 +941,7 @@ public class PhotoSyncService : IPhotoSyncService
         }
     }
 
-    private async Task UpdateSourceUserPhotoHashAsync(int sourceUserId, string? photoHash, CancellationToken ct)
+    private async Task UpdateSourceUserPhotoStateAsync(int sourceUserId, string? photoHash, CancellationToken ct)
     {
         try
         {
@@ -910,6 +950,7 @@ public class PhotoSyncService : IPhotoSyncService
             if (user != null)
             {
                 user.PhotoHash = photoHash;
+                user.PhotoCheckedAt = DateTime.UtcNow;
                 user.UpdatedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
             }
@@ -917,7 +958,7 @@ public class PhotoSyncService : IPhotoSyncService
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to update PhotoHash for SourceUser {Id}", sourceUserId);
+                "Failed to update photo state for SourceUser {Id}", sourceUserId);
         }
     }
 
