@@ -36,3 +36,6 @@ cookies.txt
 .planning/
 .claude/
 CLAUDE.md
+exchange-cert.crt
+exchange-cert.key
+exchange-cert.pfx
