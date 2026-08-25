@@ -2,19 +2,26 @@ namespace AFHSync.Api.Services;
 
 using System.Text.RegularExpressions;
 using AFHSync.Api.DTOs;
+using AFHSync.Api.Services.Opath;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// Converts Exchange OPATH RecipientFilter syntax to Microsoft Graph OData $filter syntax.
-/// Uses table-based conversion for known AFH OPATH patterns (D-04, D-05).
-/// Unsupported attributes fall back gracefully with a warning (D-06).
+///
+/// Pipeline: parse (OpathParser) → fold Exchange-only predicates to constants (OpathFolder.Fold)
+/// → simplify (OpathFolder.Simplify) → render (ODataRenderer).
+///
+/// A filter that still references an attribute with no Graph equivalent, that cannot be parsed,
+/// or that collapses to "everyone"/"no one" is a FAILURE (Success=false). Callers must not store
+/// or query with a failed result — Graph rejects such filters with Request_UnsupportedQuery,
+/// which is how a DDG silently resolves to zero members.
 /// </summary>
 public class FilterConverter : IFilterConverter
 {
     private readonly ILogger<FilterConverter> _logger;
 
     // AFH-specific OPATH attribute -> OData field mapping (case-insensitive)
-    private static readonly Dictionary<string, string> AttributeMap = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly Dictionary<string, string> AttributeMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Office"] = "officeLocation",
         ["CustomAttribute1"] = "onPremisesExtensionAttributes/extensionAttribute1",
@@ -32,7 +39,7 @@ public class FilterConverter : IFilterConverter
     };
 
     // Human-readable display names for ToPlainLanguage
-    private static readonly Dictionary<string, string> PlainNameMap = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly Dictionary<string, string> PlainNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Office"] = "Office",
         ["CustomAttribute1"] = "Custom1",
@@ -49,11 +56,6 @@ public class FilterConverter : IFilterConverter
         ["Country"] = "Country",
     };
 
-    // Regex pattern matching OPATH attribute names (word boundaries, case-insensitive)
-    private static readonly Regex AttributePattern = new(
-        @"\b(" + string.Join("|", AttributeMap.Keys) + @")\b",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     public FilterConverter(ILogger<FilterConverter> logger)
     {
         _logger = logger;
@@ -62,100 +64,42 @@ public class FilterConverter : IFilterConverter
     public FilterConversionResult Convert(string opathFilter)
     {
         if (string.IsNullOrWhiteSpace(opathFilter))
-        {
-            return new FilterConversionResult(
-                Success: false,
-                Filter: opathFilter ?? string.Empty,
-                Warning: "Filter is empty or null");
-        }
+            return new FilterConversionResult(false, opathFilter ?? string.Empty, "Filter is empty or null", []);
 
+        OpathNode ast;
         try
         {
-            var filter = opathFilter.Trim();
-            var warnings = new List<string>();
-
-            // Strip Exchange system mailbox exclusions (no Graph equivalent, not needed)
-            // Removes: -and (-not(RecipientTypeDetailsValue -eq 'MailboxPlan'))
-            filter = Regex.Replace(filter,
-                @"\s*-and\s+\(-not\(RecipientTypeDetailsValue\s+-eq\s+'[^']*'\)\)",
-                string.Empty, RegexOptions.IgnoreCase);
-            // Removes: -and (-not(Name -like 'SystemMailbox{*'))
-            filter = Regex.Replace(filter,
-                @"\s*-and\s+\(-not\(Name\s+-like\s+'[^']*'\)\)",
-                string.Empty, RegexOptions.IgnoreCase);
-            // Removes: -and (RecipientTypeDetails -eq 'UserMailbox') or with parens
-            filter = Regex.Replace(filter,
-                @"\s*-and\s+\(?RecipientTypeDetails\s+-eq\s+'[^']*'\)?\s*",
-                " ", RegexOptions.IgnoreCase);
-            // Removes if RecipientType is standalone: (RecipientType -eq 'UserMailbox') -and
-            filter = Regex.Replace(filter,
-                @"\(?\s*RecipientType\s+-eq\s+'[^']*'\)?\s*-and\s+",
-                string.Empty, RegexOptions.IgnoreCase);
-            // Strip Exchange's GAL-visibility clause. Exchange auto-appends
-            // "-and (HiddenFromAddressListsEnabled -eq 'False')" (or '$false') to most DDG
-            // RecipientFilters. It is NOT a Graph user property, so passing it through makes
-            // Graph 400 and the DDG resolves to ZERO members. GAL-hidden filtering already
-            // happens client-side in SourceResolver, so dropping it lets the DDG resolve its
-            // real members. Trailing form: "... -and (HiddenFromAddressListsEnabled -eq 'False')"
-            filter = Regex.Replace(filter,
-                @"\s*-and\s+\(?\s*HiddenFromAddressListsEnabled\s+-eq\s+'?\$?(?:false|true)'?\s*\)?",
-                string.Empty, RegexOptions.IgnoreCase);
-            // Leading form: "(HiddenFromAddressListsEnabled -eq 'False') -and ..."
-            filter = Regex.Replace(filter,
-                @"\(?\s*HiddenFromAddressListsEnabled\s+-eq\s+'?\$?(?:false|true)'?\s*\)?\s*-and\s+",
-                string.Empty, RegexOptions.IgnoreCase);
-
-            // Clean up redundant nested parentheses
-            // Repeatedly collapse ((x)) to (x)
-            string prev;
-            do
-            {
-                prev = filter;
-                filter = Regex.Replace(filter, @"\((\([^()]*\))\)", "$1");
-            } while (filter != prev);
-            // Strip single outer parens: (expr) -> expr
-            filter = Regex.Replace(filter, @"^\(([^()]*)\)$", "$1");
-
-            // Track which attributes in the filter are recognized
-            DetectUnrecognizedAttributes(filter, warnings);
-
-            // Replace OPATH operators with OData operators (case-insensitive)
-            filter = Regex.Replace(filter, @"\s+-eq\s+", " eq ", RegexOptions.IgnoreCase);
-            filter = Regex.Replace(filter, @"\s+-ne\s+", " ne ", RegexOptions.IgnoreCase);
-            filter = Regex.Replace(filter, @"\s+-and\s+", " and ", RegexOptions.IgnoreCase);
-            filter = Regex.Replace(filter, @"\s+-or\s+", " or ", RegexOptions.IgnoreCase);
-            filter = Regex.Replace(filter, @"\s+-not\s+", " not ", RegexOptions.IgnoreCase);
-
-            // Handle -like operator: convert to startsWith() for prefix matches
-            filter = Regex.Replace(filter, @"(\w+)\s+-like\s+'([^*']+)\*'",
-                m => $"startsWith({m.Groups[1].Value}, '{m.Groups[2].Value}')",
-                RegexOptions.IgnoreCase);
-
-            // Replace OPATH attribute names with OData field names
-            filter = AttributePattern.Replace(filter, m =>
-            {
-                if (AttributeMap.TryGetValue(m.Value, out var odataField))
-                    return odataField;
-                return m.Value; // Should not happen due to regex, but safety fallback
-            });
-
-            string? warning = warnings.Count > 0
-                ? $"Unrecognized attribute(s): {string.Join(", ", warnings)} -- manual review recommended"
-                : null;
-
-            return new FilterConversionResult(
-                Success: true,
-                Filter: filter,
-                Warning: warning);
+            ast = OpathParser.Parse(opathFilter.Trim());
         }
-        catch (Exception ex)
+        catch (OpathParseException ex)
         {
-            _logger.LogWarning(ex, "OPATH filter conversion failed for: {Filter}", opathFilter);
-            return new FilterConversionResult(
-                Success: false,
-                Filter: opathFilter,
-                Warning: $"Filter conversion failed -- manual review required: {ex.Message}");
+            _logger.LogWarning("OPATH filter could not be parsed: {Message}. Filter: {Filter}", ex.Message, opathFilter);
+            return new FilterConversionResult(false, opathFilter, $"Filter could not be parsed: {ex.Message}", []);
         }
+
+        var unknown = new List<string>();
+        var simplified = OpathFolder.Simplify(OpathFolder.Fold(ast, unknown));
+
+        if (unknown.Count > 0)
+        {
+            var distinct = unknown.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _logger.LogWarning("OPATH filter uses attribute(s) with no Graph equivalent: {Attrs}. Filter: {Filter}",
+                string.Join(", ", distinct), opathFilter);
+            return new FilterConversionResult(false, opathFilter,
+                $"Unsupported attribute(s): {string.Join(", ", distinct)} — this filter cannot be evaluated by Graph",
+                distinct);
+        }
+
+        if (simplified is OpathConst constant)
+        {
+            return new FilterConversionResult(false, opathFilter,
+                constant.Value
+                    ? "Filter matches all users once Exchange-only conditions are removed; a source filter must be selective"
+                    : "Filter matches no users (it only selects non-user recipients such as mail contacts)",
+                []);
+        }
+
+        return new FilterConversionResult(true, ODataRenderer.Render(simplified), null, []);
     }
 
     public string ToPlainLanguage(string opathFilter)
@@ -163,48 +107,33 @@ public class FilterConverter : IFilterConverter
         if (string.IsNullOrWhiteSpace(opathFilter))
             return string.Empty;
 
-        var plain = opathFilter.Trim();
+        try
+        {
+            var ast = OpathParser.Parse(opathFilter.Trim());
+            var simplified = OpathFolder.Simplify(OpathFolder.Fold(ast, new List<string>()));
+            return PlainLanguageRenderer.Render(simplified);
+        }
+        catch (OpathParseException)
+        {
+            return ToPlainLanguageLegacy(opathFilter);
+        }
+    }
 
-        // Replace attribute names with human-readable display names
+    /// <summary>Text-replacement fallback for filters the parser rejects (kept so the UI never shows nothing).</summary>
+    private static string ToPlainLanguageLegacy(string opathFilter)
+    {
+        var plain = opathFilter.Trim();
         foreach (var (opathAttr, displayName) in PlainNameMap)
         {
-            plain = Regex.Replace(plain, $@"\b{Regex.Escape(opathAttr)}\b", displayName,
-                RegexOptions.IgnoreCase);
+            plain = Regex.Replace(plain, $@"\b{Regex.Escape(opathAttr)}\b", displayName, RegexOptions.IgnoreCase);
         }
-
-        // Replace OPATH operators with readable symbols
         plain = Regex.Replace(plain, @"\s+-eq\s+", " = ", RegexOptions.IgnoreCase);
         plain = Regex.Replace(plain, @"\s+-ne\s+", " != ", RegexOptions.IgnoreCase);
         plain = Regex.Replace(plain, @"\s+-and\s+", " AND ", RegexOptions.IgnoreCase);
         plain = Regex.Replace(plain, @"\s+-or\s+", " OR ", RegexOptions.IgnoreCase);
         plain = Regex.Replace(plain, @"\s+-not\s+", " NOT ", RegexOptions.IgnoreCase);
         plain = Regex.Replace(plain, @"\s+-like\s+", " LIKE ", RegexOptions.IgnoreCase);
-
-        // Strip outer parentheses from simple expressions
         plain = Regex.Replace(plain, @"^\(([^()]*)\)$", "$1");
-
-        // Strip single quotes from values
-        plain = plain.Replace("'", "");
-
-        return plain;
-    }
-
-    /// <summary>
-    /// Detects attributes in the filter that are not in the known attribute map.
-    /// Adds unrecognized attribute names to the warnings list.
-    /// </summary>
-    private static void DetectUnrecognizedAttributes(string filter, List<string> warnings)
-    {
-        // Match patterns like "(AttributeName -eq 'value')" to find attribute names
-        // Attributes appear before OPATH operators
-        var attrPattern = new Regex(@"\(?\s*(\w+)\s+-(eq|ne|like|gt|lt|ge|le)\b", RegexOptions.IgnoreCase);
-        foreach (Match match in attrPattern.Matches(filter))
-        {
-            var attrName = match.Groups[1].Value;
-            if (!AttributeMap.ContainsKey(attrName))
-            {
-                warnings.Add(attrName);
-            }
-        }
+        return plain.Replace("'", "");
     }
 }

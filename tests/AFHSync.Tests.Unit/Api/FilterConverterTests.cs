@@ -86,15 +86,18 @@ public class FilterConverterTests
         Assert.Contains("department eq 'Sales'", result.Filter);
     }
 
-    // Test 8: Unsupported attribute falls through with warning (D-06)
+    // Test 8: Unsupported attribute is a FAILURE — a filter Graph will reject must never be
+    // stored or used. (Previously a warning with Success=true; that is how the Avalon
+    // target set silently collapsed to 6 mailboxes.)
     [Fact]
-    public void Convert_UnsupportedAttribute_ReturnsSuccessWithWarning()
+    public void Convert_UnsupportedAttribute_ReturnsFailureWithWarning()
     {
         var result = _converter.Convert("(SomeUnknownAttr -eq 'Value')");
 
-        Assert.True(result.Success);
+        Assert.False(result.Success);
         Assert.NotNull(result.Warning);
         Assert.Contains("SomeUnknownAttr", result.Warning);
+        Assert.Contains("SomeUnknownAttr", result.UnknownAttributes!);
     }
 
     // Test 9: Exchange auto-appends a GAL-visibility clause to most DDG RecipientFilters.
@@ -192,5 +195,167 @@ public class FilterConverterTests
 
         Assert.True(result.Success);
         Assert.Contains("companyName eq 'Atlanta Fine Homes'", result.Filter);
+    }
+
+    // ---- Real tenant filters (captured 2026-08-25) -------------------------------------
+
+    private static IReadOnlyList<(string Name, string Filter)> LoadFixtures()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "ddg-recipient-filters.json");
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+        return doc.RootElement.EnumerateArray()
+            .Select(e => (e.GetProperty("displayName").GetString()!, e.GetProperty("recipientFilter").GetString()!))
+            .ToList();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ExchangeOnlyAttribute = new(
+        @"RecipientTypeDetails|RecipientType\b|HiddenFromAddressListsEnabled|\bName\b|MailboxPlan|SystemMailbox",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    [Fact]
+    public void Convert_AllTenantFixtures_SucceedWithoutExchangeOnlyAttributes()
+    {
+        var fixtures = LoadFixtures();
+        Assert.Equal(16, fixtures.Count);
+
+        foreach (var (name, filter) in fixtures)
+        {
+            var result = _converter.Convert(filter);
+
+            Assert.True(result.Success, $"{name}: {result.Warning}");
+            Assert.DoesNotMatch(ExchangeOnlyAttribute, result.Filter);
+            Assert.Null(result.Warning);
+        }
+    }
+
+    [Theory]
+    [InlineData("Buckhead Staff", "officeLocation eq 'Buckhead' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("Intown Staff", "officeLocation eq 'Intown' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("Cobb Staff", "officeLocation eq 'Cobb' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("North Atlanta Staff", "officeLocation eq 'North Atlanta' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("Blue Ridge Staff", "officeLocation eq 'Blue Ridge' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("Clayton Staff", "officeLocation eq 'Clayton' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("North Atlanta Office", "officeLocation eq 'North Atlanta' or (onPremisesExtensionAttributes/extensionAttribute2 eq 'AFH' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff')")]
+    [InlineData("All Atlanta Fine Homes Staff", "onPremisesExtensionAttributes/extensionAttribute2 eq 'AFH' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    [InlineData("All Mountain Staff", "onPremisesExtensionAttributes/extensionAttribute2 eq 'MSIR' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    public void Convert_TenantFixture_ProducesExpectedGraphFilter(string name, string expected)
+    {
+        var (_, filter) = LoadFixtures().Single(f => f.Name == name);
+
+        var result = _converter.Convert(filter);
+
+        Assert.True(result.Success, result.Warning);
+        Assert.Equal(expected, result.Filter);
+    }
+
+    // ---- Folding rules ------------------------------------------------------------------
+
+    [Fact]
+    public void Convert_RecipientTypeDetailsOrGroup_IsFoldedAway()
+    {
+        var result = _converter.Convert(
+            "((Office -eq 'Buckhead') -and (((RecipientTypeDetails -eq 'UserMailbox') -or (RecipientTypeDetails -eq 'SharedMailbox'))))");
+
+        Assert.True(result.Success);
+        Assert.Equal("officeLocation eq 'Buckhead'", result.Filter);
+    }
+
+    [Fact]
+    public void Convert_MailContactBranch_IsDropped()
+    {
+        var result = _converter.Convert(
+            "((Office -eq 'Buckhead') -and (RecipientTypeDetails -eq 'UserMailbox')) -or ((RecipientTypeDetails -eq 'MailContact') -and (CustomAttribute4 -eq 'DDL'))");
+
+        Assert.True(result.Success);
+        Assert.Equal("officeLocation eq 'Buckhead'", result.Filter);
+    }
+
+    [Fact]
+    public void Convert_ExchangeSystemExclusions_AreFoldedAway()
+    {
+        var result = _converter.Convert(
+            "(Office -eq 'Buckhead') -and (-not(Name -like 'SystemMailbox{*')) -and (-not(RecipientTypeDetailsValue -eq 'MailboxPlan'))");
+
+        Assert.True(result.Success);
+        Assert.Equal("officeLocation eq 'Buckhead'", result.Filter);
+    }
+
+    [Fact]
+    public void Convert_FilterThatFoldsToAllUsers_Fails()
+    {
+        var result = _converter.Convert("(RecipientTypeDetails -eq 'UserMailbox') -and (HiddenFromAddressListsEnabled -eq 'False')");
+
+        Assert.False(result.Success);
+        Assert.Contains("all users", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Convert_FilterThatFoldsToNoUsers_Fails()
+    {
+        var result = _converter.Convert("(RecipientTypeDetails -eq 'MailContact') -and (Office -eq 'Buckhead')");
+
+        Assert.False(result.Success);
+        Assert.Contains("no users", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- Value safety and operators -----------------------------------------------------
+
+    [Fact]
+    public void Convert_AttributeNameInsideQuotedValue_IsNotRewritten()
+    {
+        var result = _converter.Convert("(Title -like 'Office Manager*') -and (Department -eq 'Sales Office')");
+
+        Assert.True(result.Success);
+        Assert.Equal("startsWith(jobTitle, 'Office Manager') and department eq 'Sales Office'", result.Filter);
+    }
+
+    [Theory]
+    [InlineData("(Title -like 'Agent*')", "startsWith(jobTitle, 'Agent')")]
+    [InlineData("(Title -like '*Agent')", "endsWith(jobTitle, 'Agent')")]
+    [InlineData("(Title -like '*Agent*')", "contains(jobTitle, 'Agent')")]
+    [InlineData("(Title -like 'Agent')", "jobTitle eq 'Agent'")]
+    [InlineData("(Title -notlike 'Agent*')", "not(startsWith(jobTitle, 'Agent'))")]
+    public void Convert_LikeOperators_MapToODataFunctions(string opath, string expected)
+    {
+        var result = _converter.Convert(opath);
+
+        Assert.True(result.Success, result.Warning);
+        Assert.Equal(expected, result.Filter);
+    }
+
+    [Fact]
+    public void Convert_QuoteInValue_IsEscapedForOData()
+    {
+        var result = _converter.Convert("(Company -eq 'Sotheby''s')");
+
+        Assert.True(result.Success);
+        Assert.Equal("companyName eq 'Sotheby''s'", result.Filter);
+    }
+
+    [Fact]
+    public void Convert_UnparseableFilter_Fails()
+    {
+        var result = _converter.Convert("(Office -eq 'Buckhead'");
+
+        Assert.False(result.Success);
+        Assert.Contains("parsed", result.Warning);
+    }
+
+    [Fact]
+    public void ToPlainLanguage_DropsExchangeOnlyClauses_AndKeepsValuesIntact()
+    {
+        var (_, filter) = LoadFixtures().Single(f => f.Name == "Buckhead Staff");
+
+        var plain = _converter.ToPlainLanguage(filter);
+
+        Assert.Equal("Office = Buckhead AND Role = Staff", plain);
+    }
+
+    [Fact]
+    public void ToPlainLanguage_UnparseableInput_FallsBackToTextReplacement()
+    {
+        var plain = _converter.ToPlainLanguage("(Office -eq 'Buckhead'");
+
+        Assert.Contains("Office = Buckhead", plain);
     }
 }

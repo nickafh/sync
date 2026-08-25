@@ -27,4 +27,8 @@
     <ProjectReference Include="..\AFHSync.Tests.Integration\AFHSync.Tests.Integration.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
