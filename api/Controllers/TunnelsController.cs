@@ -579,8 +579,18 @@ public class TunnelsController : ControllerBase
             return NotFound(new { message = "DDG not found in Exchange." });
 
         var conversionResult = _filterConverter.Convert(ddgInfo.RecipientFilter);
+        if (!conversionResult.Success)
+        {
+            _logger.LogWarning(
+                "Refresh DDG for tunnel {TunnelId} source {SourceId} refused: {Warning}. Existing filter kept.",
+                id, sourceId, conversionResult.Warning);
+            return UnprocessableEntity(new
+            {
+                message = $"The DDG's recipient filter cannot be converted to a Graph filter: {conversionResult.Warning}. The source was left unchanged."
+            });
+        }
 
-        source.SourceIdentifier = conversionResult.Filter ?? source.SourceIdentifier;
+        source.SourceIdentifier = conversionResult.Filter;
         source.SourceFilterPlain = _filterConverter.ToPlainLanguage(ddgInfo.RecipientFilter);
         source.SourceDisplayName = ddgInfo.DisplayName;
 

@@ -299,7 +299,7 @@ public class GraphController : ControllerBase
             PrimarySmtpAddress: ddg.PrimarySmtpAddress,
             RecipientFilter: ddg.RecipientFilter,
             RecipientFilterPlain: plainLanguage,
-            GraphFilter: conversion.Filter,
+            GraphFilter: conversion.Success ? conversion.Filter : null,
             GraphFilterSuccess: conversion.Success,
             GraphFilterWarning: conversion.Warning,
             MemberCount: memberCount,
