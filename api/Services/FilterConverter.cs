@@ -77,29 +77,37 @@ public class FilterConverter : IFilterConverter
             return new FilterConversionResult(false, opathFilter, $"Filter could not be parsed: {ex.Message}", []);
         }
 
-        var unknown = new List<string>();
-        var simplified = OpathFolder.Simplify(OpathFolder.Fold(ast, unknown));
-
-        if (unknown.Count > 0)
+        try
         {
-            var distinct = unknown.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            _logger.LogWarning("OPATH filter uses attribute(s) with no Graph equivalent: {Attrs}. Filter: {Filter}",
-                string.Join(", ", distinct), opathFilter);
-            return new FilterConversionResult(false, opathFilter,
-                $"Unsupported attribute(s): {string.Join(", ", distinct)} — this filter cannot be evaluated by Graph",
-                distinct);
-        }
+            var unknown = new List<string>();
+            var simplified = OpathFolder.Simplify(OpathFolder.Fold(ast, unknown));
 
-        if (simplified is OpathConst constant)
+            if (unknown.Count > 0)
+            {
+                var distinct = unknown.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                _logger.LogWarning("OPATH filter uses attribute(s) with no Graph equivalent: {Attrs}. Filter: {Filter}",
+                    string.Join(", ", distinct), opathFilter);
+                return new FilterConversionResult(false, opathFilter,
+                    $"Unsupported attribute(s): {string.Join(", ", distinct)} — this filter cannot be evaluated by Graph",
+                    distinct);
+            }
+
+            if (simplified is OpathConst constant)
+            {
+                return new FilterConversionResult(false, opathFilter,
+                    constant.Value
+                        ? "Filter matches all users once Exchange-only conditions are removed; a source filter must be selective"
+                        : "Filter matches no users (it only selects non-user recipients such as mail contacts)",
+                    []);
+            }
+
+            return new FilterConversionResult(true, ODataRenderer.Render(simplified), null, []);
+        }
+        catch (Exception ex)
         {
-            return new FilterConversionResult(false, opathFilter,
-                constant.Value
-                    ? "Filter matches all users once Exchange-only conditions are removed; a source filter must be selective"
-                    : "Filter matches no users (it only selects non-user recipients such as mail contacts)",
-                []);
+            _logger.LogWarning(ex, "OPATH filter conversion failed for: {Filter}", opathFilter);
+            return new FilterConversionResult(false, opathFilter, $"Filter conversion failed -- manual review required: {ex.Message}", []);
         }
-
-        return new FilterConversionResult(true, ODataRenderer.Render(simplified), null, []);
     }
 
     public string ToPlainLanguage(string opathFilter)
@@ -113,7 +121,7 @@ public class FilterConverter : IFilterConverter
             var simplified = OpathFolder.Simplify(OpathFolder.Fold(ast, new List<string>()));
             return PlainLanguageRenderer.Render(simplified);
         }
-        catch (OpathParseException)
+        catch (Exception)
         {
             return ToPlainLanguageLegacy(opathFilter);
         }

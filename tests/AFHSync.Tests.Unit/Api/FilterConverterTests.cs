@@ -358,4 +358,47 @@ public class FilterConverterTests
 
         Assert.Contains("Office = Buckhead", plain);
     }
+
+    // ---- Safety net: neither method may throw, no matter how malformed the input ---------
+
+    // Note: the deeply-nested-parens case is capped at 500 levels, not the 5,000 one might
+    // reach for. OpathParser is recursive-descent with no depth guard, and the xUnit test
+    // host thread has a much smaller stack than a normal process main thread: empirically,
+    // 5,000 levels crashes the test host with an *uncatchable* StackOverflowException at
+    // ~1,636 levels (verified directly against this test host, not a synthetic harness). 500
+    // stays a comfortable 3x below that observed crash point while still exercising deep
+    // recursion. The unbounded-recursion-depth gap in OpathParser itself is out of scope for
+    // this fix (limited to FilterConverter.cs and this test file) and is reported as a concern.
+    private static readonly string[] AdversarialInputs =
+    [
+        "(Office -eq 'A') -and",
+        "((Office -eq 'A')",
+        "-not",
+        "Office",
+        "'unterminated",
+        new string('(', 500),
+    ];
+
+    [Fact]
+    public void Convert_AdversarialInputs_NeverThrow()
+    {
+        foreach (var input in AdversarialInputs)
+        {
+            var result = _converter.Convert(input);
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Warning);
+        }
+    }
+
+    [Fact]
+    public void ToPlainLanguage_AdversarialInputs_NeverThrow()
+    {
+        foreach (var input in AdversarialInputs)
+        {
+            var plain = _converter.ToPlainLanguage(input);
+
+            Assert.False(string.IsNullOrEmpty(plain));
+        }
+    }
 }
