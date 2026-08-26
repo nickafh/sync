@@ -31,8 +31,8 @@ export function DDGRefreshButton({ tunnelId, sourceId }: DDGRefreshButtonProps) 
       onSuccess: () => {
         toast.success('Filter refreshed successfully.');
       },
-      onError: () => {
-        toast.error('Failed to refresh filter. Please try again.');
+      onError: (error: Error) => {
+        toast.error(error.message || 'Failed to refresh filter. Please try again.');
       },
     });
   };

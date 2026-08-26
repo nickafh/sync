@@ -575,7 +575,9 @@ export default function TunnelDetailPage() {
                               {src.sourceDisplayName || src.sourceIdentifier}
                             </p>
                           </div>
-                          <DDGRefreshButton tunnelId={tunnelId} sourceId={src.id} />
+                          {src.sourceSmtpAddress && (
+                            <DDGRefreshButton tunnelId={tunnelId} sourceId={src.id} />
+                          )}
                         </div>
                         {src.sourceSmtpAddress && (
                           <div>
