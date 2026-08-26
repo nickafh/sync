@@ -72,18 +72,72 @@ Expected results for the fixture set, e.g. Buckhead Staff → `officeLocation eq
 
 ## Phase 2 — Data integrity
 
-One EF migration: `target_mailboxes.mailbox_unavailable_at timestamptz null`, new table `tunnel_mailbox_folders`, `sync_runs.requested_tunnel_ids text null`.
+**Status:** Approved 2026-08-26 (sections reviewed in conversation). Branch `sync-reliability/phase-2`, one migration, one deploy.
 
-- **2.1 No-mailbox users.** On a mailbox-level Graph failure whose error code is `MailboxNotEnabledForRESTAPI` (or message contains "inactive, soft-deleted, or is hosted on-premise"), set `MailboxUnavailableAt = now`. `LoadTargetMailboxesAsync` excludes rows where `MailboxUnavailableAt > now - 7d`; older stamps are re-probed and cleared on any successful mailbox operation. Excluded mailboxes are counted in the tunnel log line, not as failures. No run item is written.
-- **2.2 Dry runs write nothing.** `ProcessMailboxAsync` with `isDryRun`: no `contact_sync_state` insert/update/delete, no duplicate cleanup, no stale handling; run items still emitted. `ContactWriter.CreateContactsBatchAsync`: a step whose response lacks an `id` is `Success=false, Error="no contact id in response"`.
-- **2.3 Failed source ⇒ no stale pass.** `SourceResolver.ResolveAsync` returns `SourceResolution(List<SourceUser> Users, IReadOnlyList<string> FailedSources)`. If `FailedSources` is non-empty the tunnel skips `StaleContactHandler` for every mailbox this run, logs Error, adds to `tunnelErrors`, counts as warned.
-- **2.4 Stale reset.** `StaleContactHandler`: states whose `SourceUserId` is in the current set and `IsStale=true` → `IsStale=false, StaleDetectedAt=null`, saved in the same transaction.
-- **2.5 Folder identity.** `tunnel_mailbox_folders(id, tunnel_id, target_mailbox_id, graph_folder_id, folder_name, updated_at; unique(tunnel_id,target_mailbox_id))`. `ContactFolderManager.EnsureFolderAsync`: lookup row → GET folder by id (404 → fall through) → else search by name → else create; upsert the row. If `folder_name != tunnel.Name`, PATCH `displayName` and update the row. The existing "folder was created ⇒ wipe sync state" behaviour is retained only when a folder was genuinely created. Edit page: rename flagged high-impact with the explanation "the folder will be renamed on every phone at the next sync".
-- **2.6 Atomic write bookkeeping.** `ContactWriter` batch methods report results per chunk; `SyncEngine` persists the corresponding state rows immediately after each chunk using `CancellationToken.None`. The run's tunnel loop checks `ct.IsCancellationRequested` and breaks (marking the run Cancelled) instead of iterating remaining tunnels.
-- **2.7 Explicit run claiming.** `POST /api/sync-runs` creates the row with `RequestedTunnelIds` + `IsDryRun`, enqueues **one** job `RunAsync(runId)`; enqueue failure marks the row Failed. `SyncEngine.RunAsync(int runId, …)` claims that row (advisory lock retained for the Running guard); the cron path calls `RunAsync(runId: null, RunType.Scheduled)` and always creates its own row. `StaleRunCleanupService` fails Pending rows older than 10 minutes. `StopSync` cancels by the stored Hangfire job id.
-- **2.8 Notes prefix.** `ContactWriter.MapPayloadToContact` sets `PersonalNotes` only when `PersonalNotes` is in the payload or the contact is being created.
+**Code-reality findings that shaped this section** (2026-08-26 code map): the 259 per-run failures are enabled Entra accounts without a REST-enabled mailbox; the existing "self-heal" sets `IsActive=false` and `RefreshTargetMailboxesAsync` flips it back on the next refresh, so they fail every run. Dry runs today create Graph folders, wipe/delete `contact_sync_state`, and insert state rows with `GraphContactId = null` and `LastResult = "created"` — which a real run then treats as already synced. Every `RunAsync` caller passes `CancellationToken.None`; cancellation only happens via the `cancel_sync` flag between tunnels. A multi-tunnel manual trigger enqueues one Hangfire job per tunnel and whichever runs first claims the single Pending row; the others create unlinked rows. Nothing at worker startup reconciles a row left `Running` by a dead process, `RunAsync` has Hangfire's default 10 retries, and the Running guard is run-type-agnostic (a Running photo-sync row blocks contact runs). `ContactWriter` batch results are aggregated across 20-op chunks and persisted once per mailbox. `MapPayloadToContact` sets `PersonalNotes` whenever `OfficeLocation` is present, ignoring whether notes are in the payload.
 
-Tests: unit per item using the in-memory DbContext patterns in `tests/AFHSync.Tests.Unit/Sync`; `MigrationTests` covers the new schema.
+### 2.0 Migration (one)
+
+- `target_mailboxes`: `mailbox_unavailable_at timestamptz null`, `mailbox_last_probed_at timestamptz null`, `mailbox_unavailable_reason text null`. `IsActive` keeps its meaning (exists and enabled in Entra); the `IsActive=false` self-heal on the no-mailbox error is removed.
+- New table `tunnel_mailbox_folders(id, tunnel_id, target_mailbox_id, graph_folder_id, folder_name, updated_at)`, unique `(tunnel_id, target_mailbox_id)`, cascade delete with tunnel and mailbox.
+- `sync_runs.requested_tunnel_ids text null` (JSON array of tunnel ids; null = all). `hangfire_job_ids` stays and holds one id.
+- Data fix-up in the same migration: `DELETE FROM contact_sync_state WHERE graph_contact_id IS NULL` (dry-run artifacts and lost-id creates; the next real run recreates the contact). Deploy step 1 counts them first.
+- Applied at API startup as today; the worker assumes the schema.
+
+### 2.1 Unavailable mailboxes
+
+- In `ProcessMailboxAsync`, a folder-lookup failure whose `ODataError.Error.Code == "MailboxNotEnabledForRESTAPI"` or whose message contains "inactive, soft-deleted, or is hosted on-premise" is classified *unavailable*: set `MailboxUnavailableAt` (if null), `MailboxLastProbedAt = now`, `MailboxUnavailableReason = message`; log Information; write no run item; do not count as a failure. Any other error remains a failure as today.
+- `LoadTargetMailboxesAsync` excludes rows where `MailboxUnavailableAt IS NOT NULL AND MailboxLastProbedAt > now - 7d`; older stamps are included (weekly re-probe, forever). The first successful folder lookup clears all three columns. Each tunnel's log line reports `N excluded (unavailable)`.
+- UI: Targets page gains an **Unavailable mailboxes** section (name, email, since, last checked, reason; oldest first) backed by `GET /api/targets/unavailable`, with an "N of M" header so it reconciles with the dashboard's Target Users count.
+
+### 2.2 Dry runs write nothing
+
+- `ProcessMailboxAsync(isDryRun: true)`: folder is looked up, never created (no folder ⇒ every contact is "would create"); no `contact_sync_state` insert/update/delete; no duplicate cleanup (Graph or DB); no stale pass; run items still emitted. The dry-run branches stop populating `statesToAdd`/`statesToUpdate`; the final `SaveChangesAsync` and both `ExecuteDeleteAsync` calls are guarded.
+- `ContactWriter.CreateContactsBatchAsync`: a step whose response lacks an `id`, or whose response fails to parse, is `Success=false, Error="no contact id in response"`; no state row is written for it.
+
+### 2.3 Failed source ⇒ no stale pass
+
+- `SourceResolver.ResolveAsync` returns `SourceResolution(List<SourceUser> Users, IReadOnlyList<SourceFailure> FailedSources)`, `SourceFailure(int SourceId, string DisplayName, string Reason)`; the existing per-source catch records the failure and continues.
+- `ProcessTunnelAsync`: for each failure log Error, add `"{tunnel}: source '{name}' failed: {reason}"` to `tunnelErrors`, write a `SyncRunItem` (`Action="failed"`, `TunnelId`, `ErrorMessage = "Source '{name}': {reason}"`), count the tunnel as warned, and call `ProcessMailboxAsync` with `skipStale: true` for every mailbox. Contacts from the sources that resolved are still created/updated. Zero users still short-circuits the tunnel as today.
+
+### 2.4 Stale reset
+
+- `StaleContactHandler`: states whose `SourceUserId` is in the current set and `IsStale=true` → `IsStale=false, StaleDetectedAt=null`, saved in the same transaction as the stale marking (FlagHold and Leave; AutoRemove deletes rows so nothing to reset).
+
+### 2.5 Folder identity
+
+- `ContactFolderManager.GetOrCreateFolderAsync(tunnel, mailbox, isDryRun)`: (1) `tunnel_mailbox_folders` row → `GET /contactFolders/{id}`; found ⇒ use, 404 ⇒ fall through; (2) search by name; (3) create (skipped in dry run); (4) upsert the row with id and current name; `wasCreated` is true only for (3) and only that triggers the existing state wipe; (5) if `folder_name != tunnel.Name`, `PATCH displayName` and update the row. Run-scoped in-memory cache stays as the first check.
+- UI: tunnel edit page flags a name change as high-impact: "The contact folder will be renamed on every phone at the next sync."
+
+### 2.6 Durable bookkeeping and cancellation
+
+- `ContactWriter` batch methods accept `Func<IReadOnlyDictionary<string, BatchOperationResult>, Task> onChunkCompleted`, invoked after each 20-op chunk; `SyncEngine` persists that chunk's state rows in the callback with `CancellationToken.None`. The end-of-mailbox `SaveChangesAsync` remains for heals only. A crash loses at most the chunk in flight; its Graph contacts are caught by the existing duplicate cleanup next run.
+- Hangfire injects its shutdown token into `RunAsync`'s `ct`. The tunnel loop and the mailbox loop check `ct.IsCancellationRequested` at each boundary; on cancellation the run is finalized `Cancelled` with `"worker shutting down"` using `CancellationToken.None`. `compose.yaml` sets `stop_grace_period: 60s` on the worker. The `cancel_sync` flag keeps serving Stop Sync.
+
+### 2.7 Explicit run claiming
+
+- `POST /api/sync-runs` creates the row (`Pending`, `RunType`, `IsDryRun`, `RequestedTunnelIds`) and enqueues **one** job `RunAsync(runId)`; enqueue failure marks the row `Failed`. The per-tunnel fan-out is removed.
+- `ISyncEngine.RunAsync(int? runId, RunType runType, bool isDryRun, CancellationToken ct)`: under the existing advisory lock, `runId` given ⇒ claim that row (`Pending → Running`; already finalized ⇒ return without work); `runId` null (cron) ⇒ create a new row from the `runType`/`isDryRun` arguments. Once a row is claimed or created, `RunType`, `IsDryRun`, and the tunnel list are read from the row, never from the arguments. `[AutomaticRetry(Attempts = 0)]` on the interface method.
+- Worker startup, before the Hangfire server starts: every `Running` row → `Failed`, `ErrorSummary = "interrupted by worker restart"`; `cancel_sync` cleared. Nothing is auto-restarted.
+- `StaleRunCleanupService` also fails `Pending` rows older than 10 minutes.
+- `StopSync` unchanged (flag + force-cancel + delete by stored job id).
+- Photo sync (`PhotoSyncService.RunAllAsync`) creates and claims its row through the same locked path (`RunType.PhotoSync`), gets the retry-off attribute and the startup reconcile. The single "one run at a time" lane across run types stays — photo sync writes the same contacts.
+
+### 2.8 Notes prefix
+
+- `ContactWriter.MapPayloadToContact(payload, isCreate)` sets `PersonalNotes` only when `"PersonalNotes"` is a key in the payload or `isCreate` is true. On updates where the field profile omits notes (AddMissing), phone-side edits survive even when `OfficeLocation` is synced.
+
+### 2.9 Tests
+
+- Unit (in-memory DbContext; fakes updated: `FakeSourceResolver` → `SourceResolution`, `FakeContactWriter` gains a no-id step mode and the chunk callback, `FakeContactFolderManager` gains by-id/404/rename paths): 2.1 stamp/no-item/exclude-within-7d/re-include-after/clear-on-success/other-error-still-fails; 2.7 claim-by-id, finalized-row no-op, startup reconcile, Pending>10min failed, cancelled token ⇒ `Cancelled` with no further tunnels; 2.3 partial failure ⇒ run item + `tunnelErrors` + stale handler not invoked + other sources written; 2.4 reset; 2.2 dry run leaves state and folder untouched, no-id step ⇒ `Success=false`; 2.6 second chunk throws ⇒ first chunk persisted; 2.8 update without notes leaves them, create sets prefix; 2.5 by-id hit, 404 fallthrough, rename PATCH, `wasCreated` only on create.
+- Integration: replace the stub `MigrationTests` with a real one asserting the new columns, table, unique index, and `requested_tunnel_ids` after `MigrateAsync` on the test Postgres.
+- Gates: `dotnet test` (unit + integration) and `npm run build`.
+
+### 2.10 Deploy verification
+
+1. Before: `docker exec afh-postgres psql -U afhsync -d afhsync -c "SELECT COUNT(*) FROM contact_sync_state WHERE graph_contact_id IS NULL;"` — the number the migration deletes.
+2. With no run in progress, `./deploy.sh` (no manual `git pull` first — the script diffs its own pull).
+3. After: Targets page lists ~259 unavailable mailboxes; a manual run ends **Success** (not Warning) when nothing else is wrong; run detail shows `N excluded` per tunnel; a run started during a deploy ends `Cancelled — worker shutting down`, never orphaned.
 
 ## Phase 3 — API/UI correctness
 
