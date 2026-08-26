@@ -117,7 +117,7 @@ Expected results for the fixture set, e.g. Buckhead Staff → `officeLocation eq
 ### 2.7 Explicit run claiming
 
 - `POST /api/sync-runs` creates the row (`Pending`, `RunType`, `IsDryRun`, `RequestedTunnelIds`) and enqueues **one** job `RunAsync(runId)`; enqueue failure marks the row `Failed`. The per-tunnel fan-out is removed.
-- `ISyncEngine.RunAsync(int? runId, RunType runType, bool isDryRun, CancellationToken ct)`: under the existing advisory lock, `runId` given ⇒ claim that row (`Pending → Running`; already finalized ⇒ return without work); `runId` null (cron) ⇒ create a new row from the `runType`/`isDryRun` arguments. Once a row is claimed or created, `RunType`, `IsDryRun`, and the tunnel list are read from the row, never from the arguments. `[AutomaticRetry(Attempts = 0)]` on the interface method.
+- `ISyncEngine.RunAsync(int? runId, RunType runType, bool isDryRun, CancellationToken ct)`: under the existing advisory lock, `runId` given ⇒ claim that row (`Pending → Running`; already finalized ⇒ return without work); `runId` null (cron) ⇒ if any row is `Pending` or `Running`, skip (no row created, Information log); otherwise create a new row from the `runType`/`isDryRun` arguments. Once a row is claimed or created, `RunType`, `IsDryRun`, and the tunnel list are read from the row, never from the arguments. `[AutomaticRetry(Attempts = 0)]` on the interface method.
 - Worker startup, before the Hangfire server starts: every `Running` row → `Failed`, `ErrorSummary = "interrupted by worker restart"`; `cancel_sync` cleared. Nothing is auto-restarted.
 - `StaleRunCleanupService` also fails `Pending` rows older than 10 minutes.
 - `StopSync` unchanged (flag + force-cancel + delete by stored job id).
