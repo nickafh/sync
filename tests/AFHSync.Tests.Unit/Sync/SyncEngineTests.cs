@@ -193,6 +193,9 @@ public class SyncEngineTests
         // FakeRunLogger records the finalize counters; the DDG failure is counted as a contact failure
         // so the tunnel is 'warned' and the run ends Warning (see DetermineStatus).
         Assert.True(runLogger.FinalizedFailed >= 1, "DDG failure must be counted as a failure");
+        // The run-level errorSummary must surface DDG failures even when no tunnel outright
+        // failed (tunnelsFailed == 0 here — this tunnel is merely 'warned').
+        Assert.Contains("Buckhead Staff", runLogger.FinalizedErrorSummary);
         Assert.NotNull(run);
     }
 
@@ -742,6 +745,7 @@ public class SyncEngineTests
         public int FinalizedFailed { get; private set; }
         public int FinalizedTunnelsFailed { get; private set; }
         public int FinalizedThrottleEvents { get; private set; }
+        public string? FinalizedErrorSummary { get; private set; }
 
         private int _nextRunId = 1;
 
@@ -777,6 +781,7 @@ public class SyncEngineTests
             FinalizedFailed = contactsFailed;
             FinalizedTunnelsFailed = tunnelsFailed;
             FinalizedThrottleEvents = throttleEvents;
+            FinalizedErrorSummary = errorSummary;
             return Task.CompletedTask;
         }
     }

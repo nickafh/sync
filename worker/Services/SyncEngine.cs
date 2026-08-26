@@ -163,7 +163,7 @@ public sealed class SyncEngine(
                         await ProcessTunnelAsync(tunnel, run, isDryRun,
                             totalCreated, totalUpdated, totalSkipped, totalFailed, totalRemoved,
                             totalPhotosUpdated, totalPhotosFailed,
-                            tunnelsProcessed, tunnelsWarned, tunnelsFailed, ct);
+                            tunnelsProcessed, tunnelsWarned, tunnelsFailed, tunnelErrors, ct);
 
                     totalCreated += created;
                     totalUpdated += updated;
@@ -236,7 +236,9 @@ public sealed class SyncEngine(
             await runLogger.FinalizeRunAsync(
                 run,
                 status: finalStatus,
-                errorSummary: fatalError ?? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed: {string.Join("; ", tunnelErrors)}" : null),
+                errorSummary: fatalError ?? (tunnelErrors.Count > 0
+                    ? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed: " : "") + string.Join("; ", tunnelErrors)
+                    : null),
                 contactsCreated: totalCreated,
                 contactsUpdated: totalUpdated,
                 contactsSkipped: totalSkipped,
@@ -334,6 +336,7 @@ public sealed class SyncEngine(
         int priorCreated, int priorUpdated, int priorSkipped, int priorFailed, int priorRemoved,
         int priorPhotosUpdated, int priorPhotosFailed,
         int priorTunnelsProcessed, int priorTunnelsWarned, int priorTunnelsFailed,
+        List<string> tunnelErrors,
         CancellationToken ct)
     {
         logger.LogInformation("Processing tunnel {TunnelId} ({TunnelName})", tunnel.Id, tunnel.Name);
@@ -398,6 +401,7 @@ public sealed class SyncEngine(
                         logger.LogError(
                             "Tunnel {TunnelName}: DDG target '{Ddg}' failed: {Reason}",
                             tunnel.Name, ddgName, failure.Reason);
+                        tunnelErrors.Add($"{tunnel.Name}: DDG target '{ddgName}' failed: {failure.Reason}");
                         runLogger.AddItem(new SyncRunItem
                         {
                             SyncRunId = run.Id,
