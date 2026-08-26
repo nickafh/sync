@@ -34,7 +34,7 @@ Fold rules (attribute names case-insensitive):
 | `RecipientTypeDetails`, `RecipientType` | `-eq` to any of UserMailbox, SharedMailbox, RoomMailbox, EquipmentMailbox, MailUser, LinkedMailbox, TeamMailbox → `true`; `-eq` to anything else (MailContact, DynamicDistributionGroup, MailUniversalDistributionGroup, …) → `false`. `-ne` is the negation. |
 | `RecipientTypeDetailsValue` | any comparison → `false` (Exchange only uses it inside `-not(...)` exclusions) |
 | `Name -like 'SystemMailbox{*'`, `'CAS_{*'`, any `Name -like` | → `false` |
-| `HiddenFromAddressListsEnabled` | any comparison → `true` (GAL-hidden filtering happens in `SourceResolver`), record an informational note |
+| `HiddenFromAddressListsEnabled` | any comparison → `true` (GAL-hidden filtering happens in `SourceResolver`) |
 | Known Graph attributes (existing `AttributeMap`) | kept |
 | Anything else | kept, added to `UnknownAttributes` |
 
