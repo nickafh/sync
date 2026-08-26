@@ -42,12 +42,13 @@ public class SourceResolver : ISourceResolver
     /// combines results, applies post-query filtering, upserts to the database, and returns the filtered list.
     /// Routes to different Graph endpoints based on SourceType (DDG vs MailboxContacts).
     /// </summary>
-    public async Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
+    public async Task<SourceResolution> ResolveAsync(Tunnel tunnel, CancellationToken ct)
     {
         _logger.LogInformation("Resolving source members for tunnel {TunnelId} ({TunnelName}) with {SourceCount} source(s)",
             tunnel.Id, tunnel.Name, tunnel.TunnelSources.Count);
 
         var allSourceUsers = new List<SourceUser>();
+        var failures = new List<SourceFailure>();
 
         foreach (var source in tunnel.TunnelSources)
         {
@@ -124,6 +125,11 @@ public class SourceResolver : ISourceResolver
                 _logger.LogError(ex,
                     "Source {SourceId} ({SourceType}, {SourceIdentifier}) failed for tunnel {TunnelId} — skipping this source",
                     source.Id, source.SourceType, source.SourceIdentifier, tunnel.Id);
+                // Phase 2 (§2.3): report it — the engine records a run item and skips the stale pass.
+                failures.Add(new SourceFailure(
+                    source.Id,
+                    string.IsNullOrWhiteSpace(source.SourceDisplayName) ? source.SourceIdentifier : source.SourceDisplayName,
+                    ex.Message));
             }
         }
 
@@ -177,7 +183,7 @@ public class SourceResolver : ISourceResolver
 
         _logger.LogInformation("Tunnel {TunnelName}: reloaded {ReloadedCount} source users from DB (expected {ExpectedCount})",
             tunnel.Name, reloaded.Count, deduped.Count);
-        return reloaded;
+        return new SourceResolution(reloaded, failures);
     }
 
     /// <summary>

@@ -373,6 +373,37 @@ public class StaleContactHandlerTests
     }
 
     // ==============================
+    // Phase 2 (2.4): a user who is back in the source set is no longer stale
+    // ==============================
+
+    [Fact]
+    public async Task HandleStaleAsync_ReturningUser_ResetsStaleFlag_InSameSave()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        seedCtx.ContactSyncStates.AddRange(
+            new ContactSyncState { Id = 1, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "back", IsStale = true, StaleDetectedAt = DateTime.UtcNow.AddDays(-3) },
+            new ContactSyncState { Id = 2, SourceUserId = 2, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "still-gone", IsStale = true, StaleDetectedAt = DateTime.UtcNow.AddDays(-3) },
+            new ContactSyncState { Id = 3, SourceUserId = 3, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "newly-gone", IsStale = false });
+        await seedCtx.SaveChangesAsync();
+
+        var writer = new FakeContactWriter();
+        var handler = new StaleContactHandler(CreateFactory(dbName), writer, NullLogger<StaleContactHandler>.Instance);
+        var tunnel = CreateTunnel(1, StalePolicy.FlagHold, staleHoldDays: 14);
+
+        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", new HashSet<int> { 1 }, CancellationToken.None);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(2, result.StaleDetected);           // user 2 (still in hold) + user 3 (newly flagged)
+        using var verifyCtx = MakeDbContext(dbName);
+        var back = await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 1);
+        Assert.False(back.IsStale);
+        Assert.Null(back.StaleDetectedAt);
+        Assert.True((await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 2)).IsStale);
+        Assert.True((await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 3)).IsStale);
+    }
+
+    // ==============================
     // Test helper: FakeContactWriter
     // ==============================
 

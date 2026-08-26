@@ -1,5 +1,9 @@
+using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
+using AFHSync.Shared.Enums;
 using AFHSync.Worker.Services;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Graph.Models;
 
 namespace AFHSync.Tests.Unit.Sync;
@@ -11,6 +15,46 @@ namespace AFHSync.Tests.Unit.Sync;
 /// </summary>
 public class SourceResolverTests
 {
+    private static AFHSyncDbContext MakeDbContext(string dbName)
+    {
+        var options = new DbContextOptionsBuilder<AFHSyncDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+        return new AFHSyncDbContext(options);
+    }
+
+    private sealed class TestDbContextFactory(string dbName) : IDbContextFactory<AFHSyncDbContext>
+    {
+        public AFHSyncDbContext CreateDbContext() => MakeDbContext(dbName);
+    }
+
+    // ==============================
+    // Phase 2 (2.3): a source that throws is REPORTED, not swallowed
+    // ==============================
+
+    [Fact]
+    public async Task ResolveAsync_SourceThrows_ReportsFailureAndReturnsNoUsers()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var tunnel = new Tunnel { Id = 1, Name = "Buckhead Staff Tunnel" };
+        tunnel.TunnelSources.Add(new TunnelSource
+        {
+            Id = 11, TunnelId = 1, SourceType = SourceType.Ddg,
+            SourceIdentifier = "officeLocation eq 'Buckhead'", SourceDisplayName = "Buckhead Staff"
+        });
+        // No GraphClientFactory: the Graph call inside the per-source try throws, which is
+        // exactly the failure path (network/auth/filter errors) the resolver must report.
+        var resolver = new SourceResolver(null!, new TestDbContextFactory(dbName), NullLogger<SourceResolver>.Instance);
+
+        var result = await resolver.ResolveAsync(tunnel, CancellationToken.None);
+
+        Assert.Empty(result.Users);
+        var failure = Assert.Single(result.FailedSources);
+        Assert.Equal(11, failure.SourceId);
+        Assert.Equal("Buckhead Staff", failure.DisplayName);
+        Assert.False(string.IsNullOrWhiteSpace(failure.Reason));
+    }
+
     // ==============================
     // ApplySourceFilters Tests
     // ==============================

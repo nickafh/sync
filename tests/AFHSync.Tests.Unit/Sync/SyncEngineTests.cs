@@ -458,6 +458,60 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 2 (2.3): a failed source is reported, warns the tunnel and suppresses the stale pass
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_SourceFails_RecordsItemWarnsTunnel_SkipsStale_StillWritesResolvedUsers()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var resolver = new FakeSourceResolver(
+            [new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }],
+            [new SourceFailure(11, "Buckhead Staff", "Request_UnsupportedQuery")]);
+        var staleHandler = new RecordingStaleContactHandler();
+        var contactWriter = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: resolver, contactWriter: contactWriter,
+            staleHandler: staleHandler, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var failedItem = Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal(1, failedItem.TunnelId);
+        Assert.Null(failedItem.TargetMailboxId);
+        Assert.Null(failedItem.SourceUserId);
+        Assert.Equal("Source 'Buckhead Staff': Request_UnsupportedQuery", failedItem.ErrorMessage);
+        Assert.Single(contactWriter.CreatedContactIds);                         // resolved users still written
+        Assert.Contains(runLogger.AddedItems, i => i.Action == "created");
+        Assert.Equal(0, staleHandler.CallCount);                                 // no stale pass
+        Assert.Equal(SyncStatus.Warning, runLogger.FinalizedStatus);
+        Assert.Contains("Avail Tunnel: source 'Buckhead Staff' failed: Request_UnsupportedQuery", runLogger.FinalizedErrorSummary);
+    }
+
+    [Fact]
+    public async Task RunAsync_SourceFailsAndNoUsers_SkipsTunnelButStillWarns()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var resolver = new FakeSourceResolver([], [new SourceFailure(11, "Buckhead Staff", "boom")]);
+        var staleHandler = new RecordingStaleContactHandler();
+        var folderManager = new FakeContactFolderManager();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: resolver, folderManager: folderManager,
+            staleHandler: staleHandler, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(folderManager.Requested);                                   // no mailbox was touched
+        Assert.Equal(0, staleHandler.CallCount);
+        Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal(SyncStatus.Warning, runLogger.FinalizedStatus);
+    }
+
+    // ==============================
     // Test 2: 0 source members logs warning
     // ==============================
 
@@ -1028,16 +1082,16 @@ public class SyncEngineTests
     // Stub implementations
     // ==============================
 
-    private sealed class FakeSourceResolver(List<SourceUser> users) : ISourceResolver
+    private sealed class FakeSourceResolver(List<SourceUser> users, IReadOnlyList<SourceFailure>? failures = null) : ISourceResolver
     {
         public int ResolveCallCount { get; private set; }
         public List<int> ResolvedTunnelIds { get; } = [];
 
-        public Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
+        public Task<SourceResolution> ResolveAsync(Tunnel tunnel, CancellationToken ct)
         {
             ResolveCallCount++;
             ResolvedTunnelIds.Add(tunnel.Id);
-            return Task.FromResult(users);
+            return Task.FromResult(new SourceResolution(users, failures ?? []));
         }
     }
 
@@ -1046,11 +1100,11 @@ public class SyncEngineTests
     {
         public int ResolveCallCount { get; private set; }
 
-        public Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
+        public Task<SourceResolution> ResolveAsync(Tunnel tunnel, CancellationToken ct)
         {
             ResolveCallCount++;
             cts.Cancel();
-            return Task.FromResult(new List<SourceUser>());
+            return Task.FromResult(new SourceResolution([], []));
         }
     }
 
@@ -1171,6 +1225,19 @@ public class SyncEngineTests
             Tunnel tunnel, int phoneListId, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
             => Task.FromResult(new StaleResult(0, 0));
+    }
+
+    private sealed class RecordingStaleContactHandler : IStaleContactHandler
+    {
+        public int CallCount { get; private set; }
+
+        public Task<StaleResult> HandleStaleAsync(
+            Tunnel tunnel, int phoneListId, int targetMailboxId,
+            string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
+        {
+            CallCount++;
+            return Task.FromResult(new StaleResult(0, 0));
+        }
     }
 
     private sealed class FakePhotoSyncService : IPhotoSyncService

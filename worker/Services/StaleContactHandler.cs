@@ -39,6 +39,23 @@ public sealed class StaleContactHandler(
             .Where(s => !currentSourceUserIds.Contains(s.SourceUserId))
             .ToList();
 
+        // Phase 2 (§2.4): a source user who is back in the current set is no longer stale.
+        // Saved below in the same SaveChangesAsync as the stale marking (FlagHold and Leave;
+        // AutoRemove deletes rows so there is nothing to reset).
+        int reset = 0;
+        foreach (var state in existingStates)
+        {
+            if (state.IsStale && currentSourceUserIds.Contains(state.SourceUserId))
+            {
+                state.IsStale = false;
+                state.StaleDetectedAt = null;
+                reset++;
+            }
+        }
+        if (reset > 0)
+            logger.LogInformation("Reset stale flag on {Count} contact(s) that returned to the source set in mailbox {MailboxId}",
+                reset, targetMailboxId);
+
         int removed = 0;
         int staleDetected = 0;
 

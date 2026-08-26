@@ -377,11 +377,34 @@ public sealed class SyncEngine(
         logger.LogInformation("Processing tunnel {TunnelId} ({TunnelName})", tunnel.Id, tunnel.Name);
 
         // Step 5a: Resolve source members.
-        var sourceUsers = await sourceResolver.ResolveAsync(tunnel, ct);
+        var sourceResolution = await sourceResolver.ResolveAsync(tunnel, ct);
+        var sourceUsers = sourceResolution.Users;
+
+        // Phase 2 (§2.3): a source that failed means the current set is INCOMPLETE. Record each
+        // failure (run item + tunnelErrors), count the tunnel as warned, and skip the stale pass
+        // so nobody is flagged or removed because their source was unreachable this run.
+        int sourceFailures = 0;
+        foreach (var failure in sourceResolution.FailedSources)
+        {
+            logger.LogError("Tunnel {TunnelName}: source '{Source}' failed: {Reason}",
+                tunnel.Name, failure.DisplayName, failure.Reason);
+            tunnelErrors.Add($"{tunnel.Name}: source '{failure.DisplayName}' failed: {failure.Reason}");
+            runLogger.AddItem(new SyncRunItem
+            {
+                SyncRunId = run.Id,
+                TunnelId = tunnel.Id,
+                Action = "failed",
+                ErrorMessage = $"Source '{failure.DisplayName}': {failure.Reason}",
+                CreatedAt = DateTime.UtcNow
+            });
+            sourceFailures++;
+        }
+        var skipStale = sourceFailures > 0;
+
         if (sourceUsers.Count == 0)
         {
             logger.LogWarning("Tunnel {TunnelName}: 0 source members resolved, skipping", tunnel.Name);
-            return (0, 0, 0, 0, 0);
+            return (0, 0, 0, sourceFailures, 0);
         }
 
         // Step 5b: Filter out excluded contacts.
@@ -533,7 +556,7 @@ public sealed class SyncEngine(
         using var semaphore = new SemaphoreSlim(parallelism);
 
         int created = 0, updated = 0, skipped = 0, failed = 0, removed = 0;
-        failed += ddgTargetFailures;
+        failed += ddgTargetFailures + sourceFailures;
         var counterLock = new object();
 
         // Step 5h: Process mailboxes in parallel (bounded by semaphore, D-15).
@@ -549,7 +572,7 @@ public sealed class SyncEngine(
         if (phoneLists.Count == 0)
         {
             logger.LogWarning("Tunnel {TunnelName}: no phone lists configured, skipping", tunnel.Name);
-            return (0, 0, 0, 0, 0);
+            return (0, 0, 0, sourceFailures, 0);
         }
 
         var canonicalPhoneList = phoneLists[0];
@@ -566,7 +589,7 @@ public sealed class SyncEngine(
             {
                 var (c, u, s, f, r) = await ProcessMailboxAsync(
                     tunnel, canonicalPhoneList, allPhoneListIds, mailbox, run,
-                    sourceUsers, fieldSettings, isDryRun, ct);
+                    sourceUsers, fieldSettings, isDryRun, skipStale, ct);
 
                 lock (counterLock)
                 {
@@ -639,6 +662,7 @@ public sealed class SyncEngine(
         List<SourceUser> sourceUsers,
         List<FieldProfileField> fieldSettings,
         bool isDryRun,
+        bool skipStale,
         CancellationToken ct)
     {
         int created = 0, updated = 0, skipped = 0, failed = 0, removed = 0;
@@ -1058,7 +1082,8 @@ public sealed class SyncEngine(
         // Handle stale contacts after processing all source users.
         // Check across all phone lists for this tunnel+mailbox (stale handler scopes by phone list,
         // so call it for each phone list to catch records from any phone list).
-        if (!isDryRun)
+        // Phase 2 (§2.3): skipped when any source failed — the current set is incomplete.
+        if (!isDryRun && !skipStale)
         {
             var currentSourceIds = new HashSet<int>(sourceUsers.Select(u => u.Id));
 
