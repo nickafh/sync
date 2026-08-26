@@ -200,6 +200,71 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 1 fix wave: a SpecificUsers phone list with a null TargetUserFilter must not
+    // silently widen to every active mailbox. Mirrors
+    // RunAsync_DdgTargetFails_RecordsFailedItemAndTargetsNoMailboxes's setup, but with a null
+    // filter instead of a broken DDG reference.
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_SpecificUsersWithNullFilter_TargetsNoMailboxes()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            var tunnel = new Tunnel
+            {
+                Id = 1,
+                Name = "Null Filter Tunnel",
+                Status = TunnelStatus.Active,
+                StalePolicy = StalePolicy.AutoRemove,
+                StaleHoldDays = 14,
+            };
+            var phoneList = new PhoneList
+            {
+                Id = 12,
+                Name = "Broken Scope Users",
+                TargetScope = TargetScope.SpecificUsers,
+                TargetUserFilter = null,
+            };
+            var tunnelPhoneList = new TunnelPhoneList { TunnelId = 1, PhoneListId = 12, Tunnel = tunnel, PhoneList = phoneList };
+            tunnel.TunnelPhoneLists.Add(tunnelPhoneList);
+            seedCtx.Tunnels.Add(tunnel);
+            seedCtx.PhoneLists.Add(phoneList);
+            seedCtx.TunnelPhoneLists.Add(tunnelPhoneList);
+            // An active mailbox that must NOT be processed — a null filter must not widen
+            // SpecificUsers scope to every active mailbox.
+            seedCtx.TargetMailboxes.Add(new TargetMailbox
+            {
+                Id = 1, EntraId = "mb-1", Email = "someone@x.com", IsActive = true,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var sourceUser = new SourceUser
+        {
+            Id = 1, EntraId = "src-1", DisplayName = "Someone", Email = "someone-src@x.com",
+            IsEnabled = true, LastFetchedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        };
+        var runLogger = new FakeRunLogger();
+        var contactWriter = new FakeContactWriter();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([sourceUser]),
+            contactWriter: contactWriter,
+            runLogger: runLogger,
+            ddgResolver: new NotFoundDdgResolver(),
+            filterConverter: new PassThroughFilterConverter());
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "created");
+        Assert.Empty(contactWriter.CreatedContactIds);
+        Assert.NotNull(run);
+    }
+
+    // ==============================
     // Test 3: RunAsync calls SourceResolver for each active tunnel
     // ==============================
 

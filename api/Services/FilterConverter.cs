@@ -71,8 +71,10 @@ public class FilterConverter : IFilterConverter
         {
             ast = OpathParser.Parse(opathFilter.Trim());
         }
-        catch (OpathParseException ex)
+        catch (Exception ex)
         {
+            // Widened from OpathParseException so "never throws at consumers" holds by
+            // construction, not just for the exception type the parser happens to throw today.
             _logger.LogWarning("OPATH filter could not be parsed: {Message}. Filter: {Filter}", ex.Message, opathFilter);
             return new FilterConversionResult(false, opathFilter, $"Filter could not be parsed: {ex.Message}", []);
         }

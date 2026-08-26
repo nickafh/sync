@@ -103,4 +103,29 @@ public class OpathParserTests
     {
         Assert.Throws<OpathParseException>(() => OpathParser.Parse("(Office -eq 'Buckhead')) extra"));
     }
+
+    // A StackOverflowException is uncatchable and kills the process; the parser must reject
+    // filters that nest beyond a sane depth before recursion ever gets that far. 201 parenthesis
+    // levels (one past the 200 cap) around an otherwise-valid comparison must throw a normal,
+    // catchable OpathParseException rather than recursing further.
+    [Fact]
+    public void Parse_ExceedsMaxNestingDepth_Throws()
+    {
+        var input = new string('(', 201) + "Office -eq 'Buckhead'" + new string(')', 201);
+
+        var ex = Assert.Throws<OpathParseException>(() => OpathParser.Parse(input));
+        Assert.Contains("nests too deeply", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Exactly at the cap must still parse successfully — the guard should reject depth > 200,
+    // not depth == 200.
+    [Fact]
+    public void Parse_AtMaxNestingDepth_Succeeds()
+    {
+        var input = new string('(', 200) + "Office -eq 'Buckhead'" + new string(')', 200);
+
+        var node = OpathParser.Parse(input);
+
+        Assert.IsType<OpathCompare>(node);
+    }
 }

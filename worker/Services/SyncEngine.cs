@@ -375,7 +375,7 @@ public sealed class SyncEngine(
         var canonicalPl = tunnel.TunnelPhoneLists
             .Select(tpl => tpl.PhoneList)
             .FirstOrDefault();
-        if (canonicalPl?.TargetScope == TargetScope.SpecificUsers && !string.IsNullOrEmpty(canonicalPl.TargetUserFilter))
+        if (canonicalPl?.TargetScope == TargetScope.SpecificUsers)
         {
             try
             {
@@ -384,7 +384,14 @@ public sealed class SyncEngine(
                 // Old rows with only {emails: [...]} continue to work unchanged.
                 // The DDG-resolution union point — auto-provision below operates on the unioned set.
                 HashSet<string> plEmails;
-                if (ddgResolver != null && filterConverter != null)
+                if (string.IsNullOrEmpty(canonicalPl.TargetUserFilter))
+                {
+                    // A SpecificUsers scope with no filter has nothing to resolve against — it
+                    // must fall into the same "0 emails" branch below (targets no mailboxes),
+                    // not skip this block entirely and process every active mailbox.
+                    plEmails = [];
+                }
+                else if (ddgResolver != null && filterConverter != null)
                 {
                     var resolution = await TargetFilterResolver.ResolveAsync(
                         canonicalPl.TargetUserFilter,
@@ -475,7 +482,12 @@ public sealed class SyncEngine(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to parse phone list targetUserFilter for tunnel {TunnelName}", tunnel.Name);
+                // A failure here (including a cancelled token surfacing as OperationCanceledException)
+                // must not fall through with targetMailboxes still the unfiltered list — that would
+                // start a full-tenant pass for a tunnel scoped to specific users.
+                targetMailboxes = [];
+                logger.LogError(ex, "Failed to resolve target scope for tunnel {TunnelName}; targeting no mailboxes", tunnel.Name);
+                tunnelErrors.Add($"{tunnel.Name}: target scope resolution failed: {ex.Message}");
             }
         }
 

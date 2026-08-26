@@ -53,6 +53,12 @@ internal static class OpathFolder
         if (Is(attr, "HiddenFromAddressListsEnabled"))
             return new OpathConst(true);
 
+        // A bare '*' matches every value regardless of attribute — fold it to a constant so it
+        // never reaches ODataRenderer.RenderLike, which cannot express "match everything" as a
+        // Graph function (and previously rendered it as the nonsensical endsWith(f,'')).
+        if (c.Operator is "like" or "notlike" && c.Value == "*")
+            return new OpathConst(c.Operator == "like");
+
         if (FilterConverter.AttributeMap.ContainsKey(attr))
             return c;
 

@@ -39,13 +39,26 @@ internal static class ODataRenderer
 
     private static string RenderLike(string field, string pattern)
     {
+        if (pattern.Contains('?'))
+            throw new NotSupportedException($"wildcard pattern '{pattern}' cannot be expressed as a Graph filter");
+
         bool leading = pattern.StartsWith('*');
         bool trailing = pattern.Length > 1 && pattern.EndsWith('*');
-        var core = Escape(pattern.Trim('*'));
-        if (leading && trailing) return $"contains({field}, '{core}')";
-        if (trailing) return $"startsWith({field}, '{core}')";
-        if (leading) return $"endsWith({field}, '{core}')";
-        return $"{field} eq '{core}'";
+        var core = pattern;
+        if (leading) core = core[1..];
+        if (trailing) core = core[..^1];
+
+        // Any '*' remaining after stripping at most one leading and one trailing wildcard is an
+        // interior (or extra) wildcard — Graph's startsWith/endsWith/contains only support a
+        // wildcard at the edge(s), so this pattern has no faithful OData translation.
+        if (core.Contains('*'))
+            throw new NotSupportedException($"wildcard pattern '{pattern}' cannot be expressed as a Graph filter");
+
+        var escaped = Escape(core);
+        if (leading && trailing) return $"contains({field}, '{escaped}')";
+        if (trailing) return $"startsWith({field}, '{escaped}')";
+        if (leading) return $"endsWith({field}, '{escaped}')";
+        return $"{field} eq '{escaped}'";
     }
 
     private static string Escape(string value) => value.Replace("'", "''");

@@ -7,8 +7,19 @@ namespace AFHSync.Api.Services.Opath;
 /// </summary>
 public sealed class OpathParser
 {
+    /// <summary>
+    /// Max nesting depth for parenthesized groups and '-not' chains. A StackOverflowException
+    /// is uncatchable and kills the process (API and worker alike); this cap turns a
+    /// pathologically deep filter into a normal, catchable OpathParseException well before the
+    /// recursive-descent call stack gets anywhere near the runtime's limit. Bounding parser
+    /// recursion here also bounds every downstream recursion (Fold, Simplify, both renderers),
+    /// since none of them can produce a tree deeper than what the parser itself accepted.
+    /// </summary>
+    private const int MaxNestingDepth = 200;
+
     private readonly List<OpathToken> _tokens;
     private int _pos;
+    private int _depth;
 
     private OpathParser(List<OpathToken> tokens) => _tokens = tokens;
 
@@ -23,6 +34,13 @@ public sealed class OpathParser
     private OpathToken Peek => _tokens[_pos];
 
     private OpathToken Advance() => _tokens[_pos++];
+
+    private void EnterNesting(int position)
+    {
+        _depth++;
+        if (_depth > MaxNestingDepth)
+            throw new OpathParseException("Filter nests too deeply", position);
+    }
 
     private OpathToken Expect(OpathTokenKind kind)
     {
@@ -60,8 +78,16 @@ public sealed class OpathParser
     {
         if (Peek.Kind == OpathTokenKind.Not)
         {
-            Advance();
-            return new OpathNot(ParseNot());
+            var token = Advance();
+            EnterNesting(token.Position);
+            try
+            {
+                return new OpathNot(ParseNot());
+            }
+            finally
+            {
+                _depth--;
+            }
         }
         return ParsePrimary();
     }
@@ -74,9 +100,17 @@ public sealed class OpathParser
             case OpathTokenKind.LParen:
             {
                 Advance();
-                var inner = ParseOr();
-                Expect(OpathTokenKind.RParen);
-                return inner;
+                EnterNesting(token.Position);
+                try
+                {
+                    var inner = ParseOr();
+                    Expect(OpathTokenKind.RParen);
+                    return inner;
+                }
+                finally
+                {
+                    _depth--;
+                }
             }
             case OpathTokenKind.Boolean:
                 Advance();

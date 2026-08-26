@@ -238,6 +238,12 @@ public class FilterConverterTests
     [InlineData("North Atlanta Office", "officeLocation eq 'North Atlanta' or (onPremisesExtensionAttributes/extensionAttribute2 eq 'AFH' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff')")]
     [InlineData("All Atlanta Fine Homes Staff", "onPremisesExtensionAttributes/extensionAttribute2 eq 'AFH' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
     [InlineData("All Mountain Staff", "onPremisesExtensionAttributes/extensionAttribute2 eq 'MSIR' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff'")]
+    // Or-chain shape: Office in {four offices}, after RecipientTypeDetails/HiddenFromAddressListsEnabled/
+    // MailContact-branch/exclusions all fold away as covered above.
+    [InlineData("All Atlanta Fine Homes", "officeLocation eq 'Buckhead' or officeLocation eq 'Cobb' or officeLocation eq 'Intown' or officeLocation eq 'North Atlanta'")]
+    // Or-chain of two offices, or'd with a parenthesized And clause (mixed and/or needs parens
+    // per ODataRenderer.Operand since the And child's type differs from the Or parent).
+    [InlineData("All Mountain", "officeLocation eq 'Blue Ridge' or officeLocation eq 'Clayton' or (onPremisesExtensionAttributes/extensionAttribute2 eq 'MSIR' and onPremisesExtensionAttributes/extensionAttribute3 eq 'Staff')")]
     public void Convert_TenantFixture_ProducesExpectedGraphFilter(string name, string expected)
     {
         var (_, filter) = LoadFixtures().Single(f => f.Name == name);
@@ -323,6 +329,42 @@ public class FilterConverterTests
         Assert.Equal(expected, result.Filter);
     }
 
+    // ---- Wildcard-pattern safety: interior '*' and any '?' cannot be expressed as a Graph
+    // filter function (startsWith/endsWith/contains only support an edge wildcard); silently
+    // rendering them as a literal `eq` comparison against the raw pattern text would match
+    // nothing and silently under-deliver. A lone '*' matches every value and must fold away
+    // rather than render as endsWith(f,'').  ------------------------------------------------
+
+    [Fact]
+    public void Convert_LoneWildcardLike_AsOnlyClause_FailsAsMatchesAllUsers()
+    {
+        var result = _converter.Convert("(Title -like '*')");
+
+        Assert.False(result.Success);
+        Assert.Contains("all users", result.Warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Convert_LoneWildcardLike_WithOtherClause_DropsTheLikeClause()
+    {
+        var result = _converter.Convert("(Office -eq 'Buckhead') -and (Title -like '*')");
+
+        Assert.True(result.Success, result.Warning);
+        Assert.Equal("officeLocation eq 'Buckhead'", result.Filter);
+    }
+
+    [Theory]
+    [InlineData("(Title -like 'A*B')")]
+    [InlineData("(Title -like '?gent')")]
+    [InlineData("(Title -like 'Age*nt*')")]
+    public void Convert_UnsupportedWildcardPattern_Fails(string opath)
+    {
+        var result = _converter.Convert(opath);
+
+        Assert.False(result.Success);
+        Assert.NotNull(result.Warning);
+    }
+
     [Fact]
     public void Convert_QuoteInValue_IsEscapedForOData()
     {
@@ -361,14 +403,14 @@ public class FilterConverterTests
 
     // ---- Safety net: neither method may throw, no matter how malformed the input ---------
 
-    // Note: the deeply-nested-parens case is capped at 500 levels, not the 5,000 one might
-    // reach for. OpathParser is recursive-descent with no depth guard, and the xUnit test
-    // host thread has a much smaller stack than a normal process main thread: empirically,
-    // 5,000 levels crashes the test host with an *uncatchable* StackOverflowException at
-    // ~1,636 levels (verified directly against this test host, not a synthetic harness). 500
-    // stays a comfortable 3x below that observed crash point while still exercising deep
-    // recursion. The unbounded-recursion-depth gap in OpathParser itself is out of scope for
-    // this fix (limited to FilterConverter.cs and this test file) and is reported as a concern.
+    // Note: OpathParser now enforces a 200-level nesting depth guard (see OpathParserTests),
+    // so a deeply-nested-parens input throws a normal, catchable OpathParseException well
+    // before the recursive-descent call stack gets anywhere near the xUnit test host's limit.
+    // Previously (no guard) this crashed the test host with an *uncatchable*
+    // StackOverflowException at ~1,636 levels, which forced capping this input at a
+    // comfortable-but-arbitrary 500. With the guard in place, 5,000 — deep enough to have
+    // crashed the old, unguarded parser several times over — is exercised directly to prove
+    // the fix, not merely a value that happens to stay under the old crash point.
     private static readonly string[] AdversarialInputs =
     [
         "(Office -eq 'A') -and",
@@ -376,7 +418,7 @@ public class FilterConverterTests
         "-not",
         "Office",
         "'unterminated",
-        new string('(', 500),
+        new string('(', 5000),
     ];
 
     [Fact]
