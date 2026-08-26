@@ -4,6 +4,12 @@ using Microsoft.Extensions.Logging;
 
 namespace AFHSync.Worker.Services;
 
+/// <summary>One DDG target that could not contribute members this run.</summary>
+internal sealed record DdgTargetFailure(string Id, string? DisplayName, string Reason);
+
+/// <summary>Resolved target emails plus every DDG that failed to resolve.</summary>
+internal sealed record TargetFilterResolution(HashSet<string> Emails, IReadOnlyList<DdgTargetFailure> Failures);
+
 /// <summary>
 /// Pure parser/resolver for PhoneList.TargetUserFilter JSON. Extracted from SyncEngine
 /// to give the parsing + DDG-union logic a clean unit-test seam (mirrors the Phase 02
@@ -40,7 +46,7 @@ internal static class TargetFilterResolver
     /// </param>
     /// <param name="logger">For warnings / info.</param>
     /// <param name="ct">Cancellation token.</param>
-    public static async Task<HashSet<string>> ResolveAsync(
+    public static async Task<TargetFilterResolution> ResolveAsync(
         string? targetUserFilterJson,
         IDDGResolver ddgResolver,
         IFilterConverter filterConverter,
@@ -49,8 +55,9 @@ internal static class TargetFilterResolver
         CancellationToken ct)
     {
         var plEmails = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var failures = new List<DdgTargetFailure>();
         if (string.IsNullOrWhiteSpace(targetUserFilterJson))
-            return plEmails;
+            return new TargetFilterResolution(plEmails, failures);
 
         JsonElement filterData;
         try
@@ -60,11 +67,11 @@ internal static class TargetFilterResolver
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "Failed to parse targetUserFilter JSON; treating as empty");
-            return plEmails;
+            return new TargetFilterResolution(plEmails, failures);
         }
 
         if (filterData.ValueKind != JsonValueKind.Object)
-            return plEmails;
+            return new TargetFilterResolution(plEmails, failures);
 
         // 1) Explicit emails (back-compat path; behaviour unchanged from pre-2lb shape).
         if (filterData.TryGetProperty("emails", out var emailsArr) && emailsArr.ValueKind == JsonValueKind.Array)
@@ -115,18 +122,20 @@ internal static class TargetFilterResolver
                     var ddgInfo = await ddgResolver.GetDdgAsync(id, ct);
                     if (ddgInfo == null)
                     {
-                        logger.LogWarning(
+                        logger.LogError(
                             "DDG target {Id} ({Name}) not found at sync time, skipping",
                             id, displayName);
+                        failures.Add(new DdgTargetFailure(id, displayName, "DDG not found in Exchange at sync time"));
                         continue;
                     }
 
                     var conversion = filterConverter.Convert(ddgInfo.RecipientFilter);
                     if (!conversion.Success || string.IsNullOrWhiteSpace(conversion.Filter))
                     {
-                        logger.LogWarning(
+                        logger.LogError(
                             "DDG target {Id} ({Name}) RecipientFilter could not be converted to a Graph filter ({Warning}); skipping",
                             id, displayName, conversion.Warning ?? "unknown");
+                        failures.Add(new DdgTargetFailure(id, displayName, $"recipient filter could not be converted to a Graph filter: {conversion.Warning ?? "unknown"}"));
                         continue;
                     }
 
@@ -143,6 +152,7 @@ internal static class TargetFilterResolver
                         logger.LogWarning(
                             "DDG target {Id} ({Name}) resolved to 0 members, contributing nothing",
                             id, displayName);
+                        failures.Add(new DdgTargetFailure(id, displayName, "resolved to 0 members"));
                     }
                     else
                     {
@@ -154,13 +164,14 @@ internal static class TargetFilterResolver
                 catch (Exception ex)
                 {
                     // Per CONTEXT.md "Empty resolution" rule: one bad DDG must not fail the whole sync.
-                    logger.LogWarning(ex,
+                    logger.LogError(ex,
                         "DDG target {Id} ({Name}) resolution threw; skipping",
                         id, displayName);
+                    failures.Add(new DdgTargetFailure(id, displayName, $"resolution failed: {ex.Message}"));
                 }
             }
         }
 
-        return plEmails;
+        return new TargetFilterResolution(plEmails, failures);
     }
 }

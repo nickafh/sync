@@ -63,9 +63,9 @@ public class TargetFilterResolverTests
             NullLogger.Instance,
             CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.Contains("a@x.com", result);
-        Assert.Contains("b@x.com", result);
+        Assert.Equal(2, result.Emails.Count);
+        Assert.Contains("a@x.com", result.Emails);
+        Assert.Contains("b@x.com", result.Emails);
     }
 
     // ---- Test 2: null/empty JSON ---------------------------------------
@@ -81,7 +81,7 @@ public class TargetFilterResolverTests
             NullLogger.Instance,
             CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Emails);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class TargetFilterResolverTests
             NullLogger.Instance,
             CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Emails);
     }
 
     // ---- Test 3: ddgs only ---------------------------------------------
@@ -116,9 +116,9 @@ public class TargetFilterResolverTests
         var result = await TargetFilterResolver.ResolveAsync(
             json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
 
-        Assert.Equal(2, result.Count);
-        Assert.Contains("b@x.com", result);
-        Assert.Contains("c@x.com", result);
+        Assert.Equal(2, result.Emails.Count);
+        Assert.Contains("b@x.com", result.Emails);
+        Assert.Contains("c@x.com", result.Emails);
     }
 
     // ---- Test 4: union + case-insensitive dedupe -----------------------
@@ -141,9 +141,9 @@ public class TargetFilterResolverTests
             json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
 
         // Two distinct addresses (a@x.com and b@x.com); A@X.com folded into a@x.com.
-        Assert.Equal(2, result.Count);
-        Assert.Contains("a@x.com", result, StringComparer.OrdinalIgnoreCase);
-        Assert.Contains("b@x.com", result, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(2, result.Emails.Count);
+        Assert.Contains("a@x.com", result.Emails, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("b@x.com", result.Emails, StringComparer.OrdinalIgnoreCase);
     }
 
     // ---- Test 5: missing DDG (resolver returns null) -------------------
@@ -170,9 +170,9 @@ public class TargetFilterResolverTests
             json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
 
         // Explicit email + the surviving DDG's one member.
-        Assert.Equal(2, result.Count);
-        Assert.Contains("x@afh.com", result);
-        Assert.Contains("b@x.com", result);
+        Assert.Equal(2, result.Emails.Count);
+        Assert.Contains("x@afh.com", result.Emails);
+        Assert.Contains("b@x.com", result.Emails);
     }
 
     // ---- Test 6: empty DDG (resolver succeeds, Graph yields zero) ------
@@ -195,8 +195,8 @@ public class TargetFilterResolverTests
             json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
 
         // Only the explicit email survives.
-        Assert.Single(result);
-        Assert.Contains("x@afh.com", result);
+        Assert.Single(result.Emails);
+        Assert.Contains("x@afh.com", result.Emails);
     }
 
     // ---- Test 7: missing ddgs key (back-compat with pre-2lb shape) -----
@@ -216,8 +216,8 @@ public class TargetFilterResolverTests
             NullLogger.Instance,
             CancellationToken.None);
 
-        Assert.Single(result);
-        Assert.Contains("legacy@afh.com", result);
+        Assert.Single(result.Emails);
+        Assert.Contains("legacy@afh.com", result.Emails);
     }
 
     // ---- Bonus: filter-converter rejection path ------------------------
@@ -236,8 +236,8 @@ public class TargetFilterResolverTests
         var result = await TargetFilterResolver.ResolveAsync(
             json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
 
-        Assert.Single(result);
-        Assert.Contains("x@afh.com", result);
+        Assert.Single(result.Emails);
+        Assert.Contains("x@afh.com", result.Emails);
     }
 
     // ---- Bonus: malformed JSON does not throw --------------------------
@@ -253,6 +253,86 @@ public class TargetFilterResolverTests
             NullLogger.Instance,
             CancellationToken.None);
 
-        Assert.Empty(result);
+        Assert.Empty(result.Emails);
+    }
+
+    // ---- Failure reporting (Phase 1: DDG failures must be visible) ------------------------
+
+    [Fact]
+    public async Task ResolveAsync_DdgNotFound_ReportsFailureAndKeepsEmails()
+    {
+        var json = """{"emails":["a@x.com"],"ddgs":[{"id":"ddg-1","displayName":"Buckhead Staff"}]}""";
+
+        var result = await TargetFilterResolver.ResolveAsync(
+            json, Resolver(("ddg-1", null)), Converter(), StaticMembers(new()), NullLogger.Instance, CancellationToken.None);
+
+        Assert.Single(result.Emails);
+        var failure = Assert.Single(result.Failures);
+        Assert.Equal("ddg-1", failure.Id);
+        Assert.Equal("Buckhead Staff", failure.DisplayName);
+        Assert.Contains("not found", failure.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ConversionFails_ReportsFailureWithConverterWarning()
+    {
+        var json = """{"ddgs":[{"id":"ddg-1","displayName":"Buckhead Staff"}]}""";
+        var resolver = Resolver(("ddg-1", new DdgInfo("ddg-1", "Buckhead Staff", "bs@x.com", "(RecipientTypeDetails -eq 'MailContact')")));
+        var converter = new FakeFilterConverter(new()
+        {
+            ["(RecipientTypeDetails -eq 'MailContact')"] = new FilterConversionResult(false, "", "Filter matches no users")
+        });
+
+        var result = await TargetFilterResolver.ResolveAsync(
+            json, resolver, converter, StaticMembers(new()), NullLogger.Instance, CancellationToken.None);
+
+        Assert.Empty(result.Emails);
+        var failure = Assert.Single(result.Failures);
+        Assert.Contains("Filter matches no users", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_GraphQueryThrows_ReportsFailure()
+    {
+        var json = """{"ddgs":[{"id":"ddg-1","displayName":"Buckhead Staff"}]}""";
+        var resolver = Resolver(("ddg-1", new DdgInfo("ddg-1", "Buckhead Staff", "bs@x.com", "(Office -eq 'Buckhead')")));
+        var converter = Converter(("(Office -eq 'Buckhead')", "officeLocation eq 'Buckhead'"));
+        Func<string, CancellationToken, Task<List<string>>> throwing =
+            (_, _) => throw new InvalidOperationException("Request_UnsupportedQuery");
+
+        var result = await TargetFilterResolver.ResolveAsync(
+            json, resolver, converter, throwing, NullLogger.Instance, CancellationToken.None);
+
+        var failure = Assert.Single(result.Failures);
+        Assert.Contains("Request_UnsupportedQuery", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ZeroMembers_ReportsFailure()
+    {
+        var json = """{"ddgs":[{"id":"ddg-1","displayName":"Buckhead Staff"}]}""";
+        var resolver = Resolver(("ddg-1", new DdgInfo("ddg-1", "Buckhead Staff", "bs@x.com", "(Office -eq 'Buckhead')")));
+        var converter = Converter(("(Office -eq 'Buckhead')", "officeLocation eq 'Buckhead'"));
+
+        var result = await TargetFilterResolver.ResolveAsync(
+            json, resolver, converter, StaticMembers(new()), NullLogger.Instance, CancellationToken.None);
+
+        var failure = Assert.Single(result.Failures);
+        Assert.Contains("0 members", failure.Reason);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_HealthyDdg_HasNoFailures()
+    {
+        var json = """{"ddgs":[{"id":"ddg-1","displayName":"Buckhead Staff"}]}""";
+        var resolver = Resolver(("ddg-1", new DdgInfo("ddg-1", "Buckhead Staff", "bs@x.com", "(Office -eq 'Buckhead')")));
+        var converter = Converter(("(Office -eq 'Buckhead')", "officeLocation eq 'Buckhead'"));
+        var members = StaticMembers(new() { ["officeLocation eq 'Buckhead'"] = ["u1@x.com", "u2@x.com"] });
+
+        var result = await TargetFilterResolver.ResolveAsync(
+            json, resolver, converter, members, NullLogger.Instance, CancellationToken.None);
+
+        Assert.Equal(2, result.Emails.Count);
+        Assert.Empty(result.Failures);
     }
 }

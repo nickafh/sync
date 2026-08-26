@@ -380,13 +380,14 @@ public sealed class SyncEngine(
                 HashSet<string> plEmails;
                 if (ddgResolver != null && filterConverter != null)
                 {
-                    plEmails = await TargetFilterResolver.ResolveAsync(
+                    var resolution = await TargetFilterResolver.ResolveAsync(
                         canonicalPl.TargetUserFilter,
                         ddgResolver,
                         filterConverter,
                         (graphFilter, innerCt) => QueryDdgMemberEmailsAsync(graphFilter, tunnel.Name, innerCt),
                         logger,
                         ct);
+                    plEmails = resolution.Emails;
                 }
                 else
                 {
