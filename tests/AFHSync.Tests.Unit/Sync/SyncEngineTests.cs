@@ -43,7 +43,7 @@ public class SyncEngineTests
 
     private static SyncEngine CreateEngine(
         string dbName,
-        FakeSourceResolver? sourceResolver = null,
+        ISourceResolver? sourceResolver = null,
         FakeContactPayloadBuilder? payloadBuilder = null,
         FakeContactWriter? contactWriter = null,
         FakeContactFolderManager? folderManager = null,
@@ -222,6 +222,59 @@ public class SyncEngineTests
         Assert.Null(SyncEngine.ParseRequestedTunnelIds(""));
         Assert.Equal(new[] { 3, 5 }, SyncEngine.ParseRequestedTunnelIds("[3,5]")!);
         Assert.Empty(SyncEngine.ParseRequestedTunnelIds("not json")!);   // unreadable ⇒ process nothing, never "all"
+    }
+
+    // ==============================
+    // Phase 2 (2.6b): Hangfire's shutdown token ⇒ Cancelled "worker shutting down"
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_PreCancelledToken_FinalizesCancelledWithoutProcessingAnyTunnel()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.Tunnels.Add(new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove });
+            await seedCtx.SaveChangesAsync();
+        }
+        var sourceResolver = new FakeSourceResolver([]);
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, runLogger: runLogger);
+
+        var run = await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, new CancellationToken(canceled: true));
+
+        Assert.Equal(SyncStatus.Cancelled, run.Status);
+        Assert.True(runLogger.WasFinalized);
+        Assert.Equal(SyncStatus.Cancelled, runLogger.FinalizedStatus);
+        Assert.Equal("worker shutting down", runLogger.FinalizedErrorSummary);
+        Assert.Equal(0, sourceResolver.ResolveCallCount);
+        // The row was still claimed (bookkeeping ignores the shutdown token) so it can be finalized.
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_TokenCancelledMidRun_StopsAtNextTunnelBoundary()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.Tunnels.AddRange(
+                new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove },
+                new Tunnel { Id = 2, Name = "T2", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove });
+            await seedCtx.SaveChangesAsync();
+        }
+        using var cts = new CancellationTokenSource();
+        var sourceResolver = new CancellingSourceResolver(cts);
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, runLogger: runLogger);
+
+        var run = await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, cts.Token);
+
+        Assert.Equal(1, sourceResolver.ResolveCallCount);              // second tunnel never started
+        Assert.Equal(SyncStatus.Cancelled, run.Status);
+        Assert.Equal(SyncStatus.Cancelled, runLogger.FinalizedStatus);
+        Assert.Equal("worker shutting down", runLogger.FinalizedErrorSummary);
     }
 
     // ==============================
@@ -805,6 +858,19 @@ public class SyncEngineTests
             ResolveCallCount++;
             ResolvedTunnelIds.Add(tunnel.Id);
             return Task.FromResult(users);
+        }
+    }
+
+    /// <summary>Cancels the given source on its first call — simulates a shutdown arriving mid-run.</summary>
+    private sealed class CancellingSourceResolver(CancellationTokenSource cts) : ISourceResolver
+    {
+        public int ResolveCallCount { get; private set; }
+
+        public Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
+        {
+            ResolveCallCount++;
+            cts.Cancel();
+            return Task.FromResult(new List<SourceUser>());
         }
     }
 

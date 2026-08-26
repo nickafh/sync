@@ -130,7 +130,12 @@ try
     {
         options.WorkerCount = 2; // Low count: sync runs are heavy, bounded by semaphore
         options.Queues = new[] { "sync", "default" };
+        // Phase 2 (§2.6b): on SIGTERM Hangfire cancels the job token and waits this long for
+        // RunAsync to finalize the run as Cancelled. Must be < HostOptions.ShutdownTimeout (50s)
+        // < compose stop_grace_period (60s), otherwise Docker SIGKILLs mid-finalize.
+        options.ShutdownTimeout = TimeSpan.FromSeconds(45);
     });
+    services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSeconds(50));
 
     var app = builder.Build();
 

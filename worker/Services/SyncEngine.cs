@@ -45,6 +45,9 @@ public sealed class SyncEngine(
 {
     private const int DefaultParallelism = 4;
 
+    /// <summary>Phase 2 (§2.6b): errorSummary when Hangfire's shutdown/delete token stops a run.</summary>
+    internal const string WorkerShutdownReason = "worker shutting down";
+
     public async Task<SyncRun> RunAsync(
         int? runId,
         RunType runType,
@@ -109,9 +112,13 @@ public sealed class SyncEngine(
         string? fatalError = null;
         bool wasCancelled = false;
         var tunnelErrors = new List<string>();
+        string? cancelReason = null;
 
         try
         {
+            // Phase 2 (§2.6b): a run claimed during shutdown does no work — finalize it Cancelled.
+            ct.ThrowIfCancellationRequested();
+
             // Step 3: Load tunnels.
             var tunnels = await LoadTunnelsAsync(requestedTunnelIds, ct);
             tunnelCount = tunnels.Count;
@@ -123,6 +130,15 @@ public sealed class SyncEngine(
             // Step 5: Process each tunnel sequentially (D-13).
             foreach (var tunnel in tunnels)
             {
+                // Phase 2 (§2.6b): Hangfire signals this token on worker shutdown and job deletion.
+                if (ct.IsCancellationRequested)
+                {
+                    logger.LogInformation("Shutdown requested — stopping after {Processed} tunnel(s)", tunnelsProcessed + tunnelsWarned);
+                    wasCancelled = true;
+                    cancelReason = WorkerShutdownReason;
+                    break;
+                }
+
                 // Check for cancellation request (stop sync button)
                 var cancelRequested = await ReadAppSettingAsync("cancel_sync", "false", ct);
                 if (cancelRequested == "true")
@@ -181,6 +197,13 @@ public sealed class SyncEngine(
                         totalFailed, totalRemoved, tunnelsProcessed + tunnelsWarned, tunnelsWarned,
                         tunnelsFailed, totalPhotosUpdated, totalPhotosFailed);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    logger.LogInformation("Shutdown requested during tunnel {TunnelId} ({TunnelName}) — stopping", tunnel.Id, tunnel.Name);
+                    wasCancelled = true;
+                    cancelReason = WorkerShutdownReason;
+                    break;
+                }
                 catch (Exception ex)
                 {
                     logger.LogError(ex, "Tunnel {TunnelId} ({TunnelName}) failed with unhandled exception",
@@ -189,15 +212,29 @@ public sealed class SyncEngine(
                     tunnelErrors.Add($"{tunnel.Name}: {ex.Message}");
                 }
             }
-
-            // Step 6: Flush all buffered SyncRunItems.
-            // Use CancellationToken.None so shutdown doesn't discard buffered items.
-            await runLogger.FlushItemsAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Hangfire signalled shutdown (or deleted the job) while a tunnel/mailbox was in flight.
+            logger.LogInformation("SyncRun {RunId} cancelled by worker shutdown", run.Id);
+            wasCancelled = true;
+            cancelReason = WorkerShutdownReason;
         }
         catch (Exception ex)
         {
             fatalError = $"Sync run failed with unhandled exception: {ex.Message}";
             logger.LogError(ex, "SyncRun {RunId} failed with unhandled exception", run.Id);
+        }
+
+        // Step 6: Flush all buffered SyncRunItems — always, including after cancellation or a
+        // fatal error. CancellationToken.None so shutdown doesn't discard buffered items.
+        try
+        {
+            await runLogger.FlushItemsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to flush run items for SyncRun {RunId}", run.Id);
         }
 
         // Step 7: Determine final status.
@@ -213,7 +250,7 @@ public sealed class SyncEngine(
             await runLogger.FinalizeRunAsync(
                 run,
                 status: finalStatus,
-                errorSummary: fatalError ?? (tunnelErrors.Count > 0
+                errorSummary: fatalError ?? cancelReason ?? (tunnelErrors.Count > 0
                     ? (tunnelsFailed > 0 ? $"{tunnelsFailed} tunnel(s) failed: " : "") + string.Join("; ", tunnelErrors)
                     : null),
                 contactsCreated: totalCreated,
@@ -520,6 +557,10 @@ public sealed class SyncEngine(
 
         var mailboxTasks = targetMailboxes.Select(async mailbox =>
         {
+            // Phase 2 (§2.6b): mailbox boundary — don't start new mailboxes once shutdown is signalled.
+            if (ct.IsCancellationRequested)
+                return;
+
             await semaphore.WaitAsync(ct);
             try
             {

@@ -54,6 +54,7 @@ services:
       dockerfile: worker/Dockerfile
     container_name: afh-worker
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       - DOTNET_ENVIRONMENT=Production
       - ConnectionStrings__Default=Host=postgres;Database=afhsync;Username=afhsync;Password=${POSTGRES_PASSWORD}
