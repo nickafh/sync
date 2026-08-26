@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Worker.Graph;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.ODataErrors;
 
 namespace AFHSync.Worker.Services;
 
@@ -9,8 +12,13 @@ namespace AFHSync.Worker.Services;
 public sealed record GraphFolderInfo(string Id, string? DisplayName);
 
 /// <summary>
-/// Creates contact folders lazily per mailbox and caches their IDs in a
-/// <see cref="ConcurrentDictionary{TKey,TValue}"/> for the duration of a sync run.
+/// Resolves the contact folder for a (tunnel, mailbox) pair and caches the id for the duration
+/// of a sync run.
+///
+/// Phase 2 (§2.5) resolution order: run cache → remembered id in tunnel_mailbox_folders
+/// (GET by id; 404 falls through) → search by name → create (never in a dry run) → upsert the
+/// row → if the remembered name differs from tunnel.Name, PATCH displayName. This makes a
+/// tunnel rename a rename on every phone instead of a brand-new folder (and a state wipe).
 ///
 /// Thread-safe: multiple parallel mailbox tasks (bounded by semaphore in SyncEngine)
 /// may call <see cref="GetOrCreateFolderAsync"/> concurrently. A per-key lock ensures
@@ -25,6 +33,7 @@ public sealed record GraphFolderInfo(string Id, string? DisplayName);
 public class ContactFolderManager : IContactFolderManager
 {
     private readonly GraphClientFactory? _graphClientFactory;
+    private readonly IDbContextFactory<AFHSyncDbContext> _dbContextFactory;
     private readonly ILogger<ContactFolderManager> _logger;
 
     // ConcurrentDictionary: key = "mailboxEntraId:tunnelId", value = folderId.
@@ -35,9 +44,13 @@ public class ContactFolderManager : IContactFolderManager
     // a folder create to Graph, resulting in duplicate folders.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
 
-    public ContactFolderManager(GraphClientFactory graphClientFactory, ILogger<ContactFolderManager> logger)
+    public ContactFolderManager(
+        GraphClientFactory graphClientFactory,
+        IDbContextFactory<AFHSyncDbContext> dbContextFactory,
+        ILogger<ContactFolderManager> logger)
     {
         _graphClientFactory = graphClientFactory;
+        _dbContextFactory = dbContextFactory;
         _logger = logger;
     }
 
@@ -54,7 +67,7 @@ public class ContactFolderManager : IContactFolderManager
         if (_folderCache.TryGetValue(cacheKey, out var cachedId))
             return (cachedId, false);
 
-        // Slow path: acquire per-key lock so only one Graph call fires per folder
+        // Slow path: acquire per-key lock so only one Graph round-trip fires per folder
         var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
         await keyLock.WaitAsync(ct);
         try
@@ -63,31 +76,81 @@ public class ContactFolderManager : IContactFolderManager
             if (_folderCache.TryGetValue(cacheKey, out cachedId))
                 return (cachedId, false);
 
-            var existing = await FindFolderByNameAsync(mailbox.EntraId, tunnel.Name, ct);
-            if (existing is not null)
+            string? folderId = null;
+            var wasCreated = false;
+            var foundById = false;
+
+            // (1) Remembered id → GET by id; 404 falls through.
+            var known = await LoadKnownFolderAsync(tunnel.Id, mailbox.Id, ct);
+            if (known is not null)
             {
-                _logger.LogDebug(
-                    "Found existing contact folder '{FolderName}' ({FolderId}) in mailbox {MailboxId}",
-                    tunnel.Name, existing.Id, mailbox.EntraId);
-                _folderCache.TryAdd(cacheKey, existing.Id);
-                return (existing.Id, false);
+                var byId = await GetFolderByIdAsync(mailbox.EntraId, known.GraphFolderId, ct);
+                if (byId is not null)
+                {
+                    folderId = byId.Id;
+                    foundById = true;
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Remembered folder {FolderId} for tunnel {TunnelId} in mailbox {MailboxId} is gone — falling back to name lookup",
+                        known.GraphFolderId, tunnel.Id, mailbox.EntraId);
+                }
             }
 
-            if (isDryRun)
+            // (2) Search by name.
+            if (folderId is null)
             {
-                // Phase 2 (§2.2): dry runs never create. Not cached — a null is not a folder.
+                var byName = await FindFolderByNameAsync(mailbox.EntraId, tunnel.Name, ct);
+                if (byName is not null)
+                {
+                    _logger.LogDebug(
+                        "Found existing contact folder '{FolderName}' ({FolderId}) in mailbox {MailboxId}",
+                        tunnel.Name, byName.Id, mailbox.EntraId);
+                    folderId = byName.Id;
+                }
+            }
+
+            // (3) Create — never in a dry run (§2.2).
+            if (folderId is null)
+            {
+                if (isDryRun)
+                {
+                    _logger.LogInformation(
+                        "Dry run: contact folder '{FolderName}' does not exist in mailbox {MailboxId} — would create",
+                        tunnel.Name, mailbox.EntraId);
+                    return (null, false);
+                }
+
                 _logger.LogInformation(
-                    "Dry run: contact folder '{FolderName}' does not exist in mailbox {MailboxId} — would create",
+                    "Creating contact folder '{FolderName}' in mailbox {MailboxId}",
                     tunnel.Name, mailbox.EntraId);
-                return (null, false);
+                folderId = await CreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
+                wasCreated = true;
             }
 
-            _logger.LogInformation(
-                "Creating contact folder '{FolderName}' in mailbox {MailboxId}",
-                tunnel.Name, mailbox.EntraId);
-            var createdId = await CreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
-            _folderCache.TryAdd(cacheKey, createdId);
-            return (createdId, true);
+            if (!isDryRun)
+            {
+                // (5) Rename when the remembered name differs from the tunnel's current name.
+                if (foundById && known is not null && !string.Equals(known.FolderName, tunnel.Name, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation(
+                        "Renaming contact folder {FolderId} in mailbox {MailboxId} from '{OldName}' to '{NewName}'",
+                        folderId, mailbox.EntraId, known.FolderName, tunnel.Name);
+                    await RenameFolderAsync(mailbox.EntraId, folderId, tunnel.Name, ct);
+                }
+
+                // (4) Remember id + current name. CancellationToken.None: bookkeeping must survive a cancel.
+                await UpsertKnownFolderAsync(tunnel.Id, mailbox.Id, folderId, tunnel.Name);
+            }
+
+            _folderCache.TryAdd(cacheKey, folderId);
+
+            _logger.LogDebug(
+                "Contact folder '{FolderName}' resolved to {FolderId} for mailbox {MailboxId} (created={Created})",
+                tunnel.Name, folderId, mailbox.EntraId, wasCreated);
+
+            return (folderId, wasCreated);
         }
         finally
         {
@@ -103,6 +166,50 @@ public class ContactFolderManager : IContactFolderManager
         _logger.LogDebug("Contact folder cache cleared for new sync run");
     }
 
+    // ==============================
+    // tunnel_mailbox_folders bookkeeping
+    // ==============================
+
+    private async Task<TunnelMailboxFolder?> LoadKnownFolderAsync(int tunnelId, int mailboxId, CancellationToken ct)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(ct);
+        return await db.TunnelMailboxFolders
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId, ct);
+    }
+
+    private async Task UpsertKnownFolderAsync(int tunnelId, int mailboxId, string graphFolderId, string folderName)
+    {
+        await using var db = await _dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+        var row = await db.TunnelMailboxFolders
+            .FirstOrDefaultAsync(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId, CancellationToken.None);
+        var now = DateTime.UtcNow;
+
+        if (row is null)
+        {
+            db.TunnelMailboxFolders.Add(new TunnelMailboxFolder
+            {
+                TunnelId = tunnelId,
+                TargetMailboxId = mailboxId,
+                GraphFolderId = graphFolderId,
+                FolderName = folderName,
+                UpdatedAt = now
+            });
+        }
+        else if (row.GraphFolderId != graphFolderId || row.FolderName != folderName)
+        {
+            row.GraphFolderId = graphFolderId;
+            row.FolderName = folderName;
+            row.UpdatedAt = now;
+        }
+        else
+        {
+            return;
+        }
+
+        await db.SaveChangesAsync(CancellationToken.None);
+    }
+
     private Microsoft.Graph.GraphServiceClient Client =>
         _graphClientFactory?.Client
         ?? throw new InvalidOperationException("GraphClientFactory is required for Graph operations");
@@ -110,6 +217,25 @@ public class ContactFolderManager : IContactFolderManager
     // ==============================
     // Protected virtual Graph seams (overridden in unit tests)
     // ==============================
+
+    /// <summary>GET /users/{mailbox}/contactFolders/{id}; null when Graph answers 404.</summary>
+    protected virtual async Task<GraphFolderInfo?> GetFolderByIdAsync(
+        string mailboxEntraId, string folderId, CancellationToken ct)
+    {
+        try
+        {
+            var folder = await Client
+                .Users[mailboxEntraId]
+                .ContactFolders[folderId]
+                .GetAsync(config => config.QueryParameters.Select = ["id", "displayName"], cancellationToken: ct);
+
+            return folder?.Id is null ? null : new GraphFolderInfo(folder.Id, folder.DisplayName);
+        }
+        catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Queries Graph for a contact folder whose displayName equals <paramref name="folderName"/>.</summary>
     protected virtual async Task<GraphFolderInfo?> FindFolderByNameAsync(
@@ -143,5 +269,15 @@ public class ContactFolderManager : IContactFolderManager
                 $"Graph returned null folder ID after POST for mailbox {mailboxEntraId}");
 
         return created.Id;
+    }
+
+    /// <summary>PATCH /users/{mailbox}/contactFolders/{id} { displayName }.</summary>
+    protected virtual async Task RenameFolderAsync(
+        string mailboxEntraId, string folderId, string newName, CancellationToken ct)
+    {
+        await Client
+            .Users[mailboxEntraId]
+            .ContactFolders[folderId]
+            .PatchAsync(new ContactFolder { DisplayName = newName }, cancellationToken: ct);
     }
 }
