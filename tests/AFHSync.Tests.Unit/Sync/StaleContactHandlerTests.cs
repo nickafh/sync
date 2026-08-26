@@ -435,9 +435,11 @@ public class StaleContactHandlerTests
             return Task.CompletedTask;
         }
 
-        public Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
+        public async Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
             string mailboxEntraId, string folderId,
-            List<(string key, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+            List<(string key, SortedDictionary<string, string> payload)> operations,
+            Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
+            CancellationToken ct)
         {
             var results = new Dictionary<string, BatchOperationResult>();
             foreach (var (key, _) in operations)
@@ -446,12 +448,15 @@ public class StaleContactHandlerTests
                 CreatedContactIds.Add(id);
                 results[key] = new BatchOperationResult(true, id);
             }
-            return Task.FromResult(results);
+            if (onChunkCompleted is not null) await onChunkCompleted(results);
+            return results;
         }
 
-        public Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
+        public async Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
             string mailboxEntraId,
-            List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+            List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations,
+            Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
+            CancellationToken ct)
         {
             var results = new Dictionary<string, BatchOperationResult>();
             foreach (var (key, graphContactId, _) in operations)
@@ -459,7 +464,8 @@ public class StaleContactHandlerTests
                 UpdatedContactIds.Add(graphContactId);
                 results[key] = new BatchOperationResult(true);
             }
-            return Task.FromResult(results);
+            if (onChunkCompleted is not null) await onChunkCompleted(results);
+            return results;
         }
 
         public Task<Dictionary<string, BatchOperationResult>> DeleteContactsBatchAsync(

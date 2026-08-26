@@ -99,6 +99,7 @@ public class ContactWriter : IContactWriter
         string mailboxEntraId,
         string folderId,
         List<(string key, SortedDictionary<string, string> payload)> operations,
+        Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
         CancellationToken ct)
     {
         var results = new Dictionary<string, BatchOperationResult>();
@@ -130,6 +131,7 @@ public class ContactWriter : IContactWriter
                 var created = await response.GetResponseByIdAsync<Contact>(stepId);
                 return MapCreateResponse(created);
             }, ct);
+            await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
         }
 
         _logger.LogDebug("Batch create complete: {Success} succeeded, {Failed} failed",
@@ -142,6 +144,7 @@ public class ContactWriter : IContactWriter
     public async Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
         string mailboxEntraId,
         List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations,
+        Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
         CancellationToken ct)
     {
         var results = new Dictionary<string, BatchOperationResult>();
@@ -169,6 +172,7 @@ public class ContactWriter : IContactWriter
 
             await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
                 Task.FromResult(new BatchOperationResult(true)), ct);
+            await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
         }
 
         _logger.LogDebug("Batch update complete: {Success} succeeded, {Failed} failed",
@@ -276,6 +280,26 @@ public class ContactWriter : IContactWriter
                     NotFound: (int)statusCode == 404);
             }
         }
+    }
+
+    /// <summary>
+    /// Phase 2 (§2.6a): hands the just-completed chunk's results (and only those) to the caller
+    /// so state rows can be persisted before the next chunk goes out.
+    /// </summary>
+    private static async Task NotifyChunkCompletedAsync(
+        Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
+        Dictionary<string, string> stepIdToKey,
+        Dictionary<string, BatchOperationResult> results)
+    {
+        if (onChunkCompleted is null) return;
+
+        var chunkResults = new Dictionary<string, BatchOperationResult>();
+        foreach (var key in stepIdToKey.Values)
+        {
+            if (results.TryGetValue(key, out var result))
+                chunkResults[key] = result;
+        }
+        await onChunkCompleted(chunkResults);
     }
 
     private static IEnumerable<List<T>> ChunkOperations<T>(List<T> items, int chunkSize)

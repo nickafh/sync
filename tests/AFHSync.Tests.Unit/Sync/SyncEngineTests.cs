@@ -609,6 +609,38 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 2 (2.6a): state is persisted per chunk — a crash loses at most the chunk in flight
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_SecondChunkThrows_FirstChunkStateIsPersisted()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var contactWriter = new FakeContactWriter { ChunkSize = 2, ThrowOnChunkIndex = 1 };
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([
+                new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" },
+                new SourceUser { Id = 2, EntraId = "u2", DisplayName = "Bob" },
+                new SourceUser { Id = 3, EntraId = "u3", DisplayName = "Carol" }]),
+            contactWriter: contactWriter, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var states = await verifyCtx.ContactSyncStates.OrderBy(s => s.SourceUserId).ToListAsync();
+        Assert.Equal(new[] { 1, 2 }, states.Select(s => s.SourceUserId).ToArray());   // chunk 1 persisted
+        Assert.All(states, s => Assert.False(string.IsNullOrEmpty(s.GraphContactId)));
+        Assert.Equal(2, runLogger.AddedItems.Count(i => i.Action == "created"));
+        // The crash is contained as ONE mailbox-level failure (existing behaviour), not three.
+        var failedItem = Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Contains("simulated batch failure", failedItem.ErrorMessage);
+        Assert.Equal(1, runLogger.FinalizedFailed);
+    }
+
+    // ==============================
     // Test 2: 0 source members logs warning
     // ==============================
 
@@ -1237,6 +1269,12 @@ public class SyncEngineTests
         /// <summary>When true, batch creates report the no-id failure (Graph 2xx without an id).</summary>
         public bool CreateReturnsNoId { get; init; }
 
+        /// <summary>Operations per chunk handed to onChunkCompleted (real writer: 20).</summary>
+        public int ChunkSize { get; init; } = 20;
+
+        /// <summary>When set, the batch throws when it reaches this chunk index (0-based) — simulates a mid-mailbox crash.</summary>
+        public int? ThrowOnChunkIndex { get; init; }
+
         public Task<string> CreateContactAsync(string mailboxEntraId, string folderId, SortedDictionary<string, string> payload, CancellationToken ct)
         {
             var id = Guid.NewGuid().ToString();
@@ -1256,39 +1294,60 @@ public class SyncEngineTests
             return Task.CompletedTask;
         }
 
-        public Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
+        public async Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
             string mailboxEntraId, string folderId,
-            List<(string key, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+            List<(string key, SortedDictionary<string, string> payload)> operations,
+            Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
+            CancellationToken ct)
         {
             OnCreateContactsBatch?.Invoke();
             var results = new Dictionary<string, BatchOperationResult>();
-            foreach (var (key, _) in operations)
+            var chunkIndex = 0;
+            foreach (var chunk in operations.Chunk(ChunkSize))
             {
-                if (CreateReturnsNoId)
+                if (ThrowOnChunkIndex == chunkIndex)
+                    throw new InvalidOperationException("simulated batch failure");
+
+                var chunkResults = new Dictionary<string, BatchOperationResult>();
+                foreach (var (key, _) in chunk)
                 {
-                    results[key] = new BatchOperationResult(false, Error: ContactWriter.NoContactIdError);
-                    continue;
+                    if (CreateReturnsNoId)
+                    {
+                        chunkResults[key] = new BatchOperationResult(false, Error: ContactWriter.NoContactIdError);
+                        continue;
+                    }
+                    var id = Guid.NewGuid().ToString();
+                    CreatedContactIds.Add(id);
+                    chunkResults[key] = new BatchOperationResult(true, id);
                 }
-                var id = Guid.NewGuid().ToString();
-                CreatedContactIds.Add(id);
-                results[key] = new BatchOperationResult(true, id);
+                foreach (var kv in chunkResults) results[kv.Key] = kv.Value;
+                if (onChunkCompleted is not null) await onChunkCompleted(chunkResults);
+                chunkIndex++;
             }
-            return Task.FromResult(results);
+            return results;
         }
 
-        public Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
+        public async Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
             string mailboxEntraId,
-            List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
+            List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations,
+            Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
+            CancellationToken ct)
         {
             var results = new Dictionary<string, BatchOperationResult>();
-            foreach (var (key, graphContactId, _) in operations)
+            foreach (var chunk in operations.Chunk(ChunkSize))
             {
-                UpdatedContactIds.Add(graphContactId);
-                results[key] = UpdateReturnsNotFound
-                    ? new BatchOperationResult(false, Error: "HTTP 404", NotFound: true)
-                    : new BatchOperationResult(true);
+                var chunkResults = new Dictionary<string, BatchOperationResult>();
+                foreach (var (key, graphContactId, _) in chunk)
+                {
+                    UpdatedContactIds.Add(graphContactId);
+                    chunkResults[key] = UpdateReturnsNotFound
+                        ? new BatchOperationResult(false, Error: "HTTP 404", NotFound: true)
+                        : new BatchOperationResult(true);
+                }
+                foreach (var kv in chunkResults) results[kv.Key] = kv.Value;
+                if (onChunkCompleted is not null) await onChunkCompleted(chunkResults);
             }
-            return Task.FromResult(results);
+            return results;
         }
 
         public Task<Dictionary<string, BatchOperationResult>> DeleteContactsBatchAsync(

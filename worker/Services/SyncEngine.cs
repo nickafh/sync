@@ -640,6 +640,14 @@ public sealed class SyncEngine(
 
         await Task.WhenAll(mailboxTasks);
 
+        // Phase 2 (§2.6a/§2.6b): per-chunk persistence now uses CancellationToken.None so a
+        // shutdown mid-mailbox no longer surfaces as an OperationCanceledException out of
+        // ProcessMailboxAsync (that write is deliberately preserved, not lost). A mailbox skipped
+        // at the boundary check above therefore leaves no exception to report — so check
+        // explicitly here and let the caller's existing cancellation handling finalize the run
+        // as Cancelled rather than silently reporting Success.
+        ct.ThrowIfCancellationRequested();
+
         logger.LogInformation(
             "Tunnel {TunnelName} complete: Created={Created}, Updated={Updated}, Skipped={Skipped}, Failed={Failed}, Removed={Removed}",
             tunnel.Name, created, updated, skipped, failed, removed);
@@ -848,73 +856,103 @@ public sealed class SyncEngine(
         }
 
         // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
-        var statesToAdd = new List<ContactSyncState>();
-        var statesToUpdate = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
         // Sync-state IDs whose contact 404'd on update (deleted on the device). We drop the dead
-        // state row here so the next run recreates the contact, instead of failing forever.
+        // state row at the end of the mailbox so the next run recreates the contact.
         var statesToHeal = new List<int>();
 
         if (!isDryRun && pendingCreates.Count > 0)
         {
             var targetFolderId = folderId
                 ?? throw new InvalidOperationException($"No contact folder id for mailbox {mailbox.Id} outside a dry run");
-
+            var pendingByKey = pendingCreates.ToDictionary(c => c.key);
+            var handledKeys = new HashSet<string>();
             var batchOps = pendingCreates
                 .Select(c => (c.key, c.payload))
                 .ToList();
 
-            var batchResults = await contactWriter.CreateContactsBatchAsync(
-                mailbox.EntraId, targetFolderId, batchOps, ct);
-
-            foreach (var pending in pendingCreates)
+            // Phase 2 (§2.6a): persist each 20-op chunk as soon as Graph confirms it, with
+            // CancellationToken.None, so a crash or shutdown loses at most the chunk in flight
+            // (its Graph contacts are caught by the duplicate cleanup on the next run).
+            async Task OnCreateChunkCompleted(IReadOnlyDictionary<string, BatchOperationResult> chunkResults)
             {
-                if (batchResults.TryGetValue(pending.key, out var result) && result.Success)
+                var chunkStates = new List<ContactSyncState>();
+                foreach (var (key, result) in chunkResults)
                 {
-                    statesToAdd.Add(new ContactSyncState
-                    {
-                        SourceUserId = pending.sourceUserId,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        TunnelId = tunnel.Id,
-                        GraphContactId = result.GraphContactId,
-                        DataHash = pending.dataHash,
-                        LastSyncedAt = DateTime.UtcNow,
-                        LastResult = "created",
-                        CreatedAt = DateTime.UtcNow,
-                        UpdatedAt = DateTime.UtcNow
-                    });
+                    if (!pendingByKey.TryGetValue(key, out var pending) || !handledKeys.Add(key))
+                        continue;
 
-                    runLogger.AddItem(new SyncRunItem
+                    if (result.Success && !string.IsNullOrEmpty(result.GraphContactId))
                     {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = pending.sourceUserId,
-                        Action = "created",
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    created++;
+                        chunkStates.Add(new ContactSyncState
+                        {
+                            SourceUserId = pending.sourceUserId,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            TunnelId = tunnel.Id,
+                            GraphContactId = result.GraphContactId,
+                            DataHash = pending.dataHash,
+                            LastSyncedAt = DateTime.UtcNow,
+                            LastResult = "created",
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        });
+
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            SourceUserId = pending.sourceUserId,
+                            Action = "created",
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        created++;
+                    }
+                    else
+                    {
+                        var error = result.Error ?? "No batch result returned";
+                        logger.LogError("Batch create failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
+                            pending.sourceUserId, mailbox.Id, error);
+
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            SourceUserId = pending.sourceUserId,
+                            Action = "failed",
+                            ErrorMessage = error,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        failed++;
+                    }
                 }
-                else
+
+                if (chunkStates.Count > 0)
+                    await PersistStateChangesAsync(chunkStates, [], mailbox.Id);
+            }
+
+            await contactWriter.CreateContactsBatchAsync(
+                mailbox.EntraId, targetFolderId, batchOps, OnCreateChunkCompleted, ct);
+
+            foreach (var pending in pendingCreates.Where(p => !handledKeys.Contains(p.key)))
+            {
+                logger.LogError("Batch create returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
+                    pending.sourceUserId, mailbox.Id);
+                runLogger.AddItem(new SyncRunItem
                 {
-                    var error = result?.Error ?? "No batch result returned";
-                    logger.LogError("Batch create failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
-                        pending.sourceUserId, mailbox.Id, error);
-
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = pending.sourceUserId,
-                        Action = "failed",
-                        ErrorMessage = error,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    failed++;
-                }
+                    SyncRunId = run.Id,
+                    TunnelId = tunnel.Id,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    SourceUserId = pending.sourceUserId,
+                    Action = "failed",
+                    ErrorMessage = "No batch result returned",
+                    CreatedAt = DateTime.UtcNow
+                });
+                failed++;
             }
         }
         else if (isDryRun)
@@ -938,80 +976,108 @@ public sealed class SyncEngine(
 
         if (!isDryRun && pendingUpdates.Count > 0)
         {
+            var pendingByKey = pendingUpdates.ToDictionary(u => u.key);
+            var handledKeys = new HashSet<string>();
             var batchOps = pendingUpdates
                 .Select(u => (u.key, u.graphContactId, u.payload))
                 .ToList();
 
-            var batchResults = await contactWriter.UpdateContactsBatchAsync(
-                mailbox.EntraId, batchOps, ct);
-
-            foreach (var pending in pendingUpdates)
+            async Task OnUpdateChunkCompleted(IReadOnlyDictionary<string, BatchOperationResult> chunkResults)
             {
-                if (batchResults.TryGetValue(pending.key, out var result) && result.Success)
+                var chunkUpdates = new List<(int StateId, string DataHash, string? PreviousHash, string LastResult)>();
+                foreach (var (key, result) in chunkResults)
                 {
-                    var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
+                    if (!pendingByKey.TryGetValue(key, out var pending) || !handledKeys.Add(key))
+                        continue;
 
-                    statesToUpdate.Add((pending.stateId, pending.dataHash, pending.previousHash, "updated"));
-
-                    runLogger.AddItem(new SyncRunItem
+                    if (result.Success)
                     {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = pending.sourceUserId,
-                        Action = "updated",
-                        FieldChanges = fieldChangesJson,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    updated++;
+                        var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
+                        chunkUpdates.Add((pending.stateId, pending.dataHash, pending.previousHash, "updated"));
+
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            SourceUserId = pending.sourceUserId,
+                            Action = "updated",
+                            FieldChanges = fieldChangesJson,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        updated++;
+                    }
+                    else if (result.NotFound)
+                    {
+                        // The contact was deleted on the device. Drop the dead sync-state so it
+                        // recreates next run, rather than 404'ing on every future update.
+                        logger.LogInformation(
+                            "Contact gone (404) for SourceUserId={SourceUserId} in mailbox {MailboxId}; clearing state to recreate next run",
+                            pending.sourceUserId, mailbox.Id);
+                        statesToHeal.Add(pending.stateId);
+
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            SourceUserId = pending.sourceUserId,
+                            Action = "removed",
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        removed++;
+                    }
+                    else
+                    {
+                        var error = result.Error ?? "No batch result returned";
+                        logger.LogError("Batch update failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
+                            pending.sourceUserId, mailbox.Id, error);
+
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPhoneList.Id,
+                            TargetMailboxId = mailbox.Id,
+                            SourceUserId = pending.sourceUserId,
+                            Action = "failed",
+                            ErrorMessage = error,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        failed++;
+                    }
                 }
-                else if (result is { NotFound: true })
+
+                if (chunkUpdates.Count > 0)
+                    await PersistStateChangesAsync([], chunkUpdates, mailbox.Id);
+            }
+
+            await contactWriter.UpdateContactsBatchAsync(
+                mailbox.EntraId, batchOps, OnUpdateChunkCompleted, ct);
+
+            foreach (var pending in pendingUpdates.Where(p => !handledKeys.Contains(p.key)))
+            {
+                logger.LogError("Batch update returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
+                    pending.sourceUserId, mailbox.Id);
+                runLogger.AddItem(new SyncRunItem
                 {
-                    // The contact was deleted on the device. Drop the dead sync-state so it
-                    // recreates next run, rather than 404'ing on every future update.
-                    logger.LogInformation(
-                        "Contact gone (404) for SourceUserId={SourceUserId} in mailbox {MailboxId}; clearing state to recreate next run",
-                        pending.sourceUserId, mailbox.Id);
-
-                    statesToHeal.Add(pending.stateId);
-
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = pending.sourceUserId,
-                        Action = "removed",
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    removed++;
-                }
-                else
-                {
-                    var error = result?.Error ?? "No batch result returned";
-                    logger.LogError("Batch update failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
-                        pending.sourceUserId, mailbox.Id, error);
-
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = canonicalPhoneList.Id,
-                        TargetMailboxId = mailbox.Id,
-                        SourceUserId = pending.sourceUserId,
-                        Action = "failed",
-                        ErrorMessage = error,
-                        CreatedAt = DateTime.UtcNow
-                    });
-                    failed++;
-                }
+                    SyncRunId = run.Id,
+                    TunnelId = tunnel.Id,
+                    PhoneListId = canonicalPhoneList.Id,
+                    TargetMailboxId = mailbox.Id,
+                    SourceUserId = pending.sourceUserId,
+                    Action = "failed",
+                    ErrorMessage = "No batch result returned",
+                    CreatedAt = DateTime.UtcNow
+                });
+                failed++;
             }
         }
         else if (isDryRun)
         {
-            // Dry-run: record updates without Graph calls.
+            // Dry-run: report updates without Graph calls and without state rows (§2.2).
             foreach (var pending in pendingUpdates)
             {
                 var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
@@ -1034,48 +1100,16 @@ public sealed class SyncEngine(
         // Note: live progress for the dashboard is updated in the per-tunnel loop
         // (ProcessTunnelAsync caller) which has access to the overall totals.
 
-        // Save new/updated ContactSyncState records using a fresh tracked context.
-        if (!isDryRun && (statesToAdd.Count > 0 || statesToUpdate.Count > 0 || statesToHeal.Count > 0))
+        // Heals only: a contact that 404'd on update — drop the dead state so the next run
+        // recreates it. Creates and hash updates were persisted per chunk above (§2.6a).
+        if (!isDryRun && statesToHeal.Count > 0)
         {
-            await using var writeDb = await dbContextFactory.CreateDbContextAsync(ct);
-
-            if (statesToAdd.Count > 0)
-            {
-                writeDb.ContactSyncStates.AddRange(statesToAdd);
-            }
-
-            if (statesToHeal.Count > 0)
-            {
-                // Contact 404'd on update — drop the dead state so the next run recreates it.
-                var healStates = await writeDb.ContactSyncStates
-                    .Where(s => statesToHeal.Contains(s.Id))
-                    .ToListAsync(ct);
-                writeDb.ContactSyncStates.RemoveRange(healStates);
-            }
-
-            if (statesToUpdate.Count > 0)
-            {
-                // Bulk load states to update by ID.
-                var updateIds = statesToUpdate.Select(u => u.StateId).ToList();
-                var trackedStates = await writeDb.ContactSyncStates
-                    .Where(s => updateIds.Contains(s.Id))
-                    .ToListAsync(ct);
-
-                var updateDict = statesToUpdate.ToDictionary(u => u.StateId);
-                foreach (var s in trackedStates)
-                {
-                    if (updateDict.TryGetValue(s.Id, out var update))
-                    {
-                        s.PreviousDataHash = update.PreviousHash;
-                        s.DataHash = update.DataHash;
-                        s.LastResult = update.LastResult;
-                        s.LastSyncedAt = DateTime.UtcNow;
-                        s.UpdatedAt = DateTime.UtcNow;
-                    }
-                }
-            }
-
-            await writeDb.SaveChangesAsync(ct);
+            await using var healDb = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var healStates = await healDb.ContactSyncStates
+                .Where(s => statesToHeal.Contains(s.Id))
+                .ToListAsync(CancellationToken.None);
+            healDb.ContactSyncStates.RemoveRange(healStates);
+            await healDb.SaveChangesAsync(CancellationToken.None);
         }
 
         // Handle stale contacts after processing all source users.
@@ -1122,6 +1156,49 @@ public sealed class SyncEngine(
         }
 
         return (created, updated, skipped, failed, removed);
+    }
+
+    /// <summary>
+    /// Phase 2 (§2.6a): writes one chunk's new state rows and hash updates with a fresh context
+    /// and CancellationToken.None, so a shutdown mid-mailbox cannot lose confirmed Graph writes.
+    /// </summary>
+    private async Task PersistStateChangesAsync(
+        List<ContactSyncState> statesToAdd,
+        List<(int StateId, string DataHash, string? PreviousHash, string LastResult)> statesToUpdate,
+        int mailboxId)
+    {
+        if (statesToAdd.Count == 0 && statesToUpdate.Count == 0)
+            return;
+
+        await using var writeDb = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+
+        if (statesToAdd.Count > 0)
+            writeDb.ContactSyncStates.AddRange(statesToAdd);
+
+        if (statesToUpdate.Count > 0)
+        {
+            var updateIds = statesToUpdate.Select(u => u.StateId).ToList();
+            var trackedStates = await writeDb.ContactSyncStates
+                .Where(s => updateIds.Contains(s.Id))
+                .ToListAsync(CancellationToken.None);
+
+            var updateDict = statesToUpdate.ToDictionary(u => u.StateId);
+            foreach (var s in trackedStates)
+            {
+                if (updateDict.TryGetValue(s.Id, out var update))
+                {
+                    s.PreviousDataHash = update.PreviousHash;
+                    s.DataHash = update.DataHash;
+                    s.LastResult = update.LastResult;
+                    s.LastSyncedAt = DateTime.UtcNow;
+                    s.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+        }
+
+        await writeDb.SaveChangesAsync(CancellationToken.None);
+        logger.LogDebug("Persisted {Added} new and {Updated} updated state row(s) for mailbox {MailboxId}",
+            statesToAdd.Count, statesToUpdate.Count, mailboxId);
     }
 
     private async Task<List<FieldProfileField>> LoadDefaultFieldProfileAsync(CancellationToken ct)

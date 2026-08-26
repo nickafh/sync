@@ -61,12 +61,17 @@ public interface IContactWriter
     /// <param name="mailboxEntraId">Entra ID of the target mailbox.</param>
     /// <param name="folderId">Graph contact folder ID within the mailbox.</param>
     /// <param name="operations">List of (correlationKey, payload) tuples.</param>
+    /// <param name="onChunkCompleted">
+    /// Phase 2 (§2.6a): awaited after EACH 20-op chunk with that chunk's results only, so the
+    /// caller can persist bookkeeping before the next chunk is sent. Null to skip.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Dictionary mapping correlationKey to result (success + graphContactId or error).</returns>
     Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
         string mailboxEntraId,
         string folderId,
         List<(string key, SortedDictionary<string, string> payload)> operations,
+        Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
         CancellationToken ct);
 
     /// <summary>
@@ -74,11 +79,13 @@ public interface IContactWriter
     /// </summary>
     /// <param name="mailboxEntraId">Entra ID of the target mailbox.</param>
     /// <param name="operations">List of (correlationKey, graphContactId, payload) tuples.</param>
+    /// <param name="onChunkCompleted">Awaited after each 20-op chunk with that chunk's results (see CreateContactsBatchAsync).</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Dictionary mapping correlationKey to result (success or error).</returns>
     Task<Dictionary<string, BatchOperationResult>> UpdateContactsBatchAsync(
         string mailboxEntraId,
         List<(string key, string graphContactId, SortedDictionary<string, string> payload)> operations,
+        Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
         CancellationToken ct);
 
     /// <summary>
