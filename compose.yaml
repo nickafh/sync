@@ -69,6 +69,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # The API's /health only answers 200 after MigrateAsync completes at startup.
+      # RunReconciler reads sync_runs.requested_tunnel_ids at worker startup, so the worker
+      # must not start against a schema the API hasn't migrated yet (Important #5).
+      api:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
       interval: 30s

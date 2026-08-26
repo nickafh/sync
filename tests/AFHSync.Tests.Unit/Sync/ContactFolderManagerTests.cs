@@ -50,6 +50,9 @@ public class ContactFolderManagerTests
         /// <summary>When true, RenameFolderAsync counts the attempt then throws instead of renaming.</summary>
         public bool ThrowOnRename { get; set; }
 
+        /// <summary>When true, RenameFolderAsync counts the attempt then throws OperationCanceledException.</summary>
+        public bool ThrowOceOnRename { get; set; }
+
         public Dictionary<string, (string mailbox, string name)> Folders { get; }
 
         public FakeContactFolderManager(string dbName, Dictionary<string, (string mailbox, string name)>? folders = null)
@@ -87,6 +90,8 @@ public class ContactFolderManagerTests
             RenameCount++;
             if (ThrowOnRename)
                 throw new InvalidOperationException("simulated transient Graph failure on rename PATCH");
+            if (ThrowOceOnRename)
+                throw new OperationCanceledException("simulated shutdown mid-rename");
             Folders[folderId] = (mailboxEntraId, newName);
             return Task.CompletedTask;
         }
@@ -199,6 +204,23 @@ public class ContactFolderManagerTests
         Assert.Equal(1, fake.RenameCount);                         // attempted once
         using var ctx = MakeDbContext(dbName);
         Assert.Equal("Old Name", (await ctx.TunnelMailboxFolders.SingleAsync()).FolderName);  // retried next run
+    }
+
+    // Important #4: unlike a real transient rename failure, shutdown cancellation during the
+    // rename PATCH must propagate rather than being swallowed as "retry next run".
+    [Fact]
+    public async Task RenameThrowsOperationCanceled_PropagatesInsteadOfBeingSwallowed()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedKnownFolderAsync(dbName, 1, 1, graphFolderId: "f-1", folderName: "Old Name");
+        var fake = new FakeContactFolderManager(dbName, new() { ["f-1"] = ("mailbox-1", "Old Name") }) { ThrowOceOnRename = true };
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => fake.GetOrCreateFolderAsync(T(1, "New Name"), M(1, "mailbox-1"), false, CancellationToken.None));
+
+        Assert.Equal(1, fake.RenameCount);                         // attempted once
+        using var ctx = MakeDbContext(dbName);
+        Assert.Equal("Old Name", (await ctx.TunnelMailboxFolders.SingleAsync()).FolderName);  // upsert never ran
     }
 
     [Fact]

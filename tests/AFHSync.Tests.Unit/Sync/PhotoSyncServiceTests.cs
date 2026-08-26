@@ -469,6 +469,31 @@ public class PhotoSyncServiceTests
         Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());   // no photo run row was created
     }
 
+    // Minor (same-theme as Important #1): shutdown cancellation ⇒ Cancelled "worker shutting
+    // down", mirroring SyncEngine's tunnel-boundary check — not Failed "unhandled exception:
+    // The operation was canceled".
+    [Fact]
+    public async Task RunAllAsync_PreCancelledToken_FinalizesCancelled()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+        seedCtx.AppSettings.Add(new AppSetting { Id = 100, Key = "photo_sync_mode", Value = "separate_pass", Description = "Test", UpdatedAt = DateTime.UtcNow });
+        seedCtx.Tunnels.Add(new Tunnel
+        {
+            Id = 1, Name = "Tunnel 1", Status = TunnelStatus.Active, PhotoSyncEnabled = true, FieldProfileId = 1
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var testable = CreateTestableService(dbName);
+
+        await testable.Service.RunAllAsync(RunType.Scheduled, isDryRun: false, new CancellationToken(canceled: true));
+
+        Assert.True(testable.RunLogger.WasFinalized);
+        Assert.Equal(SyncStatus.Cancelled, testable.RunLogger.FinalizedStatus);
+        Assert.Equal(SyncEngine.WorkerShutdownReason, testable.RunLogger.FinalizedErrorSummary);
+    }
+
     // ==============================
     // Test 12: RunAllAsync routes MailboxContact photo fetch via the matched user
     // ==============================
@@ -723,7 +748,8 @@ public class PhotoSyncServiceTests
     /// <summary>
     /// Testable subclass of PhotoSyncService that overrides Graph SDK calls.
     /// FetchUserPhotoAsync and WriteContactPhotoAsync are protected virtual in the base class
-    /// (following the ContactFolderManager.FetchOrCreateFolderFromGraphAsync pattern).
+    /// (following the same protected-virtual-Graph-seam pattern as ContactFolderManager's
+    /// GetOrCreateFolderAsync, e.g. GetFolderByIdAsync/CreateFolderAsync/RenameFolderAsync).
     /// </summary>
     private sealed class TestablePhotoSyncService : PhotoSyncService
     {
@@ -782,6 +808,8 @@ public class PhotoSyncServiceTests
         public bool WasFinalized { get; private set; }
         public int FlushCount { get; private set; }
         public List<SyncRunItem> AddedItems { get; } = [];
+        public SyncStatus? FinalizedStatus { get; private set; }
+        public string? FinalizedErrorSummary { get; private set; }
 
         private int _nextRunId = 1;
 
@@ -815,6 +843,8 @@ public class PhotoSyncServiceTests
             int throttleEvents, int photosUpdated, int photosFailed, CancellationToken ct)
         {
             WasFinalized = true;
+            FinalizedStatus = status;
+            FinalizedErrorSummary = errorSummary;
             return Task.CompletedTask;
         }
     }

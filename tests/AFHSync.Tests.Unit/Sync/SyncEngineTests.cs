@@ -337,6 +337,58 @@ public class SyncEngineTests
         Assert.True(runLogger.WasFinalized);
     }
 
+    // Important #1(b): the folder-lookup catch must not turn shutdown cancellation into a
+    // per-mailbox "failed" run item — it should propagate to the existing Cancelled handling.
+    [Fact]
+    public async Task RunAsync_FolderLookupThrowsOceUnderCancelledToken_FinalizesCancelled_NoFailedItems()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+
+        using var cts = new CancellationTokenSource();
+        var folderManager = new FakeContactFolderManager { OnRequested = () => cts.Cancel() };
+        folderManager.Failures["mb-1"] = new OperationCanceledException();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager,
+            runLogger: runLogger);
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, cts.Token);
+
+        Assert.Equal(SyncStatus.Cancelled, run.Status);
+        Assert.Equal(SyncStatus.Cancelled, runLogger.FinalizedStatus);
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "failed");
+    }
+
+    // ==============================
+    // Important #3: PersistStateChangesAsync has its own dry-run guard, not just call-site nesting
+    // ==============================
+
+    [Fact]
+    public async Task PersistStateChangesAsync_DryRun_ReturnsEarly_WritesNoStateRows()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var engine = CreateEngine(dbName);
+
+        var statesToAdd = new List<ContactSyncState>
+        {
+            new()
+            {
+                SourceUserId = 1, PhoneListId = 1, TargetMailboxId = 1, TunnelId = 1,
+                GraphContactId = "g1", DataHash = "hash1", LastSyncedAt = DateTime.UtcNow,
+                LastResult = "created", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            }
+        };
+
+        await engine.PersistStateChangesAsync(statesToAdd, [], mailboxId: 1, isDryRun: true);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(0, await verifyCtx.ContactSyncStates.CountAsync());
+    }
+
     // ==============================
     // Phase 2 (2.1): unavailable mailboxes are stamped and skipped, not failed
     // ==============================
@@ -1377,10 +1429,15 @@ public class SyncEngineTests
 
         public int CreateCount { get; private set; }
 
+        /// <summary>Invoked when a mailbox's folder is requested, before any configured failure is
+        /// thrown — lets a test simulate the shutdown token firing while the Graph call was in flight.</summary>
+        public Action? OnRequested { get; set; }
+
         public Task<(string? folderId, bool wasCreated)> GetOrCreateFolderAsync(
             Tunnel tunnel, TargetMailbox mailbox, bool isDryRun, CancellationToken ct)
         {
             Requested.Add(mailbox.EntraId);
+            OnRequested?.Invoke();
             if (Failures.TryGetValue(mailbox.EntraId, out var ex))
                 throw ex;
             if (MissingFolderMailboxes.Contains(mailbox.EntraId))

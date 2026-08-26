@@ -1,5 +1,13 @@
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using AFHSync.Worker.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
+using Microsoft.Kiota.Abstractions.Authentication;
+using GraphClientFactory = AFHSync.Worker.Graph.GraphClientFactory;
 
 namespace AFHSync.Tests.Unit.Sync;
 
@@ -214,5 +222,144 @@ public class ContactWriterTests
         var contact = ContactWriter.MapPayloadToContact(payload, isCreate: false);
 
         Assert.Equal("Office: Buckhead", contact.PersonalNotes);
+    }
+
+    // ── Important #1(a): shutdown cancellation must not become a per-key "failed" result ─────
+    //
+    // These build a REAL ContactWriter backed by a REAL GraphServiceClient whose HTTP transport
+    // is a fake HttpMessageHandler (no network, no credential — see GraphClientFactory's
+    // internal test-only constructor) so the production chunk-loop / retry code in
+    // ExecuteBatchWithRetryAsync runs end to end, not a hand-written test double.
+
+    [Fact]
+    public async Task CreateContactsBatchAsync_TokenAlreadyCancelled_PropagatesOce_NotPerKeyFailure()
+    {
+        var (writer, handler) = BuildWriterWithFakeGraphTransport();
+        var ops = new List<(string key, SortedDictionary<string, string> payload)>
+        {
+            ("k1", new SortedDictionary<string, string> { ["DisplayName"] = "A" }),
+        };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => writer.CreateContactsBatchAsync("mbx1", "folder1", ops, onChunkCompleted: null, cts.Token));
+
+        Assert.Equal(0, handler.CallCount); // no HTTP call — never posted, never swallowed
+    }
+
+    [Fact]
+    public async Task UpdateContactsBatchAsync_TokenAlreadyCancelled_PropagatesOce_NotPerKeyFailure()
+    {
+        var (writer, handler) = BuildWriterWithFakeGraphTransport();
+        var ops = new List<(string key, string graphContactId, SortedDictionary<string, string> payload)>
+        {
+            ("k1", "graph-1", new SortedDictionary<string, string> { ["DisplayName"] = "A" }),
+        };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => writer.UpdateContactsBatchAsync("mbx1", ops, onChunkCompleted: null, cts.Token));
+
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task DeleteContactsBatchAsync_TokenAlreadyCancelled_PropagatesOce_NotPerKeyFailure()
+    {
+        var (writer, handler) = BuildWriterWithFakeGraphTransport();
+        var ops = new List<(string key, string graphContactId)> { ("k1", "graph-1") };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => writer.DeleteContactsBatchAsync("mbx1", ops, cts.Token));
+
+        Assert.Equal(0, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task CreateContactsBatchAsync_TokenCancelledBetweenChunks_FirstChunkPersists_SecondNeverSent()
+    {
+        CancellationTokenSource? cts = null;
+        var (writer, handler) = BuildWriterWithFakeGraphTransport(onBatchHandled: () => cts!.Cancel());
+        cts = new CancellationTokenSource();
+
+        // 25 ops => chunk 1 = 20 (MaxBatchSize), chunk 2 = 5. The fake transport cancels the
+        // token as chunk 1's response comes back — simulating the Hangfire shutdown token
+        // firing while that HTTP round trip was already in flight.
+        var ops = Enumerable.Range(0, 25)
+            .Select(i => ($"k{i}", new SortedDictionary<string, string> { ["DisplayName"] = $"Contact {i}" }))
+            .ToList();
+
+        var chunkResults = new List<IReadOnlyDictionary<string, BatchOperationResult>>();
+        Task OnChunkCompleted(IReadOnlyDictionary<string, BatchOperationResult> results)
+        {
+            chunkResults.Add(results);
+            return Task.CompletedTask;
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => writer.CreateContactsBatchAsync("mbx1", "folder1", ops, OnChunkCompleted, cts.Token));
+
+        Assert.Equal(1, handler.CallCount); // chunk 2 never reached the transport
+        var chunk1 = Assert.Single(chunkResults); // onChunkCompleted ran exactly once, for chunk 1
+        Assert.Equal(20, chunk1.Count);
+        Assert.All(chunk1.Values, r => Assert.True(r.Success)); // no per-key "canceled" failures
+    }
+
+    // ── Fake Graph SDK transport (no network, no credential) ─────────────────────────────────
+
+    private static (ContactWriter writer, FakeBatchHandler handler) BuildWriterWithFakeGraphTransport(
+        Action? onBatchHandled = null)
+    {
+        var handler = new FakeBatchHandler(onBatchHandled);
+        var httpClient = new HttpClient(handler);
+        var client = new GraphServiceClient(httpClient, new NoOpAuthenticationProvider());
+        var factory = new GraphClientFactory(client);
+        var writer = new ContactWriter(factory, NullLogger<ContactWriter>.Instance);
+        return (writer, handler);
+    }
+
+    private sealed class NoOpAuthenticationProvider : IAuthenticationProvider
+    {
+        public Task AuthenticateRequestAsync(
+            RequestInformation request,
+            Dictionary<string, object>? additionalAuthenticationContext = null,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Fake $batch transport: echoes a 201-with-id success for every step in the incoming
+    /// request, so ContactWriter's real batch/retry code runs end to end without hitting Graph.
+    /// </summary>
+    private sealed class FakeBatchHandler(Action? onBatchHandled) : HttpMessageHandler
+    {
+        public int CallCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            var bodyStr = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(bodyStr!);
+            var ids = doc.RootElement.GetProperty("requests").EnumerateArray()
+                .Select(r => r.GetProperty("id").GetString()!)
+                .ToList();
+
+            var responses = ids.Select((id, i) =>
+                new { id, status = 201, body = new { id = $"graph-contact-{CallCount}-{i}" } });
+            var json = JsonSerializer.Serialize(new { responses });
+
+            onBatchHandled?.Invoke();
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+        }
     }
 }

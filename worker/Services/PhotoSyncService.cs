@@ -443,10 +443,13 @@ public class PhotoSyncService : IPhotoSyncService
     [AutomaticRetry(Attempts = 0)]
     public async Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct)
     {
-        // Read photo_sync_mode once at start (T-06-04: prevents mid-run mode switch)
-        await using var settingsDb = await _dbContextFactory.CreateDbContextAsync(ct);
+        // Read photo_sync_mode once at start (T-06-04: prevents mid-run mode switch).
+        // CancellationToken.None: this decides whether a run gets claimed at all, so — like the
+        // claim itself below — it must not be skipped by a shutdown token already signalled
+        // before this job started (Minor, same theme as Important #1/#5's run-claim bookkeeping).
+        await using var settingsDb = await _dbContextFactory.CreateDbContextAsync(CancellationToken.None);
         var modeSetting = await settingsDb.AppSettings
-            .FirstOrDefaultAsync(s => s.Key == "photo_sync_mode", ct);
+            .FirstOrDefaultAsync(s => s.Key == "photo_sync_mode", CancellationToken.None);
         var photoSyncMode = modeSetting?.Value ?? "included";
 
         if (photoSyncMode != "separate_pass")
@@ -472,11 +475,12 @@ public class PhotoSyncService : IPhotoSyncService
 
         // Clear any stale cancel_sync flag so this run doesn't self-cancel on the first
         // between-tunnel check. Prior killed runs may leave the flag set to true.
-        var cancelClear = await settingsDb.AppSettings.FirstOrDefaultAsync(s => s.Key == "cancel_sync", ct);
+        // CancellationToken.None: bookkeeping, same rationale as the mode read above.
+        var cancelClear = await settingsDb.AppSettings.FirstOrDefaultAsync(s => s.Key == "cancel_sync", CancellationToken.None);
         if (cancelClear != null && cancelClear.Value != "false")
         {
             cancelClear.Value = "false";
-            await settingsDb.SaveChangesAsync(ct);
+            await settingsDb.SaveChangesAsync(CancellationToken.None);
         }
 
         _logger.LogInformation("Photo sync RunAllAsync starting RunId={RunId}", run.Id);
@@ -485,9 +489,14 @@ public class PhotoSyncService : IPhotoSyncService
         int tunnelsWithPhotos = 0;
         int tunnelsProcessedSoFar = 0;
         string? fatalError = null;
+        bool wasCancelled = false;
 
         try
         {
+            // Minor (same theme as Important #1/#2.6b): a run claimed during shutdown does no
+            // work — finalize it Cancelled instead of racing into the tunnel loop.
+            ct.ThrowIfCancellationRequested();
+
             // Load active tunnels with includes
             await using var tunnelDb = await _dbContextFactory.CreateDbContextAsync(ct);
             var tunnels = await tunnelDb.Tunnels
@@ -503,6 +512,17 @@ public class PhotoSyncService : IPhotoSyncService
 
             foreach (var tunnel in tunnels)
             {
+                // Mirrors SyncEngine's per-tunnel boundary check (§2.6b): Hangfire signals this
+                // token on worker shutdown and job deletion — don't start another tunnel.
+                if (ct.IsCancellationRequested)
+                {
+                    _logger.LogInformation(
+                        "Shutdown requested — stopping photo sync after {Processed} tunnel(s)",
+                        tunnelsProcessedSoFar);
+                    wasCancelled = true;
+                    break;
+                }
+
                 // Stop-sync check: if user clicked Stop Sync, bail out between tunnels
                 // the same way SyncEngine does. Respect the shared cancel_sync flag.
                 await using (var cancelCheckDb = await _dbContextFactory.CreateDbContextAsync(ct))
@@ -549,6 +569,14 @@ public class PhotoSyncService : IPhotoSyncService
                     // Tunnel-boundary progress write: final flush for this tunnel.
                     await UpdateRunProgressAsync(run.Id, totalPhotosUpdated, totalPhotosFailed, tunnelsProcessedSoFar);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _logger.LogInformation(
+                        "Shutdown requested during tunnel {TunnelId} ({TunnelName}) — stopping photo sync",
+                        tunnel.Id, tunnel.Name);
+                    wasCancelled = true;
+                    break;
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex,
@@ -560,6 +588,12 @@ public class PhotoSyncService : IPhotoSyncService
             // Flush items — use CancellationToken.None so shutdown doesn't discard buffered items.
             await _runLogger.FlushItemsAsync(CancellationToken.None);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Hangfire signalled shutdown (or deleted the job) while photo sync was in flight.
+            _logger.LogInformation("Photo sync RunId={RunId} cancelled by worker shutdown", run.Id);
+            wasCancelled = true;
+        }
         catch (Exception ex)
         {
             fatalError = $"Photo sync run failed with unhandled exception: {ex.Message}";
@@ -568,7 +602,9 @@ public class PhotoSyncService : IPhotoSyncService
 
         var finalStatus = fatalError != null
             ? SyncStatus.Failed
-            : totalPhotosFailed > 0 ? SyncStatus.Warning : SyncStatus.Success;
+            : wasCancelled
+                ? SyncStatus.Cancelled
+                : totalPhotosFailed > 0 ? SyncStatus.Warning : SyncStatus.Success;
 
         // Finalize — always runs, even after fatal exceptions.
         try
@@ -576,7 +612,9 @@ public class PhotoSyncService : IPhotoSyncService
             await _runLogger.FinalizeRunAsync(
                 run,
                 status: finalStatus,
-                errorSummary: fatalError ?? (totalPhotosFailed > 0 ? $"{totalPhotosFailed} photo(s) failed" : null),
+                errorSummary: fatalError
+                    ?? (wasCancelled ? SyncEngine.WorkerShutdownReason
+                        : totalPhotosFailed > 0 ? $"{totalPhotosFailed} photo(s) failed" : null),
                 contactsCreated: 0,
                 contactsUpdated: 0,
                 contactsSkipped: 0,

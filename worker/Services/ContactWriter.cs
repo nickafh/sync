@@ -111,6 +111,11 @@ public class ContactWriter : IContactWriter
 
         foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
         {
+            // Chunk boundary is the cancellation granularity (§2.6a follow-up): once a batch
+            // is posted it always runs to completion, so we only ever check for shutdown
+            // before starting a new one.
+            ct.ThrowIfCancellationRequested();
+
             var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
             var stepIdToKey = new Dictionary<string, string>();
 
@@ -130,7 +135,7 @@ public class ContactWriter : IContactWriter
             {
                 var created = await response.GetResponseByIdAsync<Contact>(stepId);
                 return MapCreateResponse(created);
-            }, ct);
+            });
             await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
         }
 
@@ -156,6 +161,9 @@ public class ContactWriter : IContactWriter
 
         foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
         {
+            // Chunk boundary is the cancellation granularity — see CreateContactsBatchAsync.
+            ct.ThrowIfCancellationRequested();
+
             var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
             var stepIdToKey = new Dictionary<string, string>();
 
@@ -171,7 +179,7 @@ public class ContactWriter : IContactWriter
             }
 
             await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
-                Task.FromResult(new BatchOperationResult(true)), ct);
+                Task.FromResult(new BatchOperationResult(true)));
             await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
         }
 
@@ -196,6 +204,9 @@ public class ContactWriter : IContactWriter
 
         foreach (var chunk in ChunkOperations(operations, MaxBatchSize))
         {
+            // Chunk boundary is the cancellation granularity — see CreateContactsBatchAsync.
+            ct.ThrowIfCancellationRequested();
+
             var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
             var stepIdToKey = new Dictionary<string, string>();
 
@@ -210,7 +221,7 @@ public class ContactWriter : IContactWriter
             }
 
             await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
-                Task.FromResult(new BatchOperationResult(true)), ct);
+                Task.FromResult(new BatchOperationResult(true)));
         }
 
         _logger.LogDebug("Batch delete complete: {Success} succeeded, {Failed} failed",
@@ -223,18 +234,23 @@ public class ContactWriter : IContactWriter
     /// Executes a batch request with retry for 429/5xx failures.
     /// On success, calls <paramref name="onSuccess"/> to extract the result (e.g., created contact ID).
     /// Failed items are retried up to <see cref="MaxBatchRetries"/> times.
+    ///
+    /// Phase 2 (§2.6a follow-up): posts with <see cref="CancellationToken.None"/> — the caller's
+    /// chunk loop already checked <c>ct.ThrowIfCancellationRequested()</c> before this batch was
+    /// built, so once we're here the batch always runs to completion and its outcome is always
+    /// persisted via the chunk's <c>onChunkCompleted</c> callback, instead of a shutdown mid-POST
+    /// turning every key in the batch into a swallowed "canceled" failure.
     /// </summary>
     private async Task ExecuteBatchWithRetryAsync(
         BatchRequestContentCollection batchContent,
         Dictionary<string, string> stepIdToKey,
         Dictionary<string, BatchOperationResult> results,
-        Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess,
-        CancellationToken ct)
+        Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess)
     {
         BatchResponseContentCollection? response = null;
         try
         {
-            response = await _graphClientFactory.Client.Batch.PostAsync(batchContent, ct);
+            response = await _graphClientFactory.Client.Batch.PostAsync(batchContent, CancellationToken.None);
         }
         catch (Exception ex)
         {

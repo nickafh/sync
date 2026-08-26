@@ -145,7 +145,7 @@ public class ContactFolderManager : IContactFolderManager
                             folderId, mailbox.EntraId, known.FolderName, tunnel.Name);
                         await RenameFolderAsync(mailbox.EntraId, folderId, tunnel.Name, ct);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.LogWarning(ex,
                             "Tunnel {TunnelName}: could not rename contact folder {FolderId} in mailbox {Mailbox} from '{OldName}' to '{NewName}'; will retry next run",

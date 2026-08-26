@@ -682,8 +682,12 @@ public sealed class SyncEngine(
         {
             (folderId, folderWasCreated) = await contactFolderManager.GetOrCreateFolderAsync(tunnel, mailbox, isDryRun, ct);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && ct.IsCancellationRequested))
         {
+            // Shutdown cancellation is not a mailbox failure: let it propagate to the mailbox-lambda
+            // filter (line ~610) and on to the per-tunnel OperationCanceledException catch, instead
+            // of recording "Folder 'X': The operation was canceled." as a failed run item here.
+            //
             // Phase 2 (§2.1): an enabled account without a REST-enabled mailbox (soft-deleted,
             // on-prem, unlicensed) is UNAVAILABLE, not failed. Stamp it so LoadTargetMailboxesAsync
             // skips it for a week, write no run item, and don't count it against the tunnel.
@@ -763,9 +767,15 @@ public sealed class SyncEngine(
 
         // Identify duplicate sync state records to clean up (from before this fix).
         // These have Graph contacts that are duplicates in the same folder.
-        var duplicateStates = allExistingStates
-            .Where(s => existingStates.Values.All(kept => kept.Id != s.Id))
-            .ToList();
+        // Minor: skip when isDryRun && folderId is null — existingStates was just reset to empty
+        // above (no folder to compare against), so every existing row would spuriously look like
+        // a "duplicate" and the dry-run log below would wrongly claim "would clean up N
+        // duplicates" for contacts that aren't duplicates at all.
+        var duplicateStates = isDryRun && folderId is null
+            ? []
+            : allExistingStates
+                .Where(s => existingStates.Values.All(kept => kept.Id != s.Id))
+                .ToList();
 
         // Phase 2 (§2.2): no duplicate cleanup (Graph or DB) in a dry run — single guard below.
         if (duplicateStates.Count > 0)
@@ -931,7 +941,7 @@ public sealed class SyncEngine(
                 }
 
                 if (chunkStates.Count > 0)
-                    await PersistStateChangesAsync(chunkStates, [], mailbox.Id);
+                    await PersistStateChangesAsync(chunkStates, [], mailbox.Id, isDryRun);
             }
 
             await contactWriter.CreateContactsBatchAsync(
@@ -1051,7 +1061,7 @@ public sealed class SyncEngine(
                 }
 
                 if (chunkUpdates.Count > 0)
-                    await PersistStateChangesAsync([], chunkUpdates, mailbox.Id);
+                    await PersistStateChangesAsync([], chunkUpdates, mailbox.Id, isDryRun);
             }
 
             await contactWriter.UpdateContactsBatchAsync(
@@ -1161,12 +1171,25 @@ public sealed class SyncEngine(
     /// <summary>
     /// Phase 2 (§2.6a): writes one chunk's new state rows and hash updates with a fresh context
     /// and CancellationToken.None, so a shutdown mid-mailbox cannot lose confirmed Graph writes.
+    ///
+    /// Important #3: callers already only reach this inside a <c>!isDryRun</c> branch, but that
+    /// guard is call-site nesting, not local — <paramref name="isDryRun"/> makes "never write
+    /// contact_sync_state on a dry run" true of this method itself. Internal (not private) so unit
+    /// tests can call it directly to prove the guard.
     /// </summary>
-    private async Task PersistStateChangesAsync(
+    internal async Task PersistStateChangesAsync(
         List<ContactSyncState> statesToAdd,
         List<(int StateId, string DataHash, string? PreviousHash, string LastResult)> statesToUpdate,
-        int mailboxId)
+        int mailboxId,
+        bool isDryRun)
     {
+        if (isDryRun)
+        {
+            logger.LogDebug(
+                "Dry run: skipping contact_sync_state persistence for mailbox {MailboxId}", mailboxId);
+            return;
+        }
+
         if (statesToAdd.Count == 0 && statesToUpdate.Count == 0)
             return;
 

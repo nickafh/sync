@@ -9,15 +9,21 @@ using Microsoft.Extensions.Logging;
 namespace AFHSync.Worker.Services;
 
 /// <summary>
-/// Hangfire job that marks sync runs stuck in "Running" too long as Failed.
-/// Thresholds are run-type aware — photo backfills legitimately run for hours, while
-/// contact syncs should finish within ~30 min. When a run is flipped, also raises the
-/// <c>cancel_sync</c> flag so any still-running worker bails at its next tunnel/mailbox
-/// boundary check, and additionally asks Hangfire to Delete the tracked background
-/// job IDs so a stuck worker is actively cancelled instead of only signalled.
-/// The cancel_sync flag is auto-cleared at the start of every subsequent sync run,
-/// so it does not affect future syncs. Safety net for the rare case where even
-/// finalization fails (DB outage, OOM, etc.).
+/// Hangfire job that marks stuck sync runs as Failed, via two independent paths.
+///
+/// (1) Runs stuck in "Running" too long. Thresholds are run-type aware — photo backfills
+/// legitimately run for hours, while contact syncs should finish within ~30 min. When a run is
+/// flipped, also raises the <c>cancel_sync</c> flag so any still-running worker bails at its next
+/// tunnel/mailbox boundary check, and additionally asks Hangfire to Delete the tracked background
+/// job IDs so a stuck worker is actively cancelled instead of only signalled. The cancel_sync flag
+/// is auto-cleared at the start of every subsequent sync run, so it does not affect future syncs.
+///
+/// (2) Rows stuck in "Pending" for more than <see cref="PendingStaleAfter"/> (10 min) — the job
+/// was enqueued but never claimed (worker down, enqueue lost). These are marked Failed with
+/// <see cref="PendingNeverClaimedSummary"/>; their tracked Hangfire job IDs are deleted too, but
+/// no cancel_sync flag is needed since no worker is running them.
+///
+/// Safety net for the rare case where even finalization fails (DB outage, OOM, etc.).
 /// </summary>
 public sealed class StaleRunCleanupService(
     IDbContextFactory<AFHSyncDbContext> dbContextFactory,

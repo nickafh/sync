@@ -58,4 +58,15 @@ public class GraphClientFactory
         httpClient.Timeout = GraphHttpClientTimeout;
         Client = new GraphServiceClient(httpClient, credential);
     }
+
+    /// <summary>
+    /// Test-only seam: wraps an already-built <see cref="GraphServiceClient"/> (e.g. one backed
+    /// by a fake <see cref="HttpMessageHandler"/>) so unit tests can exercise real Graph SDK
+    /// batch/request code (ContactWriter, ContactFolderManager) end-to-end without a live
+    /// credential or network call. Internal — reachable only via InternalsVisibleTo(AFHSync.Tests.Unit).
+    /// </summary>
+    internal GraphClientFactory(GraphServiceClient client)
+    {
+        Client = client;
+    }
 }
