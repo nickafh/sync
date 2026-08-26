@@ -111,7 +111,7 @@ Expected results for the fixture set, e.g. Buckhead Staff → `officeLocation eq
 
 ### 2.6 Durable bookkeeping and cancellation
 
-- `ContactWriter` batch methods accept `Func<IReadOnlyDictionary<string, BatchOperationResult>, Task> onChunkCompleted`, invoked after each 20-op chunk; `SyncEngine` persists that chunk's state rows in the callback with `CancellationToken.None`. The end-of-mailbox `SaveChangesAsync` remains for heals only. A crash loses at most the chunk in flight; its Graph contacts are caught by the existing duplicate cleanup next run.
+- `ContactWriter` batch methods accept `Func<IReadOnlyDictionary<string, BatchOperationResult>, Task> onChunkCompleted`, invoked after each 20-op chunk; `SyncEngine` persists that chunk's state rows in the callback with `CancellationToken.None`. The end-of-mailbox `SaveChangesAsync` remains for heals only. A crash loses at most the chunk in flight (≤20 contacts per mailbox). Nothing reconciles Graph contacts that have no state row today; that window is bounded, not closed — see Phase 3.7.
 - Hangfire injects its shutdown token into `RunAsync`'s `ct`. The tunnel loop and the mailbox loop check `ct.IsCancellationRequested` at each boundary; on cancellation the run is finalized `Cancelled` with `"worker shutting down"` using `CancellationToken.None`. `compose.yaml` sets `stop_grace_period: 60s` on the worker. The `cancel_sync` flag keeps serving Stop Sync.
 
 ### 2.7 Explicit run claiming
@@ -137,7 +137,7 @@ Expected results for the fixture set, e.g. Buckhead Staff → `officeLocation eq
 
 1. Before: `docker exec afh-postgres psql -U afhsync -d afhsync -c "SELECT COUNT(*) FROM contact_sync_state WHERE graph_contact_id IS NULL;"` — the number the migration deletes.
 2. With no run in progress, `./deploy.sh` (no manual `git pull` first — the script diffs its own pull).
-3. After: Targets page lists ~259 unavailable mailboxes; a manual run ends **Success** (not Warning) when nothing else is wrong; run detail shows `N excluded` per tunnel; a run started during a deploy ends `Cancelled — worker shutting down`, never orphaned.
+3. After: Targets page lists ~259 unavailable mailboxes; a manual run ends **Success** (not Warning) when nothing else is wrong; the worker log shows `N excluded (unavailable)` per tunnel (run-detail placement needs Phase 3.1's per-tunnel run records); a run started during a deploy ends `Cancelled — worker shutting down`, never orphaned.
 
 ## Phase 3 — API/UI correctness
 
@@ -149,6 +149,7 @@ Migration: new table `sync_run_tunnels(id, sync_run_id, tunnel_id, status, targe
 - **3.4 Graph pickers.** `GET /graph/ddgs/{id}/members` accepts `page,pageSize` and pages Graph via `PageIterator`; `GET /graph/security-groups` pages fully (cap 2000); `GET /graph/users/search` escapes `'`; impact preview counts use `@odata.count`.
 - **3.5 Contact Filters.** `ContactExclusionsController.ResolveMailboxContactsAsync` honors `ContactFolderId` and pages; exclusion replace runs in one transaction with `DistinctBy(EntraId)`.
 - **3.6 Lifetimes.** `DDGResolver` registered `Singleton` in api and worker; `GetOrCreatePowerShell` disposes the runspace when `Connect-ExchangeOnline` fails; a command failing with a session/auth error (`UnauthorizedAccessException`, "session", "token") resets and retries once; `Dispose` runs `Disconnect-ExchangeOnline`. `[AutomaticRetry(Attempts = 0)]` moves to `ICleanupJobRunner.RunAsync`. `RefreshTargetMailboxesAsync` runs once per sync run (memo) and is used by the group-scope path too.
+- **3.7 Orphaned Graph contacts.** After an unknown-outcome batch, reconcile the folder's Graph contacts against `contact_sync_state` by a deterministic key and remove/adopt strays.
 
 ## Phase 4 — Deferred
 
