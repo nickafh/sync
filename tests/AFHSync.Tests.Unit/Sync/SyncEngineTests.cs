@@ -302,6 +302,41 @@ public class SyncEngineTests
         Assert.Equal("worker shutting down", runLogger.FinalizedErrorSummary);
     }
 
+    [Fact]
+    public async Task RunAsync_TokenCancelledDuringFirstMailbox_SkipsRemainingMailboxesAndFinalizesCancelled()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true },
+            new TargetMailbox { Id = 2, EntraId = "mb-2", Email = "two@contoso.com", IsActive = true });
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            // Force sequential mailbox processing (semaphore of 1) so cancelling the token during
+            // the first mailbox's write deterministically keeps the second mailbox from writing.
+            seedCtx.AppSettings.Add(new AppSetting
+            {
+                Id = 100, Key = "parallelism", Value = "1", Description = "Test", UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        using var cts = new CancellationTokenSource();
+        var writer = new FakeContactWriter { OnCreateContactsBatch = () => cts.Cancel() };
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: writer,
+            runLogger: runLogger);
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, cts.Token);
+
+        Assert.Single(writer.CreatedContactIds);           // second mailbox's write never happened
+        Assert.Equal(SyncStatus.Cancelled, run.Status);
+        Assert.Equal(SyncStatus.Cancelled, runLogger.FinalizedStatus);
+        Assert.Equal(SyncEngine.WorkerShutdownReason, runLogger.FinalizedErrorSummary);
+        Assert.True(runLogger.WasFinalized);
+    }
+
     // ==============================
     // Phase 2 (2.1): unavailable mailboxes are stamped and skipped, not failed
     // ==============================
@@ -1044,6 +1079,10 @@ public class SyncEngineTests
         /// <summary>When true, batch updates return a 404 NotFound (contact deleted on the device).</summary>
         public bool UpdateReturnsNotFound { get; init; }
 
+        /// <summary>Phase 2 (2.6b) test hook: invoked at the start of every batch create call — lets a
+        /// test simulate a shutdown token arriving while a mailbox write is in flight.</summary>
+        public Action? OnCreateContactsBatch { get; set; }
+
         public Task<string> CreateContactAsync(string mailboxEntraId, string folderId, SortedDictionary<string, string> payload, CancellationToken ct)
         {
             var id = Guid.NewGuid().ToString();
@@ -1067,6 +1106,7 @@ public class SyncEngineTests
             string mailboxEntraId, string folderId,
             List<(string key, SortedDictionary<string, string> payload)> operations, CancellationToken ct)
         {
+            OnCreateContactsBatch?.Invoke();
             var results = new Dictionary<string, BatchOperationResult>();
             foreach (var (key, _) in operations)
             {
