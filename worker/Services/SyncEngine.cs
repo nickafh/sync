@@ -69,6 +69,10 @@ public sealed class SyncEngine(
             case RunClaimOutcome.AlreadyFinalized:
                 logger.LogInformation("Sync run {RunId} is already {Status} — nothing to do", claim.Run!.Id, claim.Run.Status);
                 return claim.Run;
+            case RunClaimOutcome.Claimed:
+                break;
+            default:
+                throw new InvalidOperationException($"Unhandled claim outcome {claim.Outcome}");
         }
 
         var run = claim.Run!;

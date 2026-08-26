@@ -42,6 +42,24 @@ public sealed class RunClaimService(
                 return new RunClaimResult(RunClaimOutcome.AlreadyFinalized, requested);
             }
         }
+        else
+        {
+            // Cron path (§2.7 amendment): if a row is already Pending — e.g. the API created it
+            // and enqueued its job, but Hangfire hasn't dequeued that job yet — or Running, skip
+            // this scheduled run instead of creating a second row. Creating one here would let
+            // the cron run start first; the pending job would then find itself blocked when it
+            // finally runs and fail itself "another run was already in progress" without ever
+            // having attempted work.
+            var blocking = await db.SyncRuns
+                .Where(r => r.Status == SyncStatus.Pending || r.Status == SyncStatus.Running)
+                .FirstOrDefaultAsync(ct);
+            if (blocking is not null)
+            {
+                await CommitAsync(tx, ct);
+                logger.LogInformation("Scheduled run skipped: run {RunId} is {Status}", blocking.Id, blocking.Status);
+                return new RunClaimResult(RunClaimOutcome.Blocked, null);
+            }
+        }
 
         var now = DateTime.UtcNow;
         var alreadyRunning = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running, ct);

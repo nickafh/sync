@@ -196,6 +196,26 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public async Task ClaimAsync_WithNullRunId_WhilePendingRowExists_ReturnsBlockedAndCreatesNoRow()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.SyncRuns.Add(new SyncRun { Id = 3, RunType = RunType.Manual, Status = SyncStatus.Pending, CreatedAt = DateTime.UtcNow });
+            await seedCtx.SaveChangesAsync();
+        }
+        var claimService = new RunClaimService(CreateFactory(dbName), NullLogger<RunClaimService>.Instance);
+
+        var result = await claimService.ClaimAsync(null, RunType.Scheduled, false, CancellationToken.None);
+
+        Assert.Equal(RunClaimOutcome.Blocked, result.Outcome);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());   // no second (cron) row was created
+        var row = await verifyCtx.SyncRuns.SingleAsync(r => r.Id == 3);
+        Assert.Equal(SyncStatus.Pending, row.Status);             // the pending row is untouched
+    }
+
+    [Fact]
     public void ParseRequestedTunnelIds_HandlesNullJsonAndGarbage()
     {
         Assert.Null(SyncEngine.ParseRequestedTunnelIds(null));
