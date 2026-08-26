@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Graph.Models.ODataErrors;
 
 namespace AFHSync.Tests.Unit.Sync;
 
@@ -40,6 +41,30 @@ public class SyncEngineTests
 
     private static IConfiguration CreateEmptyConfig()
         => new ConfigurationBuilder().Build();
+
+    /// <summary>Seeds one active tunnel (Id 1, name "Avail Tunnel") with phone list 1 and the given mailboxes.</summary>
+    private static async Task SeedTunnelWithMailboxesAsync(string dbName, params TargetMailbox[] mailboxes)
+    {
+        using var seedCtx = MakeDbContext(dbName);
+        var tunnel = new Tunnel { Id = 1, Name = "Avail Tunnel", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+        var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+        var tpl = new TunnelPhoneList { TunnelId = 1, PhoneListId = 1, Tunnel = tunnel, PhoneList = phoneList };
+        tunnel.TunnelPhoneLists.Add(tpl);
+        seedCtx.Tunnels.Add(tunnel);
+        seedCtx.PhoneLists.Add(phoneList);
+        seedCtx.TunnelPhoneLists.Add(tpl);
+        seedCtx.TargetMailboxes.AddRange(mailboxes);
+        await seedCtx.SaveChangesAsync();
+    }
+
+    private static ODataError UnavailableMailboxError() => new()
+    {
+        Error = new MainError
+        {
+            Code = MailboxAvailability.UnavailableErrorCode,
+            Message = "The mailbox is either inactive, soft-deleted, or is hosted on-premise."
+        }
+    };
 
     private static SyncEngine CreateEngine(
         string dbName,
@@ -275,6 +300,126 @@ public class SyncEngineTests
         Assert.Equal(SyncStatus.Cancelled, run.Status);
         Assert.Equal(SyncStatus.Cancelled, runLogger.FinalizedStatus);
         Assert.Equal("worker shutting down", runLogger.FinalizedErrorSummary);
+    }
+
+    // ==============================
+    // Phase 2 (2.1): unavailable mailboxes are stamped and skipped, not failed
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_UnavailableMailbox_IsStampedNotFailed_NoRunItem()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-dead", Email = "dead@contoso.com", IsActive = true });
+        var folderManager = new FakeContactFolderManager();
+        folderManager.Failures["mb-dead"] = UnavailableMailboxError();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager,
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        Assert.Equal(SyncStatus.Success, runLogger.FinalizedStatus);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var mb = await verifyCtx.TargetMailboxes.SingleAsync();
+        Assert.True(mb.IsActive);                                  // IsActive keeps its Entra meaning
+        Assert.NotNull(mb.MailboxUnavailableAt);
+        Assert.NotNull(mb.MailboxLastProbedAt);
+        Assert.Contains("soft-deleted", mb.MailboxUnavailableReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_UnavailableMailboxProbedWithin7Days_IsExcluded()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-recent", Email = "recent@contoso.com", IsActive = true,
+                MailboxUnavailableAt = DateTime.UtcNow.AddDays(-3), MailboxLastProbedAt = DateTime.UtcNow.AddDays(-3), MailboxUnavailableReason = "x" },
+            new TargetMailbox { Id = 2, EntraId = "mb-ok", Email = "ok@contoso.com", IsActive = true });
+        var folderManager = new FakeContactFolderManager();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { "mb-ok" }, folderManager.Requested);
+    }
+
+    [Fact]
+    public async Task RunAsync_UnavailableMailboxProbedOver7DaysAgo_IsReprobed_AndRestamped()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        var firstSeen = DateTime.UtcNow.AddDays(-30);
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-stale", Email = "stale@contoso.com", IsActive = true,
+                MailboxUnavailableAt = firstSeen, MailboxLastProbedAt = DateTime.UtcNow.AddDays(-8), MailboxUnavailableReason = "old reason" });
+        var folderManager = new FakeContactFolderManager();
+        folderManager.Failures["mb-stale"] = UnavailableMailboxError();   // still dead
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { "mb-stale" }, folderManager.Requested);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var mb = await verifyCtx.TargetMailboxes.SingleAsync();
+        Assert.Equal(firstSeen, mb.MailboxUnavailableAt);                            // first-seen is preserved
+        Assert.True(mb.MailboxLastProbedAt > DateTime.UtcNow.AddMinutes(-1));        // probe time refreshed
+        Assert.Contains("soft-deleted", mb.MailboxUnavailableReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_ReprobeSucceeds_ClearsUnavailableStamp()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-back", Email = "back@contoso.com", IsActive = true,
+                MailboxUnavailableAt = DateTime.UtcNow.AddDays(-30), MailboxLastProbedAt = DateTime.UtcNow.AddDays(-8), MailboxUnavailableReason = "was dead" });
+        var folderManager = new FakeContactFolderManager();   // no failure ⇒ lookup succeeds
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var mb = await verifyCtx.TargetMailboxes.SingleAsync();
+        Assert.Null(mb.MailboxUnavailableAt);
+        Assert.Null(mb.MailboxLastProbedAt);
+        Assert.Null(mb.MailboxUnavailableReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_OtherFolderError_StillFailsAndDoesNotStamp()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-err", Email = "err@contoso.com", IsActive = true });
+        var folderManager = new FakeContactFolderManager();
+        folderManager.Failures["mb-err"] = new InvalidOperationException("boom");
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager,
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var failedItem = Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal("Folder 'Avail Tunnel': boom", failedItem.ErrorMessage);
+        Assert.Equal(1, failedItem.TargetMailboxId);
+        Assert.Equal(1, runLogger.FinalizedFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var mb = await verifyCtx.TargetMailboxes.SingleAsync();
+        Assert.Null(mb.MailboxUnavailableAt);
+        Assert.True(mb.IsActive);
     }
 
     // ==============================
@@ -963,8 +1108,19 @@ public class SyncEngineTests
 
     private sealed class FakeContactFolderManager : IContactFolderManager
     {
+        /// <summary>Mailboxes (by EntraId) whose folder lookup throws the given exception.</summary>
+        public Dictionary<string, Exception> Failures { get; } = new();
+
+        /// <summary>Every mailbox EntraId the engine asked a folder for, in call order.</summary>
+        public List<string> Requested { get; } = [];
+
         public Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(string mailboxEntraId, string folderName, CancellationToken ct)
-            => Task.FromResult(("fake-folder-id", false));
+        {
+            Requested.Add(mailboxEntraId);
+            if (Failures.TryGetValue(mailboxEntraId, out var ex))
+                throw ex;
+            return Task.FromResult(("fake-folder-id", false));
+        }
 
         public void ResetCache() { }
     }

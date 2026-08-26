@@ -652,10 +652,22 @@ public sealed class SyncEngine(
         }
         catch (Exception ex)
         {
+            // Phase 2 (§2.1): an enabled account without a REST-enabled mailbox (soft-deleted,
+            // on-prem, unlicensed) is UNAVAILABLE, not failed. Stamp it so LoadTargetMailboxesAsync
+            // skips it for a week, write no run item, and don't count it against the tunnel.
+            // The old IsActive=false self-heal is gone — RefreshTargetMailboxesAsync flipped it
+            // back on the next refresh, so those mailboxes failed every single run.
+            if (MailboxAvailability.IsUnavailable(ex))
+            {
+                logger.LogInformation(
+                    "Mailbox {Email} (Id={MailboxId}) is unavailable for REST — skipping for {Days} days: {Reason}",
+                    mailbox.Email, mailbox.Id, MailboxAvailability.ReprobeInterval.TotalDays, ex.Message);
+                await MarkMailboxUnavailableAsync(mailbox.Id, ex.Message);
+                return (created, updated, skipped, failed, removed);
+            }
+
             logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
             // Record as a SyncRunItem so the failure shows up in the run-detail "Failed" tab.
-            // Without this, the mailbox-level failure only increments the aggregate counter,
-            // producing "Failed: N" on the dashboard with an empty items table.
             runLogger.AddItem(new SyncRunItem
             {
                 SyncRunId = run.Id,
@@ -667,38 +679,13 @@ public sealed class SyncEngine(
                 ErrorMessage = $"Folder '{tunnel.Name}': {ex.Message}",
                 CreatedAt = DateTime.UtcNow
             });
-
-            // Self-heal for dead mailboxes the reconciliation pass can't catch. These accounts
-            // appear in /users (so RefreshTargetMailboxesAsync leaves them active) but their
-            // mailboxes are soft-deleted / on-prem / unlicensed — service accounts, hybrid users,
-            // etc. Detect the specific Graph error and mark the mailbox inactive so subsequent
-            // tunnels skip it via the LoadTargetMailboxesAsync IsActive filter. Fresh DbContext +
-            // CancellationToken.None so a run-level cancel doesn't interrupt the self-heal write.
-            if (ex.Message.Contains("inactive, soft-deleted, or is hosted on-premise", StringComparison.OrdinalIgnoreCase))
-            {
-                try
-                {
-                    await using var healDb = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
-                    var deadMb = await healDb.TargetMailboxes.FirstOrDefaultAsync(m => m.Id == mailbox.Id, CancellationToken.None);
-                    if (deadMb != null && deadMb.IsActive)
-                    {
-                        deadMb.IsActive = false;
-                        deadMb.UpdatedAt = DateTime.UtcNow;
-                        await healDb.SaveChangesAsync(CancellationToken.None);
-                        logger.LogWarning(
-                            "Self-heal: deactivated stale target mailbox {Email} (Id={MailboxId}) after Graph reported it inactive / on-prem / soft-deleted",
-                            deadMb.Email, deadMb.Id);
-                    }
-                }
-                catch (Exception healEx)
-                {
-                    logger.LogWarning(healEx, "Self-heal write failed for MailboxId={MailboxId}", mailbox.Id);
-                }
-            }
-
             failed++;
             return (created, updated, skipped, failed, removed);
         }
+
+        // Phase 2 (§2.1): the first successful folder lookup after an unavailable stamp clears it.
+        if (mailbox.MailboxUnavailableAt is not null)
+            await ClearMailboxUnavailableAsync(mailbox.Id);
 
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
         // Clear across ALL phone lists so all contacts get re-created in the new folder.
@@ -1126,9 +1113,16 @@ public sealed class SyncEngine(
     private async Task<List<TargetMailbox>> LoadTargetMailboxesAsync(Tunnel tunnel, CancellationToken ct)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
-        var allMailboxes = await db.TargetMailboxes
-            .Where(m => m.IsActive)
-            .ToListAsync(ct);
+
+        // Phase 2 (§2.1): skip mailboxes stamped unavailable within the last 7 days; older stamps
+        // are included so the mailbox is re-probed (and re-stamped or cleared) weekly, forever.
+        var reprobeCutoff = DateTime.UtcNow - MailboxAvailability.ReprobeInterval;
+        var allMailboxes = await AvailableActiveMailboxes(db, reprobeCutoff).ToListAsync(ct);
+        var excludedUnavailable = await db.TargetMailboxes.CountAsync(
+            m => m.IsActive && m.MailboxUnavailableAt != null && m.MailboxLastProbedAt != null && m.MailboxLastProbedAt > reprobeCutoff, ct);
+        logger.LogInformation(
+            "Tunnel {TunnelName}: {Excluded} target mailbox(es) excluded (unavailable)",
+            tunnel.Name, excludedUnavailable);
 
         // If tunnel targets specific users by email, filter to those mailboxes only.
         // Auto-provision any missing target mailboxes by looking them up in Graph.
@@ -1213,15 +1207,18 @@ public sealed class SyncEngine(
         await RefreshTargetMailboxesAsync(ct);
 
         await using var refreshedDb = await dbContextFactory.CreateDbContextAsync(ct);
-        var refreshed = await refreshedDb.TargetMailboxes
-            .Where(m => m.IsActive)
-            .ToListAsync(ct);
+        var refreshed = await AvailableActiveMailboxes(refreshedDb, reprobeCutoff).ToListAsync(ct);
 
         logger.LogInformation(
             "Tunnel {TunnelName}: AllUsers scope resolved to {Count} target mailbox(es) (was {Cached} before refresh)",
             tunnel.Name, refreshed.Count, allMailboxes.Count);
         return refreshed;
     }
+
+    /// <summary>Active mailboxes that are not currently stamped unavailable (or whose stamp is due for a re-probe).</summary>
+    private static IQueryable<TargetMailbox> AvailableActiveMailboxes(AFHSyncDbContext db, DateTime reprobeCutoff)
+        => db.TargetMailboxes.Where(m => m.IsActive
+            && (m.MailboxUnavailableAt == null || m.MailboxLastProbedAt == null || m.MailboxLastProbedAt <= reprobeCutoff));
 
     /// <summary>
     /// Resolves all member Entra IDs from a security group via Graph API, handling pagination.
@@ -1428,6 +1425,51 @@ public sealed class SyncEngine(
         }
 
         return DefaultParallelism;
+    }
+
+    /// <summary>
+    /// Phase 2 (§2.1): stamps a mailbox unavailable. First-seen is preserved; the probe time is
+    /// refreshed so the weekly re-probe window restarts. Fresh context + CancellationToken.None
+    /// so a run-level cancel doesn't lose the stamp.
+    /// </summary>
+    private async Task MarkMailboxUnavailableAsync(int mailboxId, string reason)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var mb = await db.TargetMailboxes.FirstOrDefaultAsync(m => m.Id == mailboxId, CancellationToken.None);
+            if (mb is null) return;
+            var now = DateTime.UtcNow;
+            mb.MailboxUnavailableAt ??= now;
+            mb.MailboxLastProbedAt = now;
+            mb.MailboxUnavailableReason = reason.Length > 1000 ? reason[..1000] : reason;
+            mb.UpdatedAt = now;
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to stamp mailbox {MailboxId} as unavailable", mailboxId);
+        }
+    }
+
+    private async Task ClearMailboxUnavailableAsync(int mailboxId)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var mb = await db.TargetMailboxes.FirstOrDefaultAsync(m => m.Id == mailboxId, CancellationToken.None);
+            if (mb is null || mb.MailboxUnavailableAt is null) return;
+            mb.MailboxUnavailableAt = null;
+            mb.MailboxLastProbedAt = null;
+            mb.MailboxUnavailableReason = null;
+            mb.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(CancellationToken.None);
+            logger.LogInformation("Mailbox {Email} (Id={MailboxId}) is available again — cleared unavailable stamp", mb.Email, mb.Id);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to clear the unavailable stamp on mailbox {MailboxId}", mailboxId);
+        }
     }
 
     /// <summary>
