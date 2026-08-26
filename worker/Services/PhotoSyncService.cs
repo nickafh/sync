@@ -3,6 +3,7 @@ using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Worker.Graph;
+using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph.Models.ODataErrors;
@@ -27,6 +28,7 @@ public class PhotoSyncService : IPhotoSyncService
     private readonly GraphClientFactory? _graphClientFactory;
     private readonly IContactFolderManager _contactFolderManager;
     private readonly IRunLogger _runLogger;
+    private readonly IRunClaimService _runClaimService;
     private readonly ThrottleCounter _throttleCounter;
     private readonly ILogger<PhotoSyncService> _logger;
 
@@ -74,6 +76,7 @@ public class PhotoSyncService : IPhotoSyncService
         GraphClientFactory graphClientFactory,
         IContactFolderManager contactFolderManager,
         IRunLogger runLogger,
+        IRunClaimService runClaimService,
         ThrottleCounter throttleCounter,
         ILogger<PhotoSyncService> logger)
     {
@@ -81,6 +84,7 @@ public class PhotoSyncService : IPhotoSyncService
         _graphClientFactory = graphClientFactory;
         _contactFolderManager = contactFolderManager;
         _runLogger = runLogger;
+        _runClaimService = runClaimService;
         _throttleCounter = throttleCounter;
         _logger = logger;
     }
@@ -427,7 +431,8 @@ public class PhotoSyncService : IPhotoSyncService
     }
 
     /// <inheritdoc />
-    public async Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct, bool skipRunningCheck = false)
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct)
     {
         // Read photo_sync_mode once at start (T-06-04: prevents mid-run mode switch)
         await using var settingsDb = await _dbContextFactory.CreateDbContextAsync(ct);
@@ -443,18 +448,18 @@ public class PhotoSyncService : IPhotoSyncService
             return;
         }
 
-        // Check for running sync to avoid overlap — skip when called from auto-trigger
-        // (the auto-trigger runs inside the active sync, so the check always sees itself).
-        if (!skipRunningCheck)
+        // Phase 2 (§2.7): claim a row through the same locked path as contact runs. One lane
+        // across run types — a Running contact run blocks photo sync and vice versa, because
+        // both write the same contacts. The post-finalize auto-trigger runs after the contact
+        // run is already Success/Warning, so it passes this guard.
+        var claim = await _runClaimService.ClaimAsync(null, runType, isDryRun, CancellationToken.None);
+        if (claim.Outcome != RunClaimOutcome.Claimed || claim.Run is null)
         {
-            var runningSync = await settingsDb.SyncRuns
-                .AnyAsync(r => r.Status == SyncStatus.Running, ct);
-            if (runningSync)
-            {
-                _logger.LogWarning("A sync run is already in progress, skipping photo sync");
-                return;
-            }
+            _logger.LogWarning("A sync run is already in progress, skipping photo sync");
+            return;
         }
+        var run = claim.Run;
+        isDryRun = run.IsDryRun;
 
         // Clear any stale cancel_sync flag so this run doesn't self-cancel on the first
         // between-tunnel check. Prior killed runs may leave the flag set to true.
@@ -465,8 +470,6 @@ public class PhotoSyncService : IPhotoSyncService
             await settingsDb.SaveChangesAsync(ct);
         }
 
-        // Create a SyncRun for this photo sync pass
-        var run = await _runLogger.CreateRunAsync(runType, isDryRun, ct);
         _logger.LogInformation("Photo sync RunAllAsync starting RunId={RunId}", run.Id);
 
         int totalPhotosUpdated = 0, totalPhotosFailed = 0;

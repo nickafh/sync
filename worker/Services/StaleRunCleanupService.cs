@@ -26,6 +26,8 @@ public sealed class StaleRunCleanupService(
 {
     private static readonly TimeSpan ContactRunStaleAfter = TimeSpan.FromHours(2);
     private static readonly TimeSpan PhotoRunStaleAfter = TimeSpan.FromHours(6);
+    private static readonly TimeSpan PendingStaleAfter = TimeSpan.FromMinutes(10);
+    public const string PendingNeverClaimedSummary = "Automatically marked as failed — never claimed by the worker within 10 minutes";
 
     public async Task CleanupAsync()
     {
@@ -41,8 +43,30 @@ public sealed class StaleRunCleanupService(
                     || (r.RunType != RunType.PhotoSync && r.StartedAt < contactCutoff)))
             .ToListAsync();
 
+        // Phase 2 (§2.7): a Pending row whose job never ran (worker down, enqueue lost).
+        var pendingCutoff = now - PendingStaleAfter;
+        var stalePending = await db.SyncRuns
+            .Where(r => r.Status == SyncStatus.Pending && r.CreatedAt < pendingCutoff)
+            .ToListAsync();
+
+        foreach (var run in stalePending)
+        {
+            run.Status = SyncStatus.Failed;
+            run.CompletedAt = now;
+            run.ErrorSummary = PendingNeverClaimedSummary;
+            logger.LogWarning("Stale run cleanup: marked Pending RunId={RunId} (created {CreatedAt}) as Failed — never claimed",
+                run.Id, run.CreatedAt);
+        }
+
         if (staleRuns.Count == 0)
+        {
+            if (stalePending.Count > 0)
+            {
+                await db.SaveChangesAsync();
+                DeleteTrackedJobs(stalePending);
+            }
             return;
+        }
 
         foreach (var run in staleRuns)
         {
@@ -75,7 +99,17 @@ public sealed class StaleRunCleanupService(
         // in a Graph call can be cancelled via Hangfire's job-cancellation token, rather
         // than waiting to notice cancel_sync on the next tunnel/mailbox boundary. Delete
         // is idempotent — if the job already finished or was never recorded, it's a no-op.
-        foreach (var run in staleRuns)
+        DeleteTrackedJobs(staleRuns.Concat(stalePending));
+    }
+
+    /// <summary>
+    /// Belt-and-suspenders: actively delete tracked Hangfire jobs so a worker blocked in a
+    /// Graph call is cancelled via Hangfire's job-cancellation token, and a never-started
+    /// job is removed from the queue. Delete is idempotent.
+    /// </summary>
+    private void DeleteTrackedJobs(IEnumerable<SyncRun> runs)
+    {
+        foreach (var run in runs)
         {
             if (string.IsNullOrWhiteSpace(run.HangfireJobIds)) continue;
             foreach (var id in run.HangfireJobIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))

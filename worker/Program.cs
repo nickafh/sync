@@ -93,6 +93,7 @@ try
     services.AddScoped<IStaleContactHandler, StaleContactHandler>();
     services.AddScoped<IRunLogger, RunLogger>();
     services.AddScoped<IRunClaimService, RunClaimService>();
+    services.AddScoped<RunReconciler>();
     services.AddScoped<ISyncEngine, SyncEngine>();
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
     services.AddScoped<IStaleRunCleanupService, StaleRunCleanupService>();
@@ -141,6 +142,14 @@ try
     {
         var dbFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<AFHSyncDbContext>>();
         await using var db = await dbFactory.CreateDbContextAsync();
+
+        // Phase 2 (§2.7): reconcile rows left Running by a dead worker BEFORE the Hangfire
+        // server starts processing jobs (the server is a hosted service started by app.RunAsync).
+        var reconciler = scope.ServiceProvider.GetRequiredService<RunReconciler>();
+        var interrupted = await reconciler.ReconcileAsync(CancellationToken.None);
+        if (interrupted > 0)
+            Log.Warning("Startup reconcile: marked {Count} interrupted run(s) as Failed", interrupted);
+
         var cronSetting = await db.AppSettings
             .FirstOrDefaultAsync(s => s.Key == "sync_schedule_cron");
         var cronExpression = cronSetting?.Value ?? "0 */4 * * *";

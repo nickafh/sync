@@ -1,5 +1,6 @@
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
+using Hangfire;
 
 namespace AFHSync.Worker.Services;
 
@@ -27,9 +28,10 @@ public interface IPhotoSyncService
         int priorTunnelsProcessed = 0);
 
     /// <summary>
-    /// Entry point for separate_pass Hangfire job. Creates its own SyncRun,
-    /// loads active tunnels, orchestrates per-tunnel photo sync.
-    /// Set skipRunningCheck to true when called from within an active sync (auto-trigger).
+    /// Entry point for the separate_pass Hangfire job and the post-finalize auto-trigger.
+    /// Phase 2 (§2.7): creates and claims its own SyncRun through IRunClaimService (one lane
+    /// across run types), so it is a no-op while any run is Running. Never retried by Hangfire.
     /// </summary>
-    Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct, bool skipRunningCheck = false);
+    [AutomaticRetry(Attempts = 0)]
+    Task RunAllAsync(RunType runType, bool isDryRun, CancellationToken ct);
 }

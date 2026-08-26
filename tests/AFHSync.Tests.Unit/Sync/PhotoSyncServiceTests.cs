@@ -440,10 +440,33 @@ public class PhotoSyncServiceTests
 
         await testable.Service.RunAllAsync(RunType.Scheduled, isDryRun: false, CancellationToken.None);
 
-        // Should have created a run
-        Assert.True(testable.RunLogger.WasCreated);
+        // Should have claimed/created a run through RunClaimService (not IRunLogger.CreateRunAsync)
+        Assert.False(testable.RunLogger.WasCreated);
+        using var verifyCtx = MakeDbContext(dbName);
+        var run = await verifyCtx.SyncRuns.SingleAsync();
+        Assert.Equal(RunType.Scheduled, run.RunType);
+        Assert.NotNull(run.StartedAt);
         // Should have finalized the run
         Assert.True(testable.RunLogger.WasFinalized);
+    }
+
+    [Fact]
+    public async Task RunAllAsync_SkipsWhenAnotherRunIsRunning()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        SeedDefaultFieldProfile(seedCtx);
+        seedCtx.AppSettings.Add(new AppSetting { Id = 100, Key = "photo_sync_mode", Value = "separate_pass", Description = "Test", UpdatedAt = DateTime.UtcNow });
+        seedCtx.SyncRuns.Add(new SyncRun { Id = 50, RunType = RunType.Manual, Status = SyncStatus.Running, StartedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow });
+        await seedCtx.SaveChangesAsync();
+
+        var testable = CreateTestableService(dbName);
+
+        await testable.Service.RunAllAsync(RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.False(testable.RunLogger.WasFinalized);
+        using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());   // no photo run row was created
     }
 
     // ==============================
@@ -716,7 +739,9 @@ public class PhotoSyncServiceTests
             IRunLogger runLogger,
             ThrottleCounter throttleCounter,
             ILogger<PhotoSyncService> logger)
-            : base(dbContextFactory, null!, contactFolderManager, runLogger, throttleCounter, logger)
+            : base(dbContextFactory, null!, contactFolderManager, runLogger,
+                   new RunClaimService(dbContextFactory, NullLogger<RunClaimService>.Instance),
+                   throttleCounter, logger)
         {
         }
 
