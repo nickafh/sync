@@ -106,7 +106,7 @@ Expected results for the fixture set, e.g. Buckhead Staff → `officeLocation eq
 
 ### 2.5 Folder identity
 
-- `ContactFolderManager.GetOrCreateFolderAsync(tunnel, mailbox, isDryRun)`: (1) `tunnel_mailbox_folders` row → `GET /contactFolders/{id}`; found ⇒ use, 404 ⇒ fall through; (2) search by name; (3) create (skipped in dry run); (4) upsert the row with id and current name; `wasCreated` is true only for (3) and only that triggers the existing state wipe; (5) if `folder_name != tunnel.Name`, `PATCH displayName` and update the row. Run-scoped in-memory cache stays as the first check.
+- `ContactFolderManager.GetOrCreateFolderAsync(tunnel, mailbox, isDryRun)`: (1) `tunnel_mailbox_folders` row → `GET /contactFolders/{id}`; found ⇒ use, 404 ⇒ fall through; (2) search by name; (3) create (skipped in dry run); (4) upsert the row with id and current name; `wasCreated` is true only for (3) and only that triggers the existing state wipe; (5) if `folder_name != tunnel.Name`, `PATCH displayName` and update the row; if the PATCH fails, log Warning, still use the resolved folder, and leave the stored name unchanged so the rename is retried next run. Run-scoped in-memory cache stays as the first check.
 - UI: tunnel edit page flags a name change as high-impact: "The contact folder will be renamed on every phone at the next sync."
 
 ### 2.6 Durable bookkeeping and cancellation
