@@ -40,6 +40,7 @@ export function StepSource({
   const hasOrgContacts = sources.some((s) => s.type === 'org_contacts');
 
   const handleSelectDdg = (ddg: DdgDto) => {
+    if (!ddg.graphFilterSuccess || !ddg.graphFilter) return;
     // Don't add duplicates
     if (sources.some((s) => s.type === 'ddg' && s.ddg?.id === ddg.id)) return;
     onAddSource({

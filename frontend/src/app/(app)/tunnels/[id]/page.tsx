@@ -249,9 +249,13 @@ export default function TunnelDetailPage() {
   };
 
   const handleDdgSelect = (ddg: DdgDto) => {
+    if (!ddg.graphFilterSuccess || !ddg.graphFilter) {
+      toast.error(`"${ddg.displayName}" cannot be used as a source: ${ddg.graphFilterWarning ?? 'its filter could not be converted'}.`);
+      return;
+    }
     const newSource: SourceInput = {
       sourceType: 'ddg',
-      sourceIdentifier: ddg.graphFilter ?? ddg.recipientFilter,
+      sourceIdentifier: ddg.graphFilter,
       sourceDisplayName: ddg.displayName,
       sourceSmtpAddress: ddg.primarySmtpAddress,
       sourceFilterPlain: ddg.recipientFilterPlain,

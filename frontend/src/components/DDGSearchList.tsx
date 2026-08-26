@@ -81,34 +81,47 @@ export function DDGSearchList({ onSelect, selectedId, selectedIds }: DDGSearchLi
               <CommandEmpty>No DDGs found.</CommandEmpty>
             ) : (
               <CommandGroup>
-                {filtered.map((ddg) => (
-                  <CommandItem
-                    key={ddg.id}
-                    value={ddg.id}
-                    onSelect={() => onSelect(ddg)}
-                    className={cn(
-                      'flex items-center justify-between gap-3 py-2.5 px-3 cursor-pointer',
-                      (selectedId === ddg.id || selectedIds?.includes(ddg.id)) && 'bg-gold/10 border-l-2 border-gold',
-                    )}
-                  >
-                    <div className="flex flex-col min-w-0">
-                      <span className="font-medium text-sm truncate">
-                        {ddg.displayName}
-                      </span>
-                      <span className="text-xs text-text-muted truncate">
-                        {ddg.primarySmtpAddress}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs bg-muted rounded-full px-2 py-0.5">
-                        {ddg.memberCount} members
-                      </span>
-                      <span className="text-xs text-text-muted">
-                        {ddg.type}
-                      </span>
-                    </div>
-                  </CommandItem>
-                ))}
+                {filtered.map((ddg) => {
+                  const unusable = !ddg.graphFilterSuccess || !ddg.graphFilter;
+                  return (
+                    <CommandItem
+                      key={ddg.id}
+                      value={ddg.id}
+                      disabled={unusable}
+                      onSelect={() => {
+                        if (unusable) return;
+                        onSelect(ddg);
+                      }}
+                      className={cn(
+                        'flex items-center justify-between gap-3 py-2.5 px-3',
+                        unusable ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+                        (selectedId === ddg.id || selectedIds?.includes(ddg.id)) && 'bg-gold/10 border-l-2 border-gold',
+                      )}
+                    >
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-medium text-sm truncate">
+                          {ddg.displayName}
+                        </span>
+                        <span className="text-xs text-text-muted truncate">
+                          {ddg.primarySmtpAddress}
+                        </span>
+                        {unusable && (
+                          <span className="text-xs text-destructive truncate" title={ddg.graphFilterWarning ?? undefined}>
+                            Cannot be used: {ddg.graphFilterWarning ?? 'filter could not be converted'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs bg-muted rounded-full px-2 py-0.5">
+                          {ddg.memberCount} members
+                        </span>
+                        <span className="text-xs text-text-muted">
+                          {ddg.type}
+                        </span>
+                      </div>
+                    </CommandItem>
+                  );
+                })}
               </CommandGroup>
             )}
           </ScrollArea>

@@ -143,11 +143,17 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
   const handleSubmit = useCallback(() => {
     if (formData.sources.length === 0) return;
 
+    const brokenDdg = formData.sources.find((s) => s.type === 'ddg' && (!s.ddg?.graphFilterSuccess || !s.ddg?.graphFilter));
+    if (brokenDdg) {
+      toast.error(`"${brokenDdg.ddg?.displayName}" cannot be used as a source: ${brokenDdg.ddg?.graphFilterWarning ?? 'its filter could not be converted'}.`);
+      return;
+    }
+
     const sources: CreateTunnelRequest['sources'] = formData.sources.map((s) => {
       if (s.type === 'ddg' && s.ddg) {
         return {
           sourceType: 'ddg',
-          sourceIdentifier: s.ddg.graphFilter ?? s.ddg.recipientFilter,
+          sourceIdentifier: s.ddg.graphFilter!,
           sourceDisplayName: s.ddg.displayName,
           sourceSmtpAddress: s.ddg.primarySmtpAddress,
           sourceFilterPlain: s.ddg.recipientFilterPlain,

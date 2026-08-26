@@ -460,7 +460,7 @@ function EmailSearchPicker({
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<UserSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [ddgs, setDdgs] = useState<{ id: string; displayName: string; memberCount: number }[]>([]);
+  const [ddgs, setDdgs] = useState<{ id: string; displayName: string; memberCount: number; usable: boolean; warning: string | null }[]>([]);
   const [ddgsLoading, setDdgsLoading] = useState(false);
   const [addingGroup, setAddingGroup] = useState<string | null>(null);
   const debounceRef = React.useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -489,7 +489,7 @@ function EmailSearchPicker({
     if (tab === 'groups' && ddgs.length === 0) {
       setDdgsLoading(true);
       api.ddgs.list()
-        .then((data) => setDdgs(data.map((d) => ({ id: d.primarySmtpAddress, displayName: d.displayName, memberCount: d.memberCount }))))
+        .then((data) => setDdgs(data.map((d) => ({ id: d.primarySmtpAddress, displayName: d.displayName, memberCount: d.memberCount, usable: d.graphFilterSuccess && !!d.graphFilter, warning: d.graphFilterWarning }))))
         .catch(() => setDdgs([]))
         .finally(() => setDdgsLoading(false));
     }
@@ -607,11 +607,13 @@ function EmailSearchPicker({
                   type="button"
                   className="flex items-center justify-between px-3 py-2 w-full text-left hover:bg-muted/50 transition-colors cursor-pointer"
                   onClick={() => handleAddGroup(ddg.id)}
-                  disabled={addingGroup === ddg.id}
+                  disabled={addingGroup === ddg.id || !ddg.usable}
                 >
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{ddg.displayName}</p>
-                    <p className="text-xs text-text-muted">{ddg.memberCount} members</p>
+                    <p className="text-xs text-text-muted">
+                      {ddg.usable ? `${ddg.memberCount} members` : `Cannot be used: ${ddg.warning ?? 'filter could not be converted'}`}
+                    </p>
                   </div>
                   <span className="text-xs text-gold shrink-0">
                     {addingGroup === ddg.id ? 'Adding...' : '+ Add all'}
