@@ -7,6 +7,7 @@ import type { SettingsDto, SettingsUpdateRequest } from '@/types/settings';
 import type { DdgDto, DdgMemberDto } from '@/types/ddg';
 import type { SecurityGroupDto, OrgContactDto, OrgContactFilterInput, UserSearchResult, SourceContactDto, ContactExclusionInput } from '@/types/tunnel';
 import type { UserFolderStateDto } from '@/types/user-lookup';
+import type { UnavailableMailboxesDto } from '@/types/targets';
 
 const API_BASE = '/api';
 
@@ -139,6 +140,10 @@ export const api = {
     search: (q: string) => fetchApi<UserSearchResult[]>(`/graph/users/search?q=${encodeURIComponent(q)}`),
     folderState: (email: string) =>
       fetchApi<UserFolderStateDto>(`/users/${encodeURIComponent(email)}/folder-state`),
+  },
+
+  targets: {
+    unavailable: () => fetchApi<UnavailableMailboxesDto>('/targets/unavailable'),
   },
 
   graph: {

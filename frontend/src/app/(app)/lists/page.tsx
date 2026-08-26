@@ -18,6 +18,7 @@ import { api } from '@/lib/api';
 import type { UserSearchResult } from '@/types/tunnel';
 import type { ContactDto, PhoneListDto, TargetUserFilterDdg, TargetUserFilterShape } from '@/types/phone-list';
 import { DDGSearchList } from '@/components/DDGSearchList';
+import { UnavailableMailboxes } from '@/components/UnavailableMailboxes';
 
 function mapContactDtoToCardData(dto: ContactDto): ContactCardData {
   return {
@@ -429,6 +430,9 @@ export default function PhoneListsPage() {
           </div>
         </div>
       )}
+
+      {/* Phase 2 (§2.1): mailboxes the worker is currently unable to deliver to */}
+      <UnavailableMailboxes />
 
       <ConfirmDialog
         open={deleteTarget !== null}
