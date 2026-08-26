@@ -29,7 +29,7 @@ public class ContactWriter : IContactWriter
         SortedDictionary<string, string> payload,
         CancellationToken ct)
     {
-        var contact = MapPayloadToContact(payload);
+        var contact = MapPayloadToContact(payload, isCreate: true);
 
         _logger.LogDebug(
             "Creating contact in mailbox {MailboxId} folder {FolderId}: {DisplayName}",
@@ -55,7 +55,7 @@ public class ContactWriter : IContactWriter
         SortedDictionary<string, string> payload,
         CancellationToken ct)
     {
-        var contact = MapPayloadToContact(payload);
+        var contact = MapPayloadToContact(payload, isCreate: false);
 
         _logger.LogDebug(
             "Updating contact {ContactId} in mailbox {MailboxId}: {DisplayName}",
@@ -116,7 +116,7 @@ public class ContactWriter : IContactWriter
 
             foreach (var (key, payload) in chunk)
             {
-                var contact = MapPayloadToContact(payload);
+                var contact = MapPayloadToContact(payload, isCreate: true);
                 var requestInfo = _graphClientFactory.Client
                     .Users[mailboxEntraId]
                     .ContactFolders[folderId]
@@ -161,7 +161,7 @@ public class ContactWriter : IContactWriter
 
             foreach (var (key, graphContactId, payload) in chunk)
             {
-                var contact = MapPayloadToContact(payload);
+                var contact = MapPayloadToContact(payload, isCreate: false);
                 var requestInfo = _graphClientFactory.Client
                     .Users[mailboxEntraId]
                     .Contacts[graphContactId]
@@ -312,10 +312,14 @@ public class ContactWriter : IContactWriter
     /// Converts a normalized payload dictionary (from <see cref="IContactPayloadBuilder"/>)
     /// into a <see cref="Contact"/> object ready for Graph API submission.
     ///
+    /// Phase 2 (§2.8): PersonalNotes is written only when the payload carries a "PersonalNotes"
+    /// key or <paramref name="isCreate"/> is true. On updates where the field profile omits
+    /// notes (AddMissing), phone-side edits survive even when OfficeLocation is synced.
+    ///
     /// Made <c>public static</c> so unit tests can validate field mapping directly
     /// without needing to mock Graph SDK or DI infrastructure.
     /// </summary>
-    public static Contact MapPayloadToContact(SortedDictionary<string, string> payload)
+    public static Contact MapPayloadToContact(SortedDictionary<string, string> payload, bool isCreate)
     {
         var contact = new Contact();
 
@@ -343,18 +347,23 @@ public class ContactWriter : IContactWriter
         if (payload.TryGetValue("MobilePhone", out var mobilePhone))
             contact.MobilePhone = mobilePhone;
 
-        // Build PersonalNotes: prepend OfficeLocation since iOS has no dedicated field for it
-        payload.TryGetValue("PersonalNotes", out var personalNotes);
-        if (!string.IsNullOrWhiteSpace(officeLocation))
+        // Build PersonalNotes: prepend OfficeLocation since iOS has no dedicated field for it.
+        // Phase 2 (§2.8): only when notes are part of this payload, or on create — a PATCH that
+        // omits PersonalNotes leaves whatever the user typed on the phone alone.
+        var hasNotesKey = payload.TryGetValue("PersonalNotes", out var personalNotes);
+        if (hasNotesKey || isCreate)
         {
-            var prefix = $"Office: {officeLocation}";
-            contact.PersonalNotes = string.IsNullOrWhiteSpace(personalNotes)
-                ? prefix
-                : $"{prefix}\n{personalNotes}";
-        }
-        else if (personalNotes != null)
-        {
-            contact.PersonalNotes = personalNotes;
+            if (!string.IsNullOrWhiteSpace(officeLocation))
+            {
+                var prefix = $"Office: {officeLocation}";
+                contact.PersonalNotes = string.IsNullOrWhiteSpace(personalNotes)
+                    ? prefix
+                    : $"{prefix}\n{personalNotes}";
+            }
+            else if (personalNotes != null)
+            {
+                contact.PersonalNotes = personalNotes;
+            }
         }
 
         // EmailAddresses — Graph expects List<EmailAddress> with Address and Name set

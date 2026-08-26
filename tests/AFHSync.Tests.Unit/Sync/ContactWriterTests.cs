@@ -22,7 +22,7 @@ public class ContactWriterTests
             ["DisplayName"] = "John Smith"
         };
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         Assert.Equal("John", contact.GivenName);
         Assert.Equal("Smith", contact.Surname);
@@ -40,7 +40,7 @@ public class ContactWriterTests
             ["EmailAddresses"] = "jane.doe@atlantafinehomes.com"
         };
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         Assert.NotNull(contact.EmailAddresses);
         Assert.Single(contact.EmailAddresses);
@@ -58,7 +58,7 @@ public class ContactWriterTests
             ["BusinessPhones"] = "+1 404-555-1234"
         };
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         Assert.NotNull(contact.BusinessPhones);
         Assert.Single(contact.BusinessPhones);
@@ -79,7 +79,7 @@ public class ContactWriterTests
             ["BusinessPostalCode"] = "30327"
         };
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         Assert.NotNull(contact.BusinessAddress);
         Assert.Equal("3290 Northside Parkway NW", contact.BusinessAddress.Street);
@@ -104,7 +104,7 @@ public class ContactWriterTests
             ["PersonalNotes"] = "Test notes"
         };
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         Assert.Equal("Advisor", contact.JobTitle);
         Assert.Equal("Atlanta Fine Homes", contact.CompanyName);
@@ -122,7 +122,7 @@ public class ContactWriterTests
     {
         var payload = new SortedDictionary<string, string>();
 
-        var contact = ContactWriter.MapPayloadToContact(payload);
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
 
         // Must not throw — returns a valid (mostly-empty) Contact object
         Assert.NotNull(contact);
@@ -153,5 +153,66 @@ public class ContactWriterTests
 
         Assert.True(result.Success);
         Assert.Equal("AAMkAG-abc", result.GraphContactId);
+    }
+
+    // ── Phase 2 (2.8): notes are written only when in the payload or on create ──
+
+    [Fact]
+    public void MapPayloadToContact_Update_WithoutNotesKey_LeavesPersonalNotesNull_EvenWithOffice()
+    {
+        var payload = new SortedDictionary<string, string>
+        {
+            ["DisplayName"] = "Jane Doe",
+            ["OfficeLocation"] = "Buckhead"
+        };
+
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: false);
+
+        Assert.Equal("Buckhead", contact.OfficeLocation);
+        Assert.Null(contact.PersonalNotes);   // phone-side notes survive an AddMissing update
+    }
+
+    [Fact]
+    public void MapPayloadToContact_Create_WithOfficeAndNoNotes_SetsOfficePrefix()
+    {
+        var payload = new SortedDictionary<string, string>
+        {
+            ["DisplayName"] = "Jane Doe",
+            ["OfficeLocation"] = "Buckhead"
+        };
+
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: true);
+
+        Assert.Equal("Office: Buckhead", contact.PersonalNotes);
+    }
+
+    [Fact]
+    public void MapPayloadToContact_Update_WithNotesKey_PrefixesOffice()
+    {
+        var payload = new SortedDictionary<string, string>
+        {
+            ["DisplayName"] = "Jane Doe",
+            ["OfficeLocation"] = "Buckhead",
+            ["PersonalNotes"] = "Team lead"
+        };
+
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: false);
+
+        Assert.Equal("Office: Buckhead\nTeam lead", contact.PersonalNotes);
+    }
+
+    [Fact]
+    public void MapPayloadToContact_Update_WithEmptyNotesKey_ClearsToPrefixOnly()
+    {
+        // Nosync on an existing contact sends an explicit empty string to clear the field.
+        var payload = new SortedDictionary<string, string>
+        {
+            ["OfficeLocation"] = "Buckhead",
+            ["PersonalNotes"] = ""
+        };
+
+        var contact = ContactWriter.MapPayloadToContact(payload, isCreate: false);
+
+        Assert.Equal("Office: Buckhead", contact.PersonalNotes);
     }
 }
