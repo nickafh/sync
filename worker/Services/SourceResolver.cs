@@ -357,11 +357,11 @@ public class SourceResolver : ISourceResolver
             IsEnabled = graphUser.AccountEnabled ?? true,
             HiddenFromGal = !(graphUser.ShowInAddressList ?? true),
             MailboxType = mailboxType,
-            // Cloud-only: Graph's User.aboutMe is the "Notes" field visible in Teams/OWA contact
-            // cards and edited via M365 admin center / Entra portal. Falls back to
-            // onPremisesExtensionAttributes.extensionAttribute5 for any remaining AD-synced users
-            // whose on-prem `info` attribute still flows up via AD Connect.
-            Notes = graphUser.AboutMe ?? graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute5,
+            // Notes come from Exchange CustomAttribute5, which Graph exposes as
+            // onPremisesExtensionAttributes.extensionAttribute5 (writable for cloud-only users via
+            // Set-Mailbox -CustomAttribute5). Graph's User.aboutMe is NOT usable here: it is not
+            // selectable on the /users list endpoint, so it was never populated (see 55b980b).
+            Notes = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute5,
             ExtensionAttr1 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute1,
             ExtensionAttr2 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute2,
             ExtensionAttr3 = graphUser.OnPremisesExtensionAttributes?.ExtensionAttribute3,

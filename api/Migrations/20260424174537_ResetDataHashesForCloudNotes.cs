@@ -6,11 +6,10 @@ namespace AFHSync.Api.Migrations
 {
     /// <inheritdoc />
     /// <summary>
-    /// Resets contact data hashes to force re-sync after switching the Notes source
-    /// from onPremisesExtensionAttributes.extensionAttribute5 to Graph User.aboutMe.
-    /// All users were migrated cloud-only, so ext5 is no longer populated — aboutMe
-    /// is the authoritative source for the Teams/OWA contact-card "Notes" field
-    /// (e.g., the April Avalon Gate Code for the 342 Avalon Users mailboxes).
+    /// Resets contact data hashes to force a re-sync of the Notes field (April 2026).
+    /// Historical note: this was written when Notes was expected to come from Graph User.aboutMe;
+    /// aboutMe cannot be $select-ed on the /users list endpoint, so Notes is sourced from
+    /// Exchange CustomAttribute5 (onPremisesExtensionAttributes.extensionAttribute5).
     /// </summary>
     public partial class ResetDataHashesForCloudNotes : Migration
     {
