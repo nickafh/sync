@@ -759,16 +759,22 @@ public sealed class SyncEngine(
             .Where(s => existingStates.Values.All(kept => kept.Id != s.Id))
             .ToList();
 
-        // Phase 2 (§2.2): no duplicate cleanup (Graph or DB) in a dry run.
-        if (duplicateStates.Count > 0 && !isDryRun)
+        // Phase 2 (§2.2): no duplicate cleanup (Graph or DB) in a dry run — single guard below.
+        if (duplicateStates.Count > 0)
         {
-            logger.LogInformation(
-                "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
-                duplicateStates.Count, tunnel.Id, mailbox.Id);
-
-            // Batch delete duplicate Graph contacts.
-            if (!isDryRun)
+            if (isDryRun)
             {
+                logger.LogInformation(
+                    "Dry run: {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — would clean up",
+                    duplicateStates.Count, tunnel.Id, mailbox.Id);
+            }
+            else
+            {
+                logger.LogInformation(
+                    "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
+                    duplicateStates.Count, tunnel.Id, mailbox.Id);
+
+                // Batch delete duplicate Graph contacts.
                 var dupeOps = duplicateStates
                     .Where(d => !string.IsNullOrEmpty(d.GraphContactId))
                     .Select(d => (d.Id.ToString(), d.GraphContactId!))
@@ -785,14 +791,14 @@ public sealed class SyncEngine(
                             logger.LogWarning("Failed to delete duplicate Graph contact (key={Key}): {Error}", key, result.Error);
                     }
                 }
-            }
 
-            await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
-            var dupeIds = duplicateStates.Select(d => d.Id).ToList();
-            await dupeDb.ContactSyncStates
-                .Where(s => dupeIds.Contains(s.Id))
-                .ExecuteDeleteAsync(ct);
-            removed += duplicateStates.Count;
+                await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
+                var dupeIds = duplicateStates.Select(d => d.Id).ToList();
+                await dupeDb.ContactSyncStates
+                    .Where(s => dupeIds.Contains(s.Id))
+                    .ExecuteDeleteAsync(ct);
+                removed += duplicateStates.Count;
+            }
         }
 
         // Phase 1: Compute payloads and classify each source user as create, update, or skip.
