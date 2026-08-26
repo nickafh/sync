@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Plus, RefreshCw, Minus } from 'lucide-react';
+import { Plus, RefreshCw, Minus, AlertCircle } from 'lucide-react';
 
 interface ImpactPreviewDialogProps {
   open: boolean;
@@ -18,6 +18,7 @@ interface ImpactPreviewDialogProps {
   impact: ImpactPreviewResponse | null;
   onConfirm: () => void;
   isLoading?: boolean;
+  notes?: string[];
 }
 
 export function ImpactPreviewDialog({
@@ -26,6 +27,7 @@ export function ImpactPreviewDialog({
   impact,
   onConfirm,
   isLoading = false,
+  notes,
 }: ImpactPreviewDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -60,6 +62,16 @@ export function ImpactPreviewDialog({
               <span className="text-sm">contacts will be removed</span>
             </div>
           </div>
+        )}
+        {notes && notes.length > 0 && (
+          <ul className="space-y-2">
+            {notes.map((note) => (
+              <li key={note} className="flex items-start gap-2 text-sm text-amber-800">
+                <AlertCircle className="size-4 mt-0.5 shrink-0" strokeWidth={1.5} />
+                <span>{note}</span>
+              </li>
+            ))}
+          </ul>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

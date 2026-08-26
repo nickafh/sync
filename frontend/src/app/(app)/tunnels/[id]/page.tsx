@@ -55,10 +55,15 @@ function formatStalePolicy(policy: string): string {
   return found?.label ?? policy;
 }
 
+const FOLDER_RENAME_NOTE =
+  'The contact folder will be renamed on every phone at the next sync.';
+
 function isHighImpactChange(
   original: TunnelDetailDto,
   edited: UpdateTunnelRequest,
 ): boolean {
+  // Phase 2 (§2.5): renaming the tunnel renames the contact folder on every phone.
+  if (original.name.trim() !== edited.name.trim()) return true;
   // Source change: compare source identifiers
   const origSourceIds = original.sources.map((s) => s.sourceIdentifier).sort();
   const editSourceIds = edited.sources.map((s) => s.sourceIdentifier).sort();
@@ -345,6 +350,9 @@ export default function TunnelDetailPage() {
       </div>
     );
   }
+
+  const folderRenameNote =
+    isEditing && editForm.name.trim() !== tunnel.name.trim() ? FOLDER_RENAME_NOTE : null;
 
   return (
     <div>
@@ -1053,6 +1061,7 @@ export default function TunnelDetailPage() {
         impact={impactData}
         onConfirm={doSave}
         isLoading={updateTunnel.isPending}
+        notes={folderRenameNote ? [folderRenameNote] : undefined}
       />
 
       {/* Fallback Confirmation Dialog (when preview API fails) */}
@@ -1060,7 +1069,15 @@ export default function TunnelDetailPage() {
         open={fallbackConfirmOpen}
         onOpenChange={setFallbackConfirmOpen}
         title="Save changes"
-        description="Unable to estimate impact. Save changes anyway?"
+        description={
+          folderRenameNote ? (
+            <>
+              Unable to estimate impact. {folderRenameNote} Save changes anyway?
+            </>
+          ) : (
+            'Unable to estimate impact. Save changes anyway?'
+          )
+        }
         confirmLabel="Save Anyway"
         dismissLabel="Cancel"
         variant="default"
