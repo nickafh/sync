@@ -4,7 +4,6 @@ using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
@@ -34,6 +33,7 @@ public sealed class SyncEngine(
     IContactFolderManager contactFolderManager,
     IStaleContactHandler staleContactHandler,
     IRunLogger runLogger,
+    IRunClaimService runClaimService,
     ThrottleCounter throttleCounter,
     IPhotoSyncService photoSyncService,
     AFHSync.Worker.Graph.GraphClientFactory graphClientFactory,
@@ -46,68 +46,41 @@ public sealed class SyncEngine(
     private const int DefaultParallelism = 4;
 
     public async Task<SyncRun> RunAsync(
-        int? tunnelId,
+        int? runId,
         RunType runType,
         bool isDryRun,
         CancellationToken ct)
     {
-        // Guard + claim atomically using a PostgreSQL advisory lock to prevent TOCTOU race
-        // when WorkerCount > 1 (two Hangfire workers could both pass the guard before either claims).
-        SyncRun run;
-        await using (var guardDb = await dbContextFactory.CreateDbContextAsync(ct))
+        // Phase 2 (§2.7): claim (or create) the run row under the advisory lock. Once a row is
+        // claimed, RunType / IsDryRun / the tunnel list come from the ROW, never the arguments —
+        // the API decides what a run is when it creates the row; this job merely executes it.
+        // CancellationToken.None: claiming is bookkeeping that must not be skipped by a
+        // shutdown token (Task 4 finalizes such a run as Cancelled instead).
+        var claim = await runClaimService.ClaimAsync(runId, runType, isDryRun, CancellationToken.None);
+        switch (claim.Outcome)
         {
-            // Advisory lock key 1 = sync run start serialization. It's Postgres-specific and
-            // transaction-scoped, so skip it on non-relational providers (e.g. the in-memory
-            // provider used by unit tests) — mirrors the IsInMemory checks elsewhere.
-            IDbContextTransaction? tx = guardDb.Database.IsRelational()
-                ? await guardDb.Database.BeginTransactionAsync(ct)
-                : null;
-            await using var _tx = tx;
-            if (tx is not null)
-                await guardDb.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1)", ct);
-
-            var alreadyRunning = await guardDb.SyncRuns
-                .AnyAsync(r => r.Status == SyncStatus.Running, ct);
-            if (alreadyRunning)
-            {
-                logger.LogWarning("Skipping sync — another run is already in progress");
-                return new SyncRun { Status = SyncStatus.Failed };
-            }
-
-            // Claim an existing pending run (created by API) or create a new one.
-            var pending = await guardDb.SyncRuns
-                .Where(r => r.Status == SyncStatus.Pending)
-                .OrderBy(r => r.CreatedAt)
-                .FirstOrDefaultAsync(ct);
-
-            if (pending != null)
-            {
-                pending.Status = SyncStatus.Running;
-                pending.StartedAt = DateTime.UtcNow;
-                await guardDb.SaveChangesAsync(ct);
-                run = pending;
-            }
-            else
-            {
-                var newRun = new SyncRun
-                {
-                    RunType = runType,
-                    Status = SyncStatus.Running,
-                    IsDryRun = isDryRun,
-                    StartedAt = DateTime.UtcNow,
-                    CreatedAt = DateTime.UtcNow
-                };
-                guardDb.SyncRuns.Add(newRun);
-                await guardDb.SaveChangesAsync(ct);
-                run = newRun;
-            }
-
-            if (tx is not null)
-                await tx.CommitAsync(ct);
+            case RunClaimOutcome.Blocked:
+                logger.LogWarning("Skipping sync — another run is already in progress (requested RunId={RunId})",
+                    runId?.ToString() ?? "new");
+                return claim.Run ?? new SyncRun { Status = SyncStatus.Failed };
+            case RunClaimOutcome.NotFound:
+                logger.LogWarning("Sync run {RunId} does not exist — nothing to do", runId);
+                return new SyncRun { Id = runId ?? 0, Status = SyncStatus.Failed };
+            case RunClaimOutcome.AlreadyFinalized:
+                logger.LogInformation("Sync run {RunId} is already {Status} — nothing to do", claim.Run!.Id, claim.Run.Status);
+                return claim.Run;
         }
+
+        var run = claim.Run!;
+        isDryRun = run.IsDryRun;
+        var requestedTunnelIds = ParseRequestedTunnelIds(run.RequestedTunnelIds);
+        if (requestedTunnelIds is { Count: 0 })
+            logger.LogError("RunId={RunId}: requested_tunnel_ids '{Json}' is unreadable — processing no tunnels",
+                run.Id, run.RequestedTunnelIds);
+
         logger.LogInformation(
-            "SyncEngine starting RunId={RunId}, TunnelId={TunnelId}, IsDryRun={IsDryRun}",
-            run.Id, tunnelId?.ToString() ?? "all", isDryRun);
+            "SyncEngine starting RunId={RunId}, RunType={RunType}, Tunnels={Tunnels}, IsDryRun={IsDryRun}",
+            run.Id, run.RunType, requestedTunnelIds is null ? "all" : string.Join(",", requestedTunnelIds), isDryRun);
 
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
@@ -136,7 +109,7 @@ public sealed class SyncEngine(
         try
         {
             // Step 3: Load tunnels.
-            var tunnels = await LoadTunnelsAsync(tunnelId, ct);
+            var tunnels = await LoadTunnelsAsync(requestedTunnelIds, ct);
             tunnelCount = tunnels.Count;
             logger.LogInformation("Loaded {Count} tunnel(s) to process", tunnels.Count);
 
@@ -297,26 +270,28 @@ public sealed class SyncEngine(
         return run;
     }
 
-    private async Task<List<Tunnel>> LoadTunnelsAsync(int? tunnelId, CancellationToken ct)
+    private async Task<List<Tunnel>> LoadTunnelsAsync(IReadOnlyList<int>? tunnelIds, CancellationToken ct)
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
 
-        if (tunnelId.HasValue)
+        if (tunnelIds is not null)
         {
-            var tunnel = await db.Tunnels
+            // Explicit ids (manual trigger): no status filter — an operator may deliberately run
+            // an inactive tunnel once. Missing ids are logged, not fatal.
+            var ids = tunnelIds.ToList();
+            var tunnels = await db.Tunnels
+                .Where(t => ids.Contains(t.Id))
                 .Include(t => t.TunnelSources)
                 .Include(t => t.FieldProfile)
                     .ThenInclude(fp => fp!.FieldProfileFields)
                 .Include(t => t.TunnelPhoneLists)
                     .ThenInclude(tpl => tpl.PhoneList)
-                .FirstOrDefaultAsync(t => t.Id == tunnelId.Value, ct);
+                .ToListAsync(ct);
 
-            if (tunnel == null)
-            {
-                logger.LogWarning("Tunnel {TunnelId} not found", tunnelId.Value);
-                return [];
-            }
-            return [tunnel];
+            foreach (var missing in ids.Where(id => tunnels.All(t => t.Id != id)))
+                logger.LogWarning("Tunnel {TunnelId} not found", missing);
+
+            return tunnels;
         }
 
         return await db.Tunnels
@@ -327,6 +302,25 @@ public sealed class SyncEngine(
             .Include(t => t.TunnelPhoneLists)
                 .ThenInclude(tpl => tpl.PhoneList)
             .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Phase 2 (§2.7): sync_runs.requested_tunnel_ids is a JSON int array. Null/blank ⇒ all
+    /// active tunnels. Unreadable JSON ⇒ an EMPTY list (process nothing) — never widen to "all".
+    /// </summary>
+    internal static IReadOnlyList<int>? ParseRequestedTunnelIds(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            var ids = JsonSerializer.Deserialize<int[]>(json);
+            return ids is { Length: > 0 } ? ids : null;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<int>();
+        }
     }
 
     private async Task<(int created, int updated, int skipped, int failed, int removed)> ProcessTunnelAsync(

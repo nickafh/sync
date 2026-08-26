@@ -49,12 +49,16 @@ public class SyncRunsController : ControllerBase
         // Determine RunType from request
         var runType = request.IsDryRun ? RunType.DryRun : RunType.Manual;
 
-        // Create a pending SyncRun record
+        // Create a pending SyncRun record. Phase 2 (§2.7): the row carries everything the worker
+        // needs (RunType, IsDryRun, RequestedTunnelIds); the job only says WHICH row to run.
         var run = new AFHSync.Shared.Entities.SyncRun
         {
             RunType = runType,
             Status = SyncStatus.Pending,
             IsDryRun = request.IsDryRun,
+            RequestedTunnelIds = request.TunnelIds is { Length: > 0 }
+                ? System.Text.Json.JsonSerializer.Serialize(request.TunnelIds)
+                : null,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -62,35 +66,27 @@ public class SyncRunsController : ControllerBase
         await db.SaveChangesAsync();
         if (tx != null) { await tx.CommitAsync(); await tx.DisposeAsync(); }
 
-        // Enqueue Hangfire fire-and-forget jobs — one per tunnel, or one for all.
-        // Capture the returned job IDs so StopSync / StaleRunCleanupService can call
-        // BackgroundJob.Delete on queued-but-not-yet-started jobs instead of only
-        // relying on the cancel_sync flag being observed at the next boundary check.
-        var enqueuedJobIds = new List<string>();
-        if (request.TunnelIds is { Length: > 0 })
-        {
-            foreach (var tid in request.TunnelIds)
-            {
-                var tunnelId = tid;
-                var jobId = jobs.Enqueue<ISyncEngine>(engine =>
-                    engine.RunAsync(tunnelId, runType, request.IsDryRun, CancellationToken.None));
-                if (!string.IsNullOrEmpty(jobId)) enqueuedJobIds.Add(jobId);
-            }
-        }
-        else
+        // Exactly ONE Hangfire job per run, addressed by run id (the per-tunnel fan-out is gone —
+        // it raced N jobs for one Pending row). The job id is stored so StopSync /
+        // StaleRunCleanupService can BackgroundJob.Delete a queued-but-not-started job.
+        var runId = run.Id;
+        try
         {
             var jobId = jobs.Enqueue<ISyncEngine>(engine =>
-                engine.RunAsync(null, runType, request.IsDryRun, CancellationToken.None));
-            if (!string.IsNullOrEmpty(jobId)) enqueuedJobIds.Add(jobId);
-        }
-
-        if (enqueuedJobIds.Count > 0)
-        {
-            run.HangfireJobIds = string.Join(",", enqueuedJobIds);
+                engine.RunAsync(runId, runType, request.IsDryRun, CancellationToken.None));
+            run.HangfireJobIds = jobId;
             await db.SaveChangesAsync();
         }
+        catch (Exception ex)
+        {
+            run.Status = SyncStatus.Failed;
+            run.CompletedAt = DateTime.UtcNow;
+            run.ErrorSummary = $"Failed to enqueue sync job: {ex.Message}";
+            await db.SaveChangesAsync();
+            return StatusCode(500, new { message = $"Sync run {runId} could not be queued: {ex.Message}" });
+        }
 
-        return Ok(new { runId = run.Id });
+        return Ok(new { runId });
     }
 
     /// <summary>

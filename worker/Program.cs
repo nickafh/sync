@@ -92,6 +92,7 @@ try
     services.AddScoped<IContactFolderManager, ContactFolderManager>();
     services.AddScoped<IStaleContactHandler, StaleContactHandler>();
     services.AddScoped<IRunLogger, RunLogger>();
+    services.AddScoped<IRunClaimService, RunClaimService>();
     services.AddScoped<ISyncEngine, SyncEngine>();
     services.AddScoped<IPhotoSyncService, PhotoSyncService>();
     services.AddScoped<IStaleRunCleanupService, StaleRunCleanupService>();

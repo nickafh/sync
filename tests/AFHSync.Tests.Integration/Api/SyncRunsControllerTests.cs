@@ -59,11 +59,14 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task PostSync_ReturnsRunId_WhenNoRunning()
     {
-        // Ensure no running sync runs exist
+        // Ensure no running or pending sync runs exist. Pending (not just Running) must be
+        // cleared too — the test suite shares one Postgres database, and Phase 2 (§2.7) leaves
+        // newly-created rows Pending until the enqueued job claims them, so a sibling test's
+        // row can still be Pending when this test's guard runs.
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
-        var runningRuns = db.SyncRuns.Where(r => r.Status == SyncStatus.Running).ToList();
-        db.SyncRuns.RemoveRange(runningRuns);
+        var blockingRuns = db.SyncRuns.Where(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending).ToList();
+        db.SyncRuns.RemoveRange(blockingRuns);
         await db.SaveChangesAsync();
 
         var response = await AuthenticatedPostAsync("/api/sync-runs", new
@@ -107,6 +110,35 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         Assert.Contains("already in progress", body.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task PostSync_StoresRequestedTunnelIds_AndExactlyOneJobId()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        db.SyncRuns.RemoveRange(db.SyncRuns.Where(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending));
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedPostAsync("/api/sync-runs", new
+        {
+            runType = "dry_run",
+            isDryRun = true,
+            tunnelIds = new[] { 3, 5 }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var runId = body.GetProperty("runId").GetInt32();
+
+        var run = await db.SyncRuns.FindAsync(runId);
+        Assert.NotNull(run);
+        Assert.Equal(SyncStatus.Pending, run!.Status);
+        Assert.True(run.IsDryRun);
+        Assert.Equal(RunType.DryRun, run.RunType);
+        Assert.Equal("[3,5]", run.RequestedTunnelIds);
+        Assert.False(string.IsNullOrEmpty(run.HangfireJobIds));
+        Assert.DoesNotContain(",", run.HangfireJobIds);   // one job, not one per tunnel
     }
 
     [Fact]

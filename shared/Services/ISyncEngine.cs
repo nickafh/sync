@@ -1,5 +1,6 @@
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
+using Hangfire;
 
 namespace AFHSync.Shared.Services;
 
@@ -13,15 +14,24 @@ namespace AFHSync.Shared.Services;
 public interface ISyncEngine
 {
     /// <summary>
-    /// Executes a complete sync run for the specified tunnel (or all active tunnels).
+    /// Executes a sync run.
     /// </summary>
-    /// <param name="tunnelId">If specified, syncs only this tunnel. If null, syncs all active tunnels.</param>
-    /// <param name="runType">The type of run (Manual, Scheduled, DryRun).</param>
-    /// <param name="isDryRun">When true, computes all actions but does not write to Graph.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>The completed SyncRun record with aggregate counts and final status.</returns>
+    /// <param name="runId">
+    /// Phase 2 (§2.7). When set, the worker claims that <c>sync_runs</c> row (Pending → Running)
+    /// under the run-start advisory lock and reads RunType, IsDryRun and RequestedTunnelIds
+    /// from it; a row that is no longer Pending is returned untouched and no work is done.
+    /// When null (cron), a new row is created from <paramref name="runType"/> / <paramref name="isDryRun"/>.
+    /// </param>
+    /// <param name="runType">Used only when <paramref name="runId"/> is null.</param>
+    /// <param name="isDryRun">Used only when <paramref name="runId"/> is null.</param>
+    /// <param name="ct">
+    /// Hangfire replaces the token passed at enqueue time (callers pass CancellationToken.None)
+    /// with its own, which is signalled on worker shutdown and on job deletion.
+    /// </param>
+    /// <returns>The run record with its final status.</returns>
+    [AutomaticRetry(Attempts = 0)]
     Task<SyncRun> RunAsync(
-        int? tunnelId,
+        int? runId,
         RunType runType,
         bool isDryRun,
         CancellationToken ct);

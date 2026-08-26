@@ -62,6 +62,7 @@ public class SyncEngineTests
             folderManager ?? new FakeContactFolderManager(),
             staleHandler ?? new FakeStaleContactHandler(),
             runLogger ?? new FakeRunLogger(),
+            new RunClaimService(CreateFactory(dbName), NullLogger<RunClaimService>.Instance),
             throttleCounter ?? new ThrottleCounter(),
             photoSyncService ?? new FakePhotoSyncService(),
             null!, // GraphClientFactory — not used in unit tests
@@ -91,6 +92,116 @@ public class SyncEngineTests
         await using var verifyCtx = MakeDbContext(dbName);
         Assert.True(await verifyCtx.SyncRuns.AnyAsync());
         Assert.True(runLogger.WasFinalized);
+    }
+
+    // ==============================
+    // Phase 2 (2.7): explicit run claiming
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_WithRunId_ClaimsThatRowAndReadsTunnelsAndDryRunFromIt()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            var t1 = new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+            var t2 = new Tunnel { Id = 2, Name = "T2", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+            var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+            var tpl = new TunnelPhoneList { TunnelId = 2, PhoneListId = 1, Tunnel = t2, PhoneList = phoneList };
+            t2.TunnelPhoneLists.Add(tpl);
+            seedCtx.Tunnels.AddRange(t1, t2);
+            seedCtx.PhoneLists.Add(phoneList);
+            seedCtx.TunnelPhoneLists.Add(tpl);
+            seedCtx.TargetMailboxes.Add(new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+            // The API created this row: dry run, tunnel 2 only. The job arguments below say
+            // otherwise (Manual, not dry) and must be ignored.
+            seedCtx.SyncRuns.Add(new SyncRun
+            {
+                Id = 7, RunType = RunType.DryRun, Status = SyncStatus.Pending, IsDryRun = true,
+                RequestedTunnelIds = "[2]", CreatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var sourceResolver = new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]);
+        var contactWriter = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, contactWriter: contactWriter, runLogger: runLogger);
+
+        var run = await engine.RunAsync(7, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(7, run.Id);
+        Assert.Equal(new[] { 2 }, sourceResolver.ResolvedTunnelIds);
+        Assert.Empty(contactWriter.CreatedContactIds);                       // dry run honoured from the row
+        Assert.Contains(runLogger.AddedItems, i => i.Action == "created");    // but the dry run still reports
+        Assert.True(runLogger.WasFinalized);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var row = await verifyCtx.SyncRuns.SingleAsync(r => r.Id == 7);
+        Assert.NotNull(row.StartedAt);
+        Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());             // no second row was created
+    }
+
+    [Fact]
+    public async Task RunAsync_WithFinalizedRunId_ReturnsRowUntouchedAndDoesNoWork()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.Tunnels.Add(new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove });
+            seedCtx.SyncRuns.Add(new SyncRun
+            {
+                Id = 9, RunType = RunType.Manual, Status = SyncStatus.Success, IsDryRun = false,
+                StartedAt = DateTime.UtcNow.AddMinutes(-5), CompletedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow.AddMinutes(-6)
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var sourceResolver = new FakeSourceResolver([]);
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: sourceResolver, runLogger: runLogger);
+
+        var run = await engine.RunAsync(9, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(9, run.Id);
+        Assert.Equal(SyncStatus.Success, run.Status);
+        Assert.Equal(0, sourceResolver.ResolveCallCount);
+        Assert.False(runLogger.WasFinalized);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.SyncRuns.CountAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_WithRunId_WhileAnotherRunIsRunning_FailsThatRowWithoutWork()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.SyncRuns.Add(new SyncRun { Id = 1, RunType = RunType.Scheduled, Status = SyncStatus.Running, StartedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow });
+            seedCtx.SyncRuns.Add(new SyncRun { Id = 2, RunType = RunType.Manual, Status = SyncStatus.Pending, CreatedAt = DateTime.UtcNow });
+            await seedCtx.SaveChangesAsync();
+        }
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, runLogger: runLogger);
+
+        var run = await engine.RunAsync(2, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(SyncStatus.Failed, run.Status);
+        Assert.False(runLogger.WasFinalized);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var row = await verifyCtx.SyncRuns.SingleAsync(r => r.Id == 2);
+        Assert.Equal(SyncStatus.Failed, row.Status);
+        Assert.Equal("another run was already in progress", row.ErrorSummary);
+        Assert.NotNull(row.CompletedAt);
+    }
+
+    [Fact]
+    public void ParseRequestedTunnelIds_HandlesNullJsonAndGarbage()
+    {
+        Assert.Null(SyncEngine.ParseRequestedTunnelIds(null));
+        Assert.Null(SyncEngine.ParseRequestedTunnelIds(""));
+        Assert.Equal(new[] { 3, 5 }, SyncEngine.ParseRequestedTunnelIds("[3,5]")!);
+        Assert.Empty(SyncEngine.ParseRequestedTunnelIds("not json")!);   // unreadable ⇒ process nothing, never "all"
     }
 
     // ==============================
@@ -667,10 +778,12 @@ public class SyncEngineTests
     private sealed class FakeSourceResolver(List<SourceUser> users) : ISourceResolver
     {
         public int ResolveCallCount { get; private set; }
+        public List<int> ResolvedTunnelIds { get; } = [];
 
         public Task<List<SourceUser>> ResolveAsync(Tunnel tunnel, CancellationToken ct)
         {
             ResolveCallCount++;
+            ResolvedTunnelIds.Add(tunnel.Id);
             return Task.FromResult(users);
         }
     }
@@ -811,6 +924,7 @@ public class SyncEngineTests
         public int FinalizedTunnelsFailed { get; private set; }
         public int FinalizedThrottleEvents { get; private set; }
         public string? FinalizedErrorSummary { get; private set; }
+        public SyncStatus? FinalizedStatus { get; private set; }
 
         private int _nextRunId = 1;
 
@@ -847,6 +961,7 @@ public class SyncEngineTests
             FinalizedTunnelsFailed = tunnelsFailed;
             FinalizedThrottleEvents = throttleEvents;
             FinalizedErrorSummary = errorSummary;
+            FinalizedStatus = status;
             return Task.CompletedTask;
         }
     }
