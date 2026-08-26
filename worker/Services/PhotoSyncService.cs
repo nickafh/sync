@@ -396,7 +396,8 @@ public class PhotoSyncService : IPhotoSyncService
             try
             {
                 var states = mailboxGroup.ToList();
-                var mailboxEntraId = states.First().TargetMailbox.EntraId;
+                var mailboxEntity = states.First().TargetMailbox;
+                var mailboxEntraId = mailboxEntity.EntraId;
 
                 // Resolve the contact folder ID for this mailbox+tunnel.
                 // Photos must be written via the ContactFolders path since contacts
@@ -404,7 +405,15 @@ public class PhotoSyncService : IPhotoSyncService
                 // collection. The flat /contacts/{id}/photo path does not reliably
                 // resolve the photo sub-resource for subfolder contacts.
                 var (folderId, _) = await _contactFolderManager.GetOrCreateFolderAsync(
-                    mailboxEntraId, tunnel.Name, ct);
+                    tunnel, mailboxEntity, isDryRun, ct);
+                if (folderId is null)
+                {
+                    // Phase 2 (§2.2): dry run against a mailbox with no folder — nothing to photo-sync.
+                    _logger.LogInformation(
+                        "Dry run: no contact folder for tunnel {TunnelId} in mailbox {MailboxId} — skipping photo pass",
+                        tunnel.Id, mailboxEntraId);
+                    return;
+                }
 
                 // Counter accumulation happens inside OnPhotoWriteAsync — the return
                 // is kept for per-mailbox diagnostic logging inside ProcessMailboxPhotosAsync.

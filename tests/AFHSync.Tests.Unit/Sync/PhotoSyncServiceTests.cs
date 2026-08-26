@@ -769,9 +769,9 @@ public class PhotoSyncServiceTests
 
     private sealed class FakeContactFolderManager : IContactFolderManager
     {
-        public Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(
-            string mailboxEntraId, string folderName, CancellationToken ct)
-            => Task.FromResult(("fake-folder-id", false));
+        public Task<(string? folderId, bool wasCreated)> GetOrCreateFolderAsync(
+            Tunnel tunnel, TargetMailbox mailbox, bool isDryRun, CancellationToken ct)
+            => Task.FromResult<(string? folderId, bool wasCreated)>(("fake-folder-id", false));
 
         public void ResetCache() { }
     }

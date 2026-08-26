@@ -667,12 +667,12 @@ public sealed class SyncEngine(
     {
         int created = 0, updated = 0, skipped = 0, failed = 0, removed = 0;
 
-        // Get or create the contact folder.
-        string folderId;
+        // Get or create the contact folder (looked up only, never created, in a dry run).
+        string? folderId;
         bool folderWasCreated;
         try
         {
-            (folderId, folderWasCreated) = await contactFolderManager.GetOrCreateFolderAsync(mailbox.EntraId, tunnel.Name, ct);
+            (folderId, folderWasCreated) = await contactFolderManager.GetOrCreateFolderAsync(tunnel, mailbox, isDryRun, ct);
         }
         catch (Exception ex)
         {
@@ -713,7 +713,7 @@ public sealed class SyncEngine(
 
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
         // Clear across ALL phone lists so all contacts get re-created in the new folder.
-        if (folderWasCreated)
+        if (folderWasCreated && !isDryRun)
         {
             await using var cleanupDb = await dbContextFactory.CreateDbContextAsync(ct);
             var staleCount = await cleanupDb.ContactSyncStates
@@ -749,13 +749,18 @@ public sealed class SyncEngine(
                       .ThenBy(s => s.Id)
                       .First());
 
+        // Phase 2 (§2.2): a dry run against a mailbox with no folder — every contact "would create".
+        if (isDryRun && folderId is null)
+            existingStates = new Dictionary<int, ContactSyncState>();
+
         // Identify duplicate sync state records to clean up (from before this fix).
         // These have Graph contacts that are duplicates in the same folder.
         var duplicateStates = allExistingStates
             .Where(s => existingStates.Values.All(kept => kept.Id != s.Id))
             .ToList();
 
-        if (duplicateStates.Count > 0)
+        // Phase 2 (§2.2): no duplicate cleanup (Graph or DB) in a dry run.
+        if (duplicateStates.Count > 0 && !isDryRun)
         {
             logger.LogInformation(
                 "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
@@ -845,12 +850,15 @@ public sealed class SyncEngine(
 
         if (!isDryRun && pendingCreates.Count > 0)
         {
+            var targetFolderId = folderId
+                ?? throw new InvalidOperationException($"No contact folder id for mailbox {mailbox.Id} outside a dry run");
+
             var batchOps = pendingCreates
                 .Select(c => (c.key, c.payload))
                 .ToList();
 
             var batchResults = await contactWriter.CreateContactsBatchAsync(
-                mailbox.EntraId, folderId, batchOps, ct);
+                mailbox.EntraId, targetFolderId, batchOps, ct);
 
             foreach (var pending in pendingCreates)
             {
@@ -905,22 +913,9 @@ public sealed class SyncEngine(
         }
         else if (isDryRun)
         {
-            // Dry-run: record creates without Graph calls.
+            // Dry-run: report creates without Graph calls and without state rows (§2.2).
             foreach (var pending in pendingCreates)
             {
-                statesToAdd.Add(new ContactSyncState
-                {
-                    SourceUserId = pending.sourceUserId,
-                    PhoneListId = canonicalPhoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    TunnelId = tunnel.Id,
-                    DataHash = pending.dataHash,
-                    LastSyncedAt = DateTime.UtcNow,
-                    LastResult = "created",
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                });
-
                 runLogger.AddItem(new SyncRunItem
                 {
                     SyncRunId = run.Id,
@@ -1015,8 +1010,6 @@ public sealed class SyncEngine(
             {
                 var fieldChangesJson = BuildFieldChangesJson(pending.payload, pending.previousHash);
 
-                statesToUpdate.Add((pending.stateId, pending.dataHash, pending.previousHash, "updated"));
-
                 runLogger.AddItem(new SyncRunItem
                 {
                     SyncRunId = run.Id,
@@ -1036,7 +1029,7 @@ public sealed class SyncEngine(
         // (ProcessTunnelAsync caller) which has access to the overall totals.
 
         // Save new/updated ContactSyncState records using a fresh tracked context.
-        if (statesToAdd.Count > 0 || statesToUpdate.Count > 0 || statesToHeal.Count > 0)
+        if (!isDryRun && (statesToAdd.Count > 0 || statesToUpdate.Count > 0 || statesToHeal.Count > 0))
         {
             await using var writeDb = await dbContextFactory.CreateDbContextAsync(ct);
 

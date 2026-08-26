@@ -85,6 +85,15 @@ public class ContactWriter : IContactWriter
 
     private const int MaxBatchSize = 20;
 
+    /// <summary>Phase 2 (§2.2): a 2xx batch step whose body has no contact id (or does not parse).</summary>
+    public const string NoContactIdError = "no contact id in response";
+
+    /// <summary>Maps a create-step response to a result; no id ⇒ failure, so no state row is written for it.</summary>
+    internal static BatchOperationResult MapCreateResponse(Contact? created)
+        => string.IsNullOrEmpty(created?.Id)
+            ? new BatchOperationResult(false, Error: NoContactIdError)
+            : new BatchOperationResult(true, created.Id);
+
     /// <inheritdoc />
     public async Task<Dictionary<string, BatchOperationResult>> CreateContactsBatchAsync(
         string mailboxEntraId,
@@ -119,7 +128,7 @@ public class ContactWriter : IContactWriter
             await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, async (response, stepId) =>
             {
                 var created = await response.GetResponseByIdAsync<Contact>(stepId);
-                return new BatchOperationResult(true, created?.Id);
+                return MapCreateResponse(created);
             }, ct);
         }
 
@@ -253,7 +262,7 @@ public class ContactWriter : IContactWriter
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to parse batch response for step {StepId}", stepId);
-                    results[key] = new BatchOperationResult(true);
+                    results[key] = new BatchOperationResult(false, Error: NoContactIdError);
                 }
             }
             else

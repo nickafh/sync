@@ -131,4 +131,27 @@ public class ContactWriterTests
         Assert.Null(contact.EmailAddresses);
         Assert.Null(contact.BusinessPhones);
     }
+
+    // ── Phase 2 (2.2): a 2xx batch step without an id is NOT a success ───────
+
+    [Fact]
+    public void MapCreateResponse_NullOrIdLessContact_IsFailureWithNoIdError()
+    {
+        var fromNull = ContactWriter.MapCreateResponse(null);
+        Assert.False(fromNull.Success);
+        Assert.Equal("no contact id in response", fromNull.Error);
+
+        var fromIdLess = ContactWriter.MapCreateResponse(new Contact { Id = null });
+        Assert.False(fromIdLess.Success);
+        Assert.Equal(ContactWriter.NoContactIdError, fromIdLess.Error);
+    }
+
+    [Fact]
+    public void MapCreateResponse_ContactWithId_IsSuccess()
+    {
+        var result = ContactWriter.MapCreateResponse(new Contact { Id = "AAMkAG-abc" });
+
+        Assert.True(result.Success);
+        Assert.Equal("AAMkAG-abc", result.GraphContactId);
+    }
 }

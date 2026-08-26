@@ -512,6 +512,103 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 2 (2.2): dry runs write nothing
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_DryRun_LeavesStateAndFolderUntouched_ButStillReportsItems()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.ContactSyncStates.AddRange(
+                // Alice: existing with an OLD hash ⇒ "would update"
+                new ContactSyncState { Id = 1, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "g1", DataHash = "old-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+                // a duplicate row for Alice that a real run would delete (Graph + DB)
+                new ContactSyncState { Id = 2, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "g1-dupe", DataHash = "old-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await seedCtx.SaveChangesAsync();
+        }
+        var contactWriter = new FakeContactWriter();
+        var staleHandler = new RecordingStaleContactHandler();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([
+                new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" },
+                new SourceUser { Id = 3, EntraId = "u3", DisplayName = "Carol" }]),   // new ⇒ "would create"
+            contactWriter: contactWriter, staleHandler: staleHandler, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.DryRun, isDryRun: true, CancellationToken.None);
+
+        Assert.Contains(runLogger.AddedItems, i => i.Action == "created" && i.SourceUserId == 3);
+        Assert.Contains(runLogger.AddedItems, i => i.Action == "updated" && i.SourceUserId == 1);
+        Assert.Empty(contactWriter.CreatedContactIds);
+        Assert.Empty(contactWriter.UpdatedContactIds);
+        Assert.Empty(contactWriter.DeletedContactIds);                 // no duplicate cleanup in Graph
+        Assert.Equal(0, staleHandler.CallCount);                       // no stale pass
+        await using var verifyCtx = MakeDbContext(dbName);
+        var states = await verifyCtx.ContactSyncStates.OrderBy(s => s.Id).ToListAsync();
+        Assert.Equal(2, states.Count);                                 // no insert, no duplicate delete
+        Assert.Equal("old-hash", states[0].DataHash);                  // no update
+        Assert.Equal("g1-dupe", states[1].GraphContactId);
+    }
+
+    [Fact]
+    public async Task RunAsync_DryRun_NoFolder_NeverCreates_AndReportsEveryContactAsCreate()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            // A state row with a MATCHING hash: if the folder existed this would be "skipped".
+            seedCtx.ContactSyncStates.Add(new ContactSyncState { Id = 1, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1, GraphContactId = "g1", DataHash = "new-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+            await seedCtx.SaveChangesAsync();
+        }
+        var folderManager = new FakeContactFolderManager();
+        folderManager.MissingFolderMailboxes.Add("mbx");
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([
+                new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" },
+                new SourceUser { Id = 2, EntraId = "u2", DisplayName = "Bob" }]),
+            folderManager: folderManager, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.DryRun, isDryRun: true, CancellationToken.None);
+
+        Assert.Equal(0, folderManager.CreateCount);
+        Assert.Equal(2, runLogger.AddedItems.Count(i => i.Action == "created"));
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "updated");
+        Assert.Equal(2, runLogger.FinalizedCreated);
+        Assert.Equal(0, runLogger.FinalizedSkipped);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.ContactSyncStates.CountAsync());
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateWithoutContactId_IsFailedAndWritesNoStateRow()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var contactWriter = new FakeContactWriter { CreateReturnsNoId = true };
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: contactWriter, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var failedItem = Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal("no contact id in response", failedItem.ErrorMessage);
+        Assert.Equal(1, runLogger.FinalizedFailed);
+        Assert.Equal(0, runLogger.FinalizedCreated);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Empty(await verifyCtx.ContactSyncStates.ToListAsync());
+    }
+
+    // ==============================
     // Test 2: 0 source members logs warning
     // ==============================
 
@@ -1137,6 +1234,9 @@ public class SyncEngineTests
         /// test simulate a shutdown token arriving while a mailbox write is in flight.</summary>
         public Action? OnCreateContactsBatch { get; set; }
 
+        /// <summary>When true, batch creates report the no-id failure (Graph 2xx without an id).</summary>
+        public bool CreateReturnsNoId { get; init; }
+
         public Task<string> CreateContactAsync(string mailboxEntraId, string folderId, SortedDictionary<string, string> payload, CancellationToken ct)
         {
             var id = Guid.NewGuid().ToString();
@@ -1164,6 +1264,11 @@ public class SyncEngineTests
             var results = new Dictionary<string, BatchOperationResult>();
             foreach (var (key, _) in operations)
             {
+                if (CreateReturnsNoId)
+                {
+                    results[key] = new BatchOperationResult(false, Error: ContactWriter.NoContactIdError);
+                    continue;
+                }
                 var id = Guid.NewGuid().ToString();
                 CreatedContactIds.Add(id);
                 results[key] = new BatchOperationResult(true, id);
@@ -1208,12 +1313,25 @@ public class SyncEngineTests
         /// <summary>Every mailbox EntraId the engine asked a folder for, in call order.</summary>
         public List<string> Requested { get; } = [];
 
-        public Task<(string folderId, bool wasCreated)> GetOrCreateFolderAsync(string mailboxEntraId, string folderName, CancellationToken ct)
+        /// <summary>Mailboxes (by EntraId) with no folder yet: a real run "creates" it (wasCreated=true); a dry run gets null.</summary>
+        public HashSet<string> MissingFolderMailboxes { get; } = [];
+
+        public int CreateCount { get; private set; }
+
+        public Task<(string? folderId, bool wasCreated)> GetOrCreateFolderAsync(
+            Tunnel tunnel, TargetMailbox mailbox, bool isDryRun, CancellationToken ct)
         {
-            Requested.Add(mailboxEntraId);
-            if (Failures.TryGetValue(mailboxEntraId, out var ex))
+            Requested.Add(mailbox.EntraId);
+            if (Failures.TryGetValue(mailbox.EntraId, out var ex))
                 throw ex;
-            return Task.FromResult(("fake-folder-id", false));
+            if (MissingFolderMailboxes.Contains(mailbox.EntraId))
+            {
+                if (isDryRun)
+                    return Task.FromResult<(string? folderId, bool wasCreated)>((null, false));
+                CreateCount++;
+                return Task.FromResult<(string? folderId, bool wasCreated)>(($"created-{mailbox.EntraId}", true));
+            }
+            return Task.FromResult<(string? folderId, bool wasCreated)>(("fake-folder-id", false));
         }
 
         public void ResetCache() { }
