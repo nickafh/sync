@@ -31,6 +31,7 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         builder.Property(e => e.ThrottleEvents).HasColumnName("throttle_events").HasDefaultValue(0);
         builder.Property(e => e.ErrorSummary).HasColumnName("error_summary");
         builder.Property(e => e.HangfireJobIds).HasColumnName("hangfire_job_ids");
+        builder.Property(e => e.RequestedTunnelIds).HasColumnName("requested_tunnel_ids");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
 
         builder.HasIndex(e => e.Status).HasDatabaseName("idx_sync_runs_status");

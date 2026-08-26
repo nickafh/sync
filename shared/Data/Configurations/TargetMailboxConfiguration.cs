@@ -17,6 +17,9 @@ public class TargetMailboxConfiguration : IEntityTypeConfiguration<TargetMailbox
         builder.Property(e => e.DisplayName).HasColumnName("display_name").HasMaxLength(200);
         builder.Property(e => e.IsActive).HasColumnName("is_active").HasDefaultValue(true);
         builder.Property(e => e.LastVerifiedAt).HasColumnName("last_verified_at");
+        builder.Property(e => e.MailboxUnavailableAt).HasColumnName("mailbox_unavailable_at");
+        builder.Property(e => e.MailboxLastProbedAt).HasColumnName("mailbox_last_probed_at");
+        builder.Property(e => e.MailboxUnavailableReason).HasColumnName("mailbox_unavailable_reason");
         builder.Property(e => e.CreatedAt).HasColumnName("created_at").HasDefaultValueSql("NOW()");
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
 

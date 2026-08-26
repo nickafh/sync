@@ -25,13 +25,19 @@ public class SyncRun
     public string? ErrorSummary { get; set; }
 
     /// <summary>
-    /// Comma-separated list of Hangfire background-job IDs enqueued for this run.
-    /// A single manual sync fan-outs to N jobs (one per tunnel) but only the first
-    /// to claim the Pending row runs the sync; tracking all IDs lets the stop
-    /// endpoint / StaleRunCleanupService call BackgroundJob.Delete on the whole set
-    /// so queued-but-not-yet-started jobs don't resurrect a cancelled run.
+    /// Hangfire background-job ID enqueued for this run (Phase 2: exactly one job per run,
+    /// addressed by run id). The stop endpoint / StaleRunCleanupService call
+    /// BackgroundJob.Delete on it so a queued-but-not-yet-started job can't resurrect a
+    /// cancelled run. Kept as a string (historically comma-separated) for compatibility.
     /// </summary>
     public string? HangfireJobIds { get; set; }
+
+    /// <summary>
+    /// Phase 2 (§2.7): JSON array of tunnel ids this run was asked to process (e.g. "[3,5]").
+    /// Null = all active tunnels. Written by the API when it creates the row; the worker
+    /// reads it after claiming the row and never trusts the job arguments for this.
+    /// </summary>
+    public string? RequestedTunnelIds { get; set; }
 
     public DateTime CreatedAt { get; set; }
 
