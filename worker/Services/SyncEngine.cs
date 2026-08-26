@@ -364,6 +364,9 @@ public sealed class SyncEngine(
         // Step 5d: Load target mailboxes, applying tunnel and phone list delivery scopes.
         var targetMailboxes = await LoadTargetMailboxesAsync(tunnel, ct);
 
+        // Phase 1: DDG target failures are recorded as run items and count as tunnel failures.
+        int ddgTargetFailures = 0;
+
         // Step 5e: Apply phone list delivery scope if set (Targets page "Specific Users").
         // This filters AFTER tunnel-level scope, so both work together.
         var canonicalPl = tunnel.TunnelPhoneLists
@@ -388,6 +391,24 @@ public sealed class SyncEngine(
                         logger,
                         ct);
                     plEmails = resolution.Emails;
+
+                    foreach (var failure in resolution.Failures)
+                    {
+                        var ddgName = failure.DisplayName ?? failure.Id;
+                        logger.LogError(
+                            "Tunnel {TunnelName}: DDG target '{Ddg}' failed: {Reason}",
+                            tunnel.Name, ddgName, failure.Reason);
+                        runLogger.AddItem(new SyncRunItem
+                        {
+                            SyncRunId = run.Id,
+                            TunnelId = tunnel.Id,
+                            PhoneListId = canonicalPl.Id,
+                            Action = "failed",
+                            ErrorMessage = $"DDG target '{ddgName}': {failure.Reason}",
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        ddgTargetFailures++;
+                    }
                 }
                 else
                 {
@@ -396,7 +417,14 @@ public sealed class SyncEngine(
                     plEmails = ParseEmailsOnlyFallback(canonicalPl.TargetUserFilter);
                 }
 
-                if (plEmails.Count > 0)
+                if (plEmails.Count == 0)
+                {
+                    logger.LogError(
+                        "Tunnel {TunnelName}: phone list '{PhoneList}' is scoped to specific users but resolved to 0 emails — no mailboxes will be processed",
+                        tunnel.Name, canonicalPl.Name);
+                    targetMailboxes = [];
+                }
+                else
                 {
                     // Auto-provision missing mailboxes — DDG-resolved emails flow through
                     // the SAME loop as explicit SpecificUsers emails (CONTEXT.md "Auto-provision — Silent").
@@ -454,6 +482,7 @@ public sealed class SyncEngine(
         using var semaphore = new SemaphoreSlim(parallelism);
 
         int created = 0, updated = 0, skipped = 0, failed = 0, removed = 0;
+        failed += ddgTargetFailures;
         var counterLock = new object();
 
         // Step 5h: Process mailboxes in parallel (bounded by semaphore, D-15).

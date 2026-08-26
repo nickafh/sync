@@ -50,7 +50,9 @@ public class SyncEngineTests
         IStaleContactHandler? staleHandler = null,
         FakeRunLogger? runLogger = null,
         ThrottleCounter? throttleCounter = null,
-        FakePhotoSyncService? photoSyncService = null)
+        FakePhotoSyncService? photoSyncService = null,
+        AFHSync.Api.Services.IDDGResolver? ddgResolver = null,
+        AFHSync.Api.Services.IFilterConverter? filterConverter = null)
     {
         return new SyncEngine(
             CreateFactory(dbName),
@@ -64,7 +66,9 @@ public class SyncEngineTests
             photoSyncService ?? new FakePhotoSyncService(),
             null!, // GraphClientFactory — not used in unit tests
             CreateEmptyConfig(),
-            NullLogger<SyncEngine>.Instance);
+            NullLogger<SyncEngine>.Instance,
+            ddgResolver!,
+            filterConverter!);
     }
 
     // ==============================
@@ -122,6 +126,74 @@ public class SyncEngineTests
         // Assert: no Graph writes occurred
         Assert.Empty(contactWriter.CreatedContactIds);
         Assert.Empty(contactWriter.UpdatedContactIds);
+    }
+
+    // ==============================
+    // Phase 1: a DDG target that fails to resolve is recorded as a failed run item,
+    // and an all-DDG SpecificUsers list that resolves to nothing targets NO mailboxes.
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_DdgTargetFails_RecordsFailedItemAndTargetsNoMailboxes()
+    {
+        var dbName = Guid.NewGuid().ToString();
+
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            var tunnel = new Tunnel
+            {
+                Id = 1,
+                Name = "Avalon Gate Code",
+                Status = TunnelStatus.Active,
+                StalePolicy = StalePolicy.AutoRemove,
+                StaleHoldDays = 14,
+            };
+            var phoneList = new PhoneList
+            {
+                Id = 12,
+                Name = "Avalon Users",
+                TargetScope = TargetScope.SpecificUsers,
+                TargetUserFilter = """{"ddgs":[{"id":"ddg-broken","displayName":"Buckhead Staff"}]}""",
+            };
+            var tunnelPhoneList = new TunnelPhoneList { TunnelId = 1, PhoneListId = 12, Tunnel = tunnel, PhoneList = phoneList };
+            tunnel.TunnelPhoneLists.Add(tunnelPhoneList);
+            seedCtx.Tunnels.Add(tunnel);
+            seedCtx.PhoneLists.Add(phoneList);
+            seedCtx.TunnelPhoneLists.Add(tunnelPhoneList);
+            // An active mailbox that must NOT be processed, because the scope resolved to nothing.
+            seedCtx.TargetMailboxes.Add(new TargetMailbox
+            {
+                Id = 1, EntraId = "mb-1", Email = "someone@x.com", IsActive = true,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+
+        var sourceUser = new SourceUser
+        {
+            Id = 1, EntraId = "src-1", DisplayName = "Avalon Gate Code", Email = "avalon@x.com",
+            IsEnabled = true, LastFetchedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        };
+        var runLogger = new FakeRunLogger();
+        var contactWriter = new FakeContactWriter();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([sourceUser]),
+            contactWriter: contactWriter,
+            runLogger: runLogger,
+            ddgResolver: new NotFoundDdgResolver(),
+            filterConverter: new PassThroughFilterConverter());
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var failedItem = Assert.Single(runLogger.AddedItems, i => i.Action == "failed");
+        Assert.Equal(1, failedItem.TunnelId);
+        Assert.Contains("Buckhead Staff", failedItem.ErrorMessage);
+        Assert.Contains("not found", failedItem.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "created");
+        // FakeRunLogger records the finalize counters; the DDG failure is counted as a contact failure
+        // so the tunnel is 'warned' and the run ends Warning (see DetermineStatus).
+        Assert.True(runLogger.FinalizedFailed >= 1, "DDG failure must be counted as a failure");
+        Assert.NotNull(run);
     }
 
     // ==============================
@@ -707,6 +779,24 @@ public class SyncEngineTests
             FinalizedThrottleEvents = throttleEvents;
             return Task.CompletedTask;
         }
+    }
+
+    /// <summary>Every DDG lookup returns null ("not found").</summary>
+    private sealed class NotFoundDdgResolver : AFHSync.Api.Services.IDDGResolver
+    {
+        public Task<IReadOnlyList<AFHSync.Api.Services.DdgInfo>> ListDdgsAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<AFHSync.Api.Services.DdgInfo>>([]);
+
+        public Task<AFHSync.Api.Services.DdgInfo?> GetDdgAsync(string identity, CancellationToken ct = default)
+            => Task.FromResult<AFHSync.Api.Services.DdgInfo?>(null);
+    }
+
+    private sealed class PassThroughFilterConverter : AFHSync.Api.Services.IFilterConverter
+    {
+        public AFHSync.Api.DTOs.FilterConversionResult Convert(string opathFilter)
+            => new(true, opathFilter);
+
+        public string ToPlainLanguage(string opathFilter) => opathFilter;
     }
 
     /// <summary>Stale handler that always throws — simulates an unexpected error in the
