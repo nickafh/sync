@@ -47,6 +47,9 @@ public class ContactFolderManagerTests
         public int RenameCount { get; private set; }
         public int GraphCallCount => LookupByIdCount + LookupByNameCount + CreateCount + RenameCount;
 
+        /// <summary>When true, RenameFolderAsync counts the attempt then throws instead of renaming.</summary>
+        public bool ThrowOnRename { get; set; }
+
         public Dictionary<string, (string mailbox, string name)> Folders { get; }
 
         public FakeContactFolderManager(string dbName, Dictionary<string, (string mailbox, string name)>? folders = null)
@@ -82,6 +85,8 @@ public class ContactFolderManagerTests
         protected override Task RenameFolderAsync(string mailboxEntraId, string folderId, string newName, CancellationToken ct)
         {
             RenameCount++;
+            if (ThrowOnRename)
+                throw new InvalidOperationException("simulated transient Graph failure on rename PATCH");
             Folders[folderId] = (mailboxEntraId, newName);
             return Task.CompletedTask;
         }
@@ -178,6 +183,22 @@ public class ContactFolderManagerTests
         Assert.Equal(0, fake.CreateCount);
         using var ctx = MakeDbContext(dbName);
         Assert.Equal("New Name", (await ctx.TunnelMailboxFolders.SingleAsync()).FolderName);
+    }
+
+    [Fact]
+    public async Task RenameFailure_IsLoggedAndSwallowed_ResolvedFolderStillUsed_RowKeepsOldName()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedKnownFolderAsync(dbName, 1, 1, graphFolderId: "f-1", folderName: "Old Name");
+        var fake = new FakeContactFolderManager(dbName, new() { ["f-1"] = ("mailbox-1", "Old Name") }) { ThrowOnRename = true };
+
+        var (id, wasCreated) = await fake.GetOrCreateFolderAsync(T(1, "New Name"), M(1, "mailbox-1"), false, CancellationToken.None);
+
+        Assert.Equal("f-1", id);                                   // still resolved and returned
+        Assert.False(wasCreated);
+        Assert.Equal(1, fake.RenameCount);                         // attempted once
+        using var ctx = MakeDbContext(dbName);
+        Assert.Equal("Old Name", (await ctx.TunnelMailboxFolders.SingleAsync()).FolderName);  // retried next run
     }
 
     [Fact]

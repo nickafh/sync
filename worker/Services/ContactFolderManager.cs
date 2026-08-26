@@ -131,17 +131,32 @@ public class ContactFolderManager : IContactFolderManager
 
             if (!isDryRun)
             {
-                // (5) Rename when the remembered name differs from the tunnel's current name.
+                // (4) Rename when the remembered name differs from the tunnel's current name.
+                // The folder id is already resolved above, so a rename PATCH is cosmetic — a
+                // transient Graph failure here must not fail the whole mailbox for this run.
+                // Log and leave the stored name unchanged so the mismatch is retried next run.
+                var nameToStore = tunnel.Name;
                 if (foundById && known is not null && !string.Equals(known.FolderName, tunnel.Name, StringComparison.Ordinal))
                 {
-                    _logger.LogInformation(
-                        "Renaming contact folder {FolderId} in mailbox {MailboxId} from '{OldName}' to '{NewName}'",
-                        folderId, mailbox.EntraId, known.FolderName, tunnel.Name);
-                    await RenameFolderAsync(mailbox.EntraId, folderId, tunnel.Name, ct);
+                    try
+                    {
+                        _logger.LogInformation(
+                            "Renaming contact folder {FolderId} in mailbox {MailboxId} from '{OldName}' to '{NewName}'",
+                            folderId, mailbox.EntraId, known.FolderName, tunnel.Name);
+                        await RenameFolderAsync(mailbox.EntraId, folderId, tunnel.Name, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Tunnel {TunnelName}: could not rename contact folder {FolderId} in mailbox {Mailbox} from '{OldName}' to '{NewName}'; will retry next run",
+                            tunnel.Name, folderId, mailbox.EntraId, known.FolderName, tunnel.Name);
+                        nameToStore = known.FolderName;
+                    }
                 }
 
-                // (4) Remember id + current name. CancellationToken.None: bookkeeping must survive a cancel.
-                await UpsertKnownFolderAsync(tunnel.Id, mailbox.Id, folderId, tunnel.Name);
+                // (5) Remember id + current (or, on a failed rename, still-old) name.
+                // CancellationToken.None: bookkeeping must survive a cancel.
+                await UpsertKnownFolderAsync(tunnel.Id, mailbox.Id, folderId, nameToStore);
             }
 
             _folderCache.TryAdd(cacheKey, folderId);
