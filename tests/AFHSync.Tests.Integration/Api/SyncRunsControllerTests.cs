@@ -178,4 +178,68 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    [Fact]
+    public async Task GetRun_BuildsTunnelSummariesFromRecords_PhotosAndErrorsStillFromItems()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var tunnel = new Tunnel { Name = "Rec Tunnel", StalePolicy = StalePolicy.FlagHold, Status = TunnelStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Tunnels.Add(tunnel);
+        var run = new SyncRun { RunType = RunType.Manual, Status = SyncStatus.Warning, StartedAt = DateTime.UtcNow.AddMinutes(-5), CompletedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow.AddMinutes(-5) };
+        db.SyncRuns.Add(run);
+        await db.SaveChangesAsync();
+        db.SyncRunTunnels.Add(new SyncRunTunnel
+        {
+            SyncRunId = run.Id, TunnelId = tunnel.Id, TunnelName = "Rec Tunnel", Status = SyncStatus.Warning,
+            TargetsCount = 12, ContactsCreated = 3, ContactsUpdated = 2, ContactsRemoved = 0, ContactsSkipped = 40, ContactsFailed = 1,
+            ErrorSummary = "Rec Tunnel: something", StartedAt = DateTime.UtcNow.AddMinutes(-4), CompletedAt = DateTime.UtcNow.AddMinutes(-1)
+        });
+        db.SyncRunItems.AddRange(
+            new SyncRunItem { SyncRunId = run.Id, TunnelId = tunnel.Id, Action = "failed", ErrorMessage = "Folder 'Rec Tunnel': boom", CreatedAt = DateTime.UtcNow },
+            new SyncRunItem { SyncRunId = run.Id, TunnelId = tunnel.Id, Action = "photo_updated", CreatedAt = DateTime.UtcNow },
+            new SyncRunItem { SyncRunId = run.Id, TunnelId = tunnel.Id, Action = "created", CreatedAt = DateTime.UtcNow });  // one item, but the record says 3
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedGetAsync($"/api/sync-runs/{run.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var summary = Assert.Single(body.GetProperty("tunnelSummaries").EnumerateArray());
+        Assert.Equal("Rec Tunnel", summary.GetProperty("tunnelName").GetString());
+        Assert.Equal(3, summary.GetProperty("contactsCreated").GetInt32());     // from the record, not the single item
+        Assert.Equal(1, summary.GetProperty("contactsFailed").GetInt32());
+        Assert.Equal(40, summary.GetProperty("contactsSkipped").GetInt32());
+        Assert.Equal(1, summary.GetProperty("photosUpdated").GetInt32());       // from items
+        Assert.Equal("warning", summary.GetProperty("status").GetString());
+        Assert.Equal(12, summary.GetProperty("targetsCount").GetInt32());
+        var errors = summary.GetProperty("errors").EnumerateArray().Select(e => e.GetString()).ToList();
+        Assert.Contains("Folder 'Rec Tunnel': boom", errors);
+    }
+
+    [Fact]
+    public async Task GetRun_WithoutRecords_FallsBackToGroupingItems()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var tunnel = new Tunnel { Name = "Legacy Tunnel", StalePolicy = StalePolicy.FlagHold, Status = TunnelStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Tunnels.Add(tunnel);
+        var run = new SyncRun { RunType = RunType.PhotoSync, Status = SyncStatus.Success, StartedAt = DateTime.UtcNow.AddMinutes(-5), CompletedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow.AddMinutes(-5) };
+        db.SyncRuns.Add(run);
+        await db.SaveChangesAsync();
+        db.SyncRunItems.AddRange(
+            new SyncRunItem { SyncRunId = run.Id, TunnelId = tunnel.Id, Action = "created", CreatedAt = DateTime.UtcNow },
+            new SyncRunItem { SyncRunId = run.Id, TunnelId = tunnel.Id, Action = "created", CreatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedGetAsync($"/api/sync-runs/{run.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var summary = Assert.Single(body.GetProperty("tunnelSummaries").EnumerateArray());
+        Assert.Equal("Legacy Tunnel", summary.GetProperty("tunnelName").GetString());
+        Assert.Equal(2, summary.GetProperty("contactsCreated").GetInt32());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, summary.GetProperty("status").ValueKind);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, summary.GetProperty("targetsCount").ValueKind);
+    }
 }

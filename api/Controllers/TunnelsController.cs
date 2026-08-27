@@ -47,12 +47,6 @@ public class TunnelsController : ControllerBase
             .AsNoTracking()
             .ToListAsync();
 
-        var lastRuns = await _db.SyncRuns
-            .OrderByDescending(r => r.CompletedAt)
-            .Take(50)
-            .AsNoTracking()
-            .ToListAsync();
-
         // Single grouped query for all tunnels instead of 2 queries per tunnel (N+1 fix).
         var syncStats = await _db.ContactSyncStates
             .GroupBy(c => c.TunnelId)
@@ -64,18 +58,33 @@ public class TunnelsController : ControllerBase
             })
             .ToDictionaryAsync(x => x.TunnelId ?? 0);
 
+        // Phase 3 (§3.1): last sync and target count per tunnel come from that tunnel's latest
+        // sync_run_tunnels row. One small ordered query per tunnel (~10 tunnels) — portable
+        // across Npgsql and the InMemory provider, unlike GroupBy(...).First().
+        var latestByTunnel = new Dictionary<int, SyncRunTunnel>();
+        foreach (var t in tunnels)
+        {
+            var latest = await _db.SyncRunTunnels
+                .Where(r => r.TunnelId == t.Id)
+                .OrderByDescending(r => r.CompletedAt)
+                .ThenByDescending(r => r.Id)
+                .AsNoTracking()
+                .FirstOrDefaultAsync();
+            if (latest is not null)
+                latestByTunnel[t.Id] = latest;
+        }
+
         var result = new List<TunnelDto>();
         foreach (var t in tunnels)
         {
             syncStats.TryGetValue(t.Id, out var stats);
 
-            // Last sync: most recent completed SyncRun (tunnel-level aggregates are stored at SyncRun level for now)
-            var lastRun = lastRuns.FirstOrDefault(r => r.Status == SyncStatus.Success || r.Status == SyncStatus.Warning);
-            TunnelLastSyncDto? lastSync = lastRun is not null
+            latestByTunnel.TryGetValue(t.Id, out var latest);
+            TunnelLastSyncDto? lastSync = latest is not null
                 ? new TunnelLastSyncDto(
-                    EnumHelpers.ToPgName(lastRun.Status),
-                    lastRun.CompletedAt,
-                    lastRun.ContactsUpdated)
+                    EnumHelpers.ToPgName(latest.Status),
+                    latest.CompletedAt,
+                    latest.ContactsUpdated)
                 : null;
 
             result.Add(new TunnelDto(
@@ -89,7 +98,7 @@ public class TunnelsController : ControllerBase
                 t.FieldProfile?.Name,
                 t.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
                 stats?.ContactCount ?? 0,
-                stats?.TargetUserCount ?? 0,
+                latest?.TargetsCount ?? stats?.TargetUserCount ?? 0,
                 lastSync,
                 t.PhotoSyncEnabled,
                 t.TargetGroupId,

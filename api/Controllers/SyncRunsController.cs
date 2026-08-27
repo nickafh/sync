@@ -1,5 +1,6 @@
 using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
+using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
 using Hangfire;
@@ -192,8 +193,8 @@ public class SyncRunsController : ControllerBase
         if (run is null)
             return NotFound(new { message = $"Sync run {id} not found" });
 
-        // Compute per-tunnel summaries from SyncRunItems grouped by TunnelId
-        var tunnelSummaries = await db.SyncRunItems
+        // Photo counts and error strings come from run items (photo sync writes items only).
+        var itemGroups = (await db.SyncRunItems
             .Where(i => i.SyncRunId == id)
             .GroupBy(i => i.TunnelId)
             .Select(g => new
@@ -210,10 +211,12 @@ public class SyncRunsController : ControllerBase
                           .Select(i => i.ErrorMessage!)
                           .ToArray()
             })
-            .ToListAsync();
+            .ToListAsync())
+            .Select(g => new ItemCounts(g.TunnelId, g.Created, g.Updated, g.Removed, g.Skipped, g.Failed, g.Photos, g.PhotosFailed, g.Errors))
+            .ToList();
 
-        // Resolve tunnel names
-        var tunnelIds = tunnelSummaries
+        // Resolve tunnel names for the items-only fallback
+        var tunnelIds = itemGroups
             .Where(s => s.TunnelId.HasValue)
             .Select(s => s.TunnelId!.Value)
             .Distinct()
@@ -223,19 +226,55 @@ public class SyncRunsController : ControllerBase
             .Where(t => tunnelIds.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, t => t.Name);
 
-        var summaryDtos = tunnelSummaries.Select(s => new TunnelRunSummaryDto(
+        TunnelRunSummaryDto FromItems(ItemCounts s) => new(
             s.TunnelId,
-            s.TunnelId.HasValue && tunnelNames.TryGetValue(s.TunnelId.Value, out var name)
-                ? name : "Unknown",
-            s.Created,
-            s.Updated,
-            s.Removed,
-            s.Skipped,
-            s.Failed,
-            s.Photos,
-            s.PhotosFailed,
-            s.Errors
-        )).ToArray();
+            s.TunnelId.HasValue && tunnelNames.TryGetValue(s.TunnelId.Value, out var name) ? name : "Unknown",
+            s.Created, s.Updated, s.Removed, s.Skipped, s.Failed, s.Photos, s.PhotosFailed, s.Errors);
+
+        // Phase 3 (§3.1): contact counts and status come from the per-tunnel records when the run
+        // has any; item groups for tunnels without a record (or with no tunnel id) keep the old shape.
+        var records = await db.SyncRunTunnels
+            .Where(t => t.SyncRunId == id)
+            .OrderBy(t => t.StartedAt).ThenBy(t => t.Id)
+            .AsNoTracking()
+            .ToListAsync();
+
+        TunnelRunSummaryDto[] summaryDtos;
+        if (records.Count > 0)
+        {
+            var itemsByTunnel = itemGroups.Where(g => g.TunnelId.HasValue).ToDictionary(g => g.TunnelId!.Value);
+            var covered = new HashSet<int>();
+            var list = new List<TunnelRunSummaryDto>();
+            foreach (var r in records)
+            {
+                ItemCounts? items = null;
+                if (r.TunnelId.HasValue)
+                {
+                    covered.Add(r.TunnelId.Value);
+                    itemsByTunnel.TryGetValue(r.TunnelId.Value, out items);
+                }
+                list.Add(new TunnelRunSummaryDto(
+                    r.TunnelId,
+                    r.TunnelName,
+                    r.ContactsCreated,
+                    r.ContactsUpdated,
+                    r.ContactsRemoved,
+                    r.ContactsSkipped,
+                    r.ContactsFailed,
+                    items?.Photos ?? 0,
+                    items?.PhotosFailed ?? 0,
+                    items?.Errors ?? [],
+                    EnumHelpers.ToPgName(r.Status),
+                    r.TargetsCount));
+            }
+            foreach (var g in itemGroups.Where(g => !g.TunnelId.HasValue || !covered.Contains(g.TunnelId.Value)))
+                list.Add(FromItems(g));
+            summaryDtos = list.ToArray();
+        }
+        else
+        {
+            summaryDtos = itemGroups.Select(FromItems).ToArray();
+        }
 
         return Ok(new SyncRunDetailDto(
             run.Id,
@@ -367,4 +406,9 @@ public class SyncRunsController : ControllerBase
 
         return Ok(items);
     }
+
+    /// <summary>Per-tunnel counts derived from sync_run_items (the pre-Phase-3 source of truth).</summary>
+    private sealed record ItemCounts(
+        int? TunnelId, int Created, int Updated, int Removed, int Skipped, int Failed,
+        int Photos, int PhotosFailed, string[] Errors);
 }

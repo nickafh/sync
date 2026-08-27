@@ -269,4 +269,33 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await AuthenticatedGetAsync("/api/tunnels/99999");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    [Fact]
+    public async Task GetAll_LastSyncAndTargetUsers_ComeFromLatestTunnelRecord()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var tunnel = new Tunnel { Name = "Record Tunnel", StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, Status = TunnelStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Tunnels.Add(tunnel);
+        var older = new SyncRun { RunType = RunType.Scheduled, Status = SyncStatus.Success, StartedAt = DateTime.UtcNow.AddHours(-8), CompletedAt = DateTime.UtcNow.AddHours(-7), CreatedAt = DateTime.UtcNow.AddHours(-8) };
+        var newer = new SyncRun { RunType = RunType.Scheduled, Status = SyncStatus.Warning, StartedAt = DateTime.UtcNow.AddHours(-4), CompletedAt = DateTime.UtcNow.AddHours(-3), CreatedAt = DateTime.UtcNow.AddHours(-4) };
+        db.SyncRuns.AddRange(older, newer);
+        await db.SaveChangesAsync();
+        var newerCompleted = DateTime.UtcNow.AddHours(-3);
+        db.SyncRunTunnels.AddRange(
+            new SyncRunTunnel { SyncRunId = older.Id, TunnelId = tunnel.Id, TunnelName = tunnel.Name, Status = SyncStatus.Success, TargetsCount = 5, ContactsUpdated = 1, StartedAt = DateTime.UtcNow.AddHours(-8), CompletedAt = DateTime.UtcNow.AddHours(-7) },
+            new SyncRunTunnel { SyncRunId = newer.Id, TunnelId = tunnel.Id, TunnelName = tunnel.Name, Status = SyncStatus.Warning, TargetsCount = 9, ContactsUpdated = 7, StartedAt = DateTime.UtcNow.AddHours(-4), CompletedAt = newerCompleted });
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedGetAsync("/api/tunnels");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var tunnels = await response.Content.ReadFromJsonAsync<List<System.Text.Json.JsonElement>>();
+        var dto = tunnels!.Single(t => t.GetProperty("id").GetInt32() == tunnel.Id);
+        Assert.Equal(9, dto.GetProperty("estimatedTargetUsers").GetInt32());
+        var lastSync = dto.GetProperty("lastSync");
+        Assert.Equal("warning", lastSync.GetProperty("status").GetString());
+        Assert.Equal(7, lastSync.GetProperty("contactsUpdated").GetInt32());
+        Assert.Equal(newerCompleted, lastSync.GetProperty("completedAt").GetDateTime().ToUniversalTime(), TimeSpan.FromSeconds(1));
+    }
 }

@@ -29,6 +29,9 @@ export interface TunnelRunSummaryDto {
   photosUpdated: number;
   photosFailed: number;
   errors: string[];
+  /** Phase 3 (§3.1): from sync_run_tunnels; null when the run predates per-tunnel records. */
+  status: SyncRunStatus | null;
+  targetsCount: number | null;
 }
 
 export interface SyncRunDetailDto {

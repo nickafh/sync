@@ -301,7 +301,15 @@ export default function RunDetailPage() {
                 return (
                 <div key={ts.tunnelId ?? idx}>
                   <div className="flex items-center justify-between gap-2">
-                    <h4 className="font-medium text-sm">{ts.tunnelName}</h4>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-medium text-sm">{ts.tunnelName}</h4>
+                      {ts.status && <StatusBadge status={ts.status} />}
+                      {ts.targetsCount !== null && (
+                        <span className="text-xs text-text-muted">
+                          {ts.targetsCount} mailbox{ts.targetsCount === 1 ? '' : 'es'}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2">
                       {failed > 0 && (
                         <span className="text-xs text-red-600 font-medium">
