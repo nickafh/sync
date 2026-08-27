@@ -298,4 +298,52 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
         Assert.Equal(7, lastSync.GetProperty("contactsUpdated").GetInt32());
         Assert.Equal(newerCompleted, lastSync.GetProperty("completedAt").GetDateTime().ToUniversalTime(), TimeSpan.FromSeconds(1));
     }
+
+    [Fact]
+    public async Task PostTunnel_EmptyTargetUserEmails_Returns400()
+    {
+        var createRequest = new
+        {
+            name = "Nobody Tunnel",
+            sources = new[] { new { sourceType = "Ddg", sourceIdentifier = "startsWith(displayName, 'X')", sourceDisplayName = "X", sourceSmtpAddress = "x@atlantafinehomes.com", sourceFilterPlain = (string?)null } },
+            targetListIds = Array.Empty<int>(),
+            fieldProfileId = (int?)null,
+            stalePolicy = "FlagHold",
+            staleDays = 14,
+            targetUserEmails = "[]"
+        };
+
+        var response = await AuthenticatedPostAsync("/api/tunnels", createRequest);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal("Select at least one user, or switch scope to All Users.", body.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task PutTunnel_EmptyStringTargetGroupId_Returns400_AndLeavesTunnelUnchanged()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var tunnel = new Tunnel { Name = "Keep Me", StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, Status = TunnelStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Tunnels.Add(tunnel);
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedPutAsync($"/api/tunnels/{tunnel.Id}", new
+        {
+            name = "Renamed",
+            sources = new[] { new { sourceType = "Ddg", sourceIdentifier = "startsWith(displayName, 'X')", sourceDisplayName = "X", sourceSmtpAddress = "x@atlantafinehomes.com", sourceFilterPlain = (string?)null } },
+            targetListIds = Array.Empty<int>(),
+            fieldProfileId = (int?)null,
+            stalePolicy = "FlagHold",
+            staleDays = 14,
+            targetGroupId = ""
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal("Select a security group, or switch scope to All Users.", body.GetProperty("message").GetString());
+        db.ChangeTracker.Clear();
+        Assert.Equal("Keep Me", (await db.Tunnels.FindAsync(tunnel.Id))!.Name);
+    }
 }

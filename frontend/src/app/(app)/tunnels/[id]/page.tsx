@@ -43,6 +43,7 @@ import type {
   SourceInput,
 } from '@/types/tunnel';
 import type { StalePolicy } from '@/types/common';
+import { deriveTargetScope, validateTargetScope } from '@/lib/target-scope';
 
 const stalePolicyOptions = [
   { value: 'auto_remove', label: 'Auto Remove' },
@@ -196,11 +197,8 @@ export default function TunnelDetailPage() {
   };
 
   const doSave = () => {
-    const saveData = {
-      ...editForm,
-      targetGroupId: editForm.targetGroupId || null,
-      targetGroupName: editForm.targetGroupName || null,
-    };
+    // handleSave has already rejected an empty group id; nothing to coerce here any more.
+    const saveData = { ...editForm };
     updateTunnel.mutate(
       { id: tunnelId, data: saveData },
       {
@@ -219,6 +217,12 @@ export default function TunnelDetailPage() {
 
   const handleSave = () => {
     if (!tunnel) return;
+    // Phase 3 (§3.2): the same scope validation the wizard runs — the API rejects these too.
+    const scopeError = validateTargetScope(editForm.targetGroupId, editForm.targetUserEmails);
+    if (scopeError) {
+      toast.error(scopeError);
+      return;
+    }
     if (isHighImpactChange(tunnel, editForm)) {
       // High-impact: fetch preview first
       previewImpact.mutate(
@@ -674,7 +678,7 @@ export default function TunnelDetailPage() {
                     Target Scope
                   </label>
                   <Select
-                    value={editForm.targetGroupId ? 'group' : editForm.targetUserEmails ? 'specific' : 'all'}
+                    value={deriveTargetScope(editForm.targetGroupId, editForm.targetUserEmails)}
                     onValueChange={(val) => {
                       if (val === 'all') {
                         setEditForm((prev) => ({ ...prev, targetUserEmails: null, targetGroupId: null, targetGroupName: null }));

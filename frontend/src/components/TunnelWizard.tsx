@@ -22,6 +22,7 @@ import { StepReview } from '@/components/wizard/StepReview';
 import { useCreateTunnel } from '@/hooks/use-tunnels';
 import { usePhoneLists } from '@/hooks/use-phone-lists';
 import type { CreateTunnelRequest } from '@/types/tunnel';
+import { validateTargetScope } from '@/lib/target-scope';
 
 interface TunnelWizardProps {
   open: boolean;
@@ -87,20 +88,16 @@ export function TunnelWizard({ open, onOpenChange }: TunnelWizardProps) {
             newErrors.source = 'Add at least one source to continue.';
           }
           break;
-        case 2:
+        case 2: {
           if (formData.targetListIds.length === 0) {
             newErrors.targets = 'Select at least one phone list above.';
           }
-          if (formData.targetUserEmails !== null) {
-            const emails: string[] = JSON.parse(formData.targetUserEmails || '[]');
-            if (emails.length === 0) {
-              newErrors.targets = 'Select at least one user, or switch scope to All Users.';
-            }
-          }
-          if (formData.targetGroupId !== null && !formData.targetGroupId) {
-            newErrors.targets = 'Select a security group, or switch scope to All Users.';
+          const scopeError = validateTargetScope(formData.targetGroupId, formData.targetUserEmails);
+          if (scopeError) {
+            newErrors.targets = scopeError;
           }
           break;
+        }
       }
 
       setErrors(newErrors);

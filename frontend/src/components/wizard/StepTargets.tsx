@@ -19,6 +19,7 @@ import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import { Plus, X, Shield } from 'lucide-react';
 import type { UserSearchResult, SecurityGroupDto } from '@/types/tunnel';
+import { deriveTargetScope } from '@/lib/target-scope';
 
 interface StepTargetsProps {
   selectedIds: number[];
@@ -162,7 +163,7 @@ export function StepTargets({
           Choose whether contacts sync to all users or specific mailboxes.
         </p>
         <Select
-          value={targetGroupId !== null ? 'group' : targetUserEmails !== null ? 'specific' : 'all'}
+          value={deriveTargetScope(targetGroupId, targetUserEmails)}
           onValueChange={(val) => {
             if (val === 'all') {
               onTargetUserEmailsChange(null);

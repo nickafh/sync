@@ -160,6 +160,11 @@ public class TunnelsController : ControllerBase
         if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
 
+        // Phase 3 (§3.2): same scope rules as the wizard, enforced server-side.
+        var scopeError = TargetScopeValidation.Validate(request.TargetUserEmails, request.TargetGroupId);
+        if (scopeError is not null)
+            return BadRequest(new { message = scopeError });
+
         // Validate all source types before starting the transaction
         var parsedSources = new List<(SourceType type, SourceInput src)>();
         foreach (var src in request.Sources)
@@ -249,6 +254,11 @@ public class TunnelsController : ControllerBase
 
         if (!EnumHelpers.TryFromPgName<StalePolicy>(request.StalePolicy, out var stalePolicy))
             return BadRequest(new { message = $"Invalid StalePolicy: {request.StalePolicy}" });
+
+        // Phase 3 (§3.2): same scope rules as the wizard, enforced server-side.
+        var scopeError = TargetScopeValidation.Validate(request.TargetUserEmails, request.TargetGroupId);
+        if (scopeError is not null)
+            return BadRequest(new { message = scopeError });
 
         tunnel.Name = request.Name;
         tunnel.FieldProfileId = request.FieldProfileId;
