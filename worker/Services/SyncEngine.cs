@@ -1248,6 +1248,7 @@ public sealed class SyncEngine(
             .ToListAsync(CancellationToken.None);
         var byId = rehashes.ToDictionary(r => r.stateId);
         var now = DateTime.UtcNow;
+        var rehashed = 0;
         foreach (var row in rows)
         {
             if (!byId.TryGetValue(row.Id, out var r) || row.DataHash != r.oldHash)
@@ -1256,9 +1257,10 @@ public sealed class SyncEngine(
             row.DataHash = r.newHash;
             row.LastResult = "rehashed";
             row.UpdatedAt = now;
+            rehashed++;
         }
         await db.SaveChangesAsync(CancellationToken.None);
-        logger.LogInformation("Rehashed {Count} contact state(s) in mailbox {MailboxId} (AddMissing hash migration)", rows.Count, mailboxId);
+        logger.LogInformation("Rehashed {Count} contact state(s) in mailbox {MailboxId} (AddMissing hash migration)", rehashed, mailboxId);
     }
 
     /// <summary>

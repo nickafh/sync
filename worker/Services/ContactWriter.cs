@@ -18,22 +18,23 @@ public class ContactWriter : IContactWriter
     private readonly GraphClientFactory _graphClientFactory;
     private readonly ThrottleCounter _throttleCounter;
     private readonly ILogger<ContactWriter> _logger;
-    private readonly Func<TimeSpan, Task> _delay;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
 
     /// <param name="delay">
-    /// Phase 4 (§4.2): how to wait between batch-step retries. Defaults to <see cref="Task.Delay(TimeSpan)"/>;
-    /// unit tests inject a recorder so they never sleep.
+    /// Phase 4 (§4.2): how to wait between batch-step retries. Defaults to <see cref="Task.Delay(TimeSpan, CancellationToken)"/>;
+    /// unit tests inject a recorder so they never sleep. The <see cref="CancellationToken"/> lets a
+    /// Hangfire shutdown abandon the wait instead of blocking it uninterruptibly.
     /// </param>
     public ContactWriter(
         GraphClientFactory graphClientFactory,
         ThrottleCounter throttleCounter,
         ILogger<ContactWriter> logger,
-        Func<TimeSpan, Task>? delay = null)
+        Func<TimeSpan, CancellationToken, Task>? delay = null)
     {
         _graphClientFactory = graphClientFactory;
         _throttleCounter = throttleCounter;
         _logger = logger;
-        _delay = delay ?? (d => Task.Delay(d));
+        _delay = delay ?? ((d, ct) => Task.Delay(d, ct));
     }
 
     /// <summary>Phase 4 (§4.2): a throttled / timed-out batch step is re-posted at most this many times.</summary>
@@ -169,7 +170,8 @@ public class ContactWriter : IContactWriter
                 {
                     var created = await response.GetResponseByIdAsync<Contact>(stepId);
                     return MapCreateResponse(created);
-                });
+                },
+                ct);
             await NotifyChunkCompletedAsync(onChunkCompleted, keys, results);
         }
 
@@ -209,7 +211,8 @@ public class ContactWriter : IContactWriter
                     .Contacts[byKey[key].graphContactId]
                     .ToPatchRequestInformation(MapPayloadToContact(byKey[key].payload, isCreate: false)),
                 results,
-                (_, _) => Task.FromResult(new BatchOperationResult(true)));
+                (_, _) => Task.FromResult(new BatchOperationResult(true)),
+                ct);
             await NotifyChunkCompletedAsync(onChunkCompleted, keys, results);
         }
 
@@ -248,7 +251,8 @@ public class ContactWriter : IContactWriter
                     .Contacts[byKey[key].graphContactId]
                     .ToDeleteRequestInformation(),
                 results,
-                (_, _) => Task.FromResult(new BatchOperationResult(true)));
+                (_, _) => Task.FromResult(new BatchOperationResult(true)),
+                ct);
         }
 
         _logger.LogDebug("Batch delete complete: {Success} succeeded, {Failed} failed",
@@ -271,18 +275,23 @@ public class ContactWriter : IContactWriter
     /// retried step bumps <see cref="ThrottleCounter"/> so SyncRun.ThrottleEvents reflects batch-level
     /// throttling too.
     ///
-    /// Phase 2 (§2.6a follow-up): posts with <see cref="CancellationToken.None"/> — the caller's
-    /// chunk loop already checked <c>ct.ThrowIfCancellationRequested()</c> before this batch was
-    /// built, so once we're here the batch always runs to completion and its outcome is always
-    /// persisted via the chunk's <c>onChunkCompleted</c> callback, instead of a shutdown mid-POST
-    /// turning every key in the batch into a swallowed "canceled" failure.
+    /// Phase 4 (§4.2) / Phase 2 (§2.6a follow-up): batches — the initial post and every retry
+    /// attempt alike — are built HERE from <paramref name="buildStep"/>. Each POST runs to
+    /// completion with <see cref="CancellationToken.None"/>, so a shutdown mid-POST never turns a
+    /// definitive Graph answer into a swallowed "canceled" failure. The shutdown token is consulted
+    /// only before, or while, waiting for a retry: a shutdown during that wait abandons the
+    /// remaining retries and returns the definitive <c>HTTP {status}</c> failures already recorded
+    /// for them. A retried POST step that Graph did in fact apply before answering with a 5xx
+    /// leaves a stray contact behind; the §3.7 reconcile (next run, via the reconcile flag) removes
+    /// or adopts it.
     /// </summary>
     private async Task ExecuteBatchWithRetryAsync(
         string mailboxEntraId,
         IReadOnlyList<string> keys,
         Func<string, RequestInformation> buildStep,
         Dictionary<string, BatchOperationResult> results,
-        Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess)
+        Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess,
+        CancellationToken ct)
     {
         var pendingKeys = keys;
 
@@ -350,9 +359,18 @@ public class ContactWriter : IContactWriter
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
-                        stepId, key, (int)statusCode);
+                    if (IsRetryableStepStatus(statusCode))
+                    {
+                        _logger.LogWarning(
+                            "Batch step {StepId} (key={Key}) still failing with HTTP {StatusCode} after {Retries} retries",
+                            stepId, key, (int)statusCode, MaxBatchStepRetries);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
+                            stepId, key, (int)statusCode);
+                    }
                     results[key] = new BatchOperationResult(
                         false,
                         Error: $"HTTP {(int)statusCode}",
@@ -363,11 +381,29 @@ public class ContactWriter : IContactWriter
             if (retryKeys.Count == 0)
                 return;
 
+            if (ct.IsCancellationRequested)
+            {
+                _logger.LogInformation(
+                    "Shutdown requested; abandoning {Count} batch-step retries for mailbox {MailboxId}",
+                    retryKeys.Count, mailboxEntraId);
+                return;
+            }
+
             var delay = RetryDelayFor(attempt + 1, retryAfter);
             _logger.LogWarning(
                 "Retrying {Count} throttled batch step(s) for mailbox {MailboxId}, attempt {Attempt}/{Max}, after {DelayMs}ms",
                 retryKeys.Count, mailboxEntraId, attempt + 1, MaxBatchStepRetries, delay.TotalMilliseconds);
-            await _delay(delay);
+            try
+            {
+                await _delay(delay, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                _logger.LogInformation(
+                    "Shutdown requested; abandoning {Count} batch-step retries for mailbox {MailboxId}",
+                    retryKeys.Count, mailboxEntraId);
+                return;
+            }
             pendingKeys = retryKeys;
         }
     }

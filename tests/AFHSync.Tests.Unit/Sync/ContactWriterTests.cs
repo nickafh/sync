@@ -369,7 +369,14 @@ public class ContactWriterTests
             throttle: throttle, delays: delays);
         h = handler;
 
-        var results = await writer.CreateContactsBatchAsync("mbx1", "folder1", Ops("k1", "k2", "k3"), onChunkCompleted: null, CancellationToken.None);
+        var chunkResults = new List<IReadOnlyDictionary<string, BatchOperationResult>>();
+        Task OnChunkCompleted(IReadOnlyDictionary<string, BatchOperationResult> results)
+        {
+            chunkResults.Add(results);
+            return Task.CompletedTask;
+        }
+
+        var results = await writer.CreateContactsBatchAsync("mbx1", "folder1", Ops("k1", "k2", "k3"), OnChunkCompleted, CancellationToken.None);
 
         Assert.Equal(2, handler.CallCount);
         Assert.Equal(3, handler.RequestStepIds[0].Count);
@@ -379,6 +386,13 @@ public class ContactWriterTests
         Assert.Equal("graph-contact-2-0", results["k2"].GraphContactId);        // k2's id came from the retry
         Assert.Equal(new[] { TimeSpan.FromSeconds(7) }, delays);
         Assert.Equal(1, throttle.Count);
+
+        // The chunk callback fires once for the whole chunk, after retries settle — proving
+        // post-retry results reach the persistence seam, not just the returned dictionary.
+        var chunk = Assert.Single(chunkResults);
+        Assert.Equal(3, chunk.Count);
+        Assert.All(chunk.Values, r => Assert.True(r.Success));
+        Assert.Equal("graph-contact-2-0", chunk["k2"].GraphContactId);
     }
 
     [Fact]
@@ -398,6 +412,26 @@ public class ContactWriterTests
         Assert.False(results["k1"].OutcomeUnknown);                              // Graph answered every time
         Assert.Equal(new[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(6) }, delays);
         Assert.Equal(3, throttle.Count);
+    }
+
+    [Fact]
+    public async Task CreateContactsBatchAsync_TokenCancelledBeforeRetry_AbandonsRetriesWithDefinitiveFailure()
+    {
+        var throttle = new ThrottleCounter();
+        var delays = new List<TimeSpan>();
+        using var cts = new CancellationTokenSource();
+        var (writer, handler) = BuildWriterWithFakeGraphTransport(
+            script: (call, _) => { cts.Cancel(); return new FakeStep(429); },   // cancel while the first post is being answered
+            throttle: throttle, delays: delays);
+
+        var results = await writer.CreateContactsBatchAsync("mbx1", "folder1", Ops("k1"), onChunkCompleted: null, cts.Token);
+
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal("HTTP 429", results["k1"].Error);
+        Assert.False(results["k1"].OutcomeUnknown);
+        Assert.False(results["k1"].Success);
+        Assert.Empty(delays);
+        Assert.Equal(1, throttle.Count);
     }
 
     [Fact]
@@ -500,7 +534,7 @@ public class ContactWriterTests
             factory,
             throttle ?? new ThrottleCounter(),
             NullLogger<ContactWriter>.Instance,
-            delay: d => { delays?.Add(d); return Task.CompletedTask; });   // never actually sleep in tests
+            delay: (d, _) => { delays?.Add(d); return Task.CompletedTask; });   // never actually sleep in tests
         return (writer, handler);
     }
 
