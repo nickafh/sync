@@ -535,6 +535,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ---
 ### Task 3: `$batch` per-step retry honouring `Retry-After` (§4.2) + worker `/health` log noise (§4.5)
 
+> **Executed with a ruling (2026-08-27):** the resolved `Microsoft.Graph.Core` 3.2.5 renumbers step ids in `NewBatchWithFailedRequests`, so the steps below that rely on it were replaced — `ExecuteBatchWithRetryAsync(mailboxEntraId, keys, buildStep, results, onSuccess, ct)` builds every batch (initial and retry) itself from a per-key `RequestInformation` factory; the retry wait honours the caller's `ct` (final-review fix). The spec §4.2 text is authoritative; the plan text is kept as written for the record.
+
 **Files:**
 - Modify: `worker/Services/ContactWriter.cs`
 - Modify: `worker/Program.cs`
