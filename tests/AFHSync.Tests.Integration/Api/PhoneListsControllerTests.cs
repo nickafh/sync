@@ -130,28 +130,56 @@ public class PhoneListsControllerTests : IClassFixture<TestWebApplicationFactory
     }
 
     [Fact]
-    public async Task GetContacts_ExistingList_Returns200WithEmptyArray()
+    public async Task GetContacts_ExistingList_ReturnsEmptyEnvelopeWithTotal()
     {
-        // Seed a phone list with no contacts
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
-        var list = new PhoneList
-        {
-            Name = "Empty List",
-            ContactCount = 0,
-            UserCount = 0,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
+        var list = new PhoneList { Name = "Empty List", ContactCount = 0, UserCount = 0, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
         db.PhoneLists.Add(list);
         await db.SaveChangesAsync();
 
         var response = await AuthenticatedGetAsync($"/api/phone-lists/{list.Id}/contacts");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal(0, body.GetProperty("items").GetArrayLength());
+        Assert.False(body.GetProperty("hasMore").GetBoolean());
+        Assert.Equal(0, body.GetProperty("total").GetInt32());
+    }
 
-        var contacts = await response.Content.ReadFromJsonAsync<List<System.Text.Json.JsonElement>>();
-        Assert.NotNull(contacts);
-        Assert.Empty(contacts);
+    [Fact]
+    public async Task GetContacts_PagesDistinctSourceUsers_WithTotal_AndDefaultsBadPageSize()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var list = new PhoneList { Name = "Paged List", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.PhoneLists.Add(list);
+        var mailbox = new TargetMailbox { EntraId = "pl-mbx", Email = "pl-mbx@contoso.com", IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.TargetMailboxes.Add(mailbox);
+        var users = new[]
+        {
+            new SourceUser { EntraId = "pl-u1", DisplayName = "Cara", Email = "cara@contoso.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+            new SourceUser { EntraId = "pl-u2", DisplayName = "Abe", Email = "abe@contoso.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+            new SourceUser { EntraId = "pl-u3", DisplayName = "Bea", Email = "bea@contoso.com", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+        };
+        db.SourceUsers.AddRange(users);
+        await db.SaveChangesAsync();
+        foreach (var u in users)
+            db.ContactSyncStates.Add(new ContactSyncState { SourceUserId = u.Id, PhoneListId = list.Id, TargetMailboxId = mailbox.Id, GraphContactId = $"g-{u.Id}", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        // A second state row for the same user must not count twice.
+        db.ContactSyncStates.Add(new ContactSyncState { SourceUserId = users[0].Id, PhoneListId = list.Id, TargetMailboxId = mailbox.Id, GraphContactId = "g-dup", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        var first = await (await AuthenticatedGetAsync($"/api/phone-lists/{list.Id}/contacts?page=1&pageSize=2")).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var second = await (await AuthenticatedGetAsync($"/api/phone-lists/{list.Id}/contacts?page=2&pageSize=2")).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var defaulted = await (await AuthenticatedGetAsync($"/api/phone-lists/{list.Id}/contacts?page=1&pageSize=0")).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+
+        Assert.Equal(2, first.GetProperty("items").GetArrayLength());
+        Assert.True(first.GetProperty("hasMore").GetBoolean());
+        Assert.Equal(3, first.GetProperty("total").GetInt32());
+        Assert.Equal(1, second.GetProperty("items").GetArrayLength());
+        Assert.False(second.GetProperty("hasMore").GetBoolean());
+        Assert.Equal(3, defaulted.GetProperty("items").GetArrayLength());    // pageSize 0 ⇒ default 20
+        Assert.False(defaulted.GetProperty("hasMore").GetBoolean());
     }
 }

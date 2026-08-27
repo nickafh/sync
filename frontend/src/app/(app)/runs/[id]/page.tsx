@@ -156,15 +156,15 @@ export default function RunDetailPage() {
   const [itemPage, setItemPage] = useState(0);
   const [actionFilter, setActionFilter] = useState<string | undefined>(undefined);
   const pageSize = 25;
-  const { data: rawItems, isLoading: itemsLoading } = useSyncRunItems(
+  const { data: itemsPage, isLoading: itemsLoading } = useSyncRunItems(
     runId,
     itemPage + 1,
     pageSize,
     actionFilter,
   );
 
-  const hasNextPage = (rawItems?.length ?? 0) > pageSize;
-  const items = rawItems?.slice(0, pageSize) ?? [];
+  const hasNextPage = itemsPage?.hasMore ?? false;
+  const items = itemsPage?.items ?? [];
 
   function handleActionFilterChange(value: string | number | null) {
     const stringVal = String(value);

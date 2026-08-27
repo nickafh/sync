@@ -105,10 +105,10 @@ export default function RunsPage() {
   const [page, setPage] = useState(0);
   const pageSize = 25;
   const router = useRouter();
-  const { data: rawData, isLoading } = useSyncRuns(page + 1, pageSize);
+  const { data: pageData, isLoading } = useSyncRuns(page + 1, pageSize);
 
-  const hasNextPage = (rawData?.length ?? 0) > pageSize;
-  const data = rawData?.slice(0, pageSize) ?? [];
+  const hasNextPage = pageData?.hasMore ?? false;
+  const data = pageData?.items ?? [];
 
   return (
     <div>

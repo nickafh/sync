@@ -1,5 +1,6 @@
 using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
+using AFHSync.Api.Services;
 using AFHSync.Shared.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -182,25 +183,32 @@ public class PhoneListsController : ControllerBase
     [HttpGet("{id:int}/contacts")]
     public async Task<IActionResult> GetContacts(int id, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
-        if (page < 1) page = 1;
-        if (pageSize < 1 || pageSize > 100) pageSize = 20;
+        // Phase 3 (§3.3): clamp to [1, 500]; the Targets page asks for 200 at a time.
+        (page, pageSize) = Paging.Clamp(page, pageSize, defaultSize: 20, max: 500);
 
         var phoneListExists = await _db.PhoneLists.AnyAsync(pl => pl.Id == id);
         if (!phoneListExists)
             return NotFound(new { message = $"Phone list {id} not found." });
 
-        // Select distinct source user IDs from ContactSyncState for this phone list, then join SourceUsers
-        var distinctUserIds = await _db.ContactSyncStates
+        var distinctUsers = _db.ContactSyncStates
             .Where(c => c.PhoneListId == id)
             .Select(c => c.SourceUserId)
-            .Distinct()
-            .OrderBy(id => id)
+            .Distinct();
+
+        var total = await distinctUsers.CountAsync();
+
+        // Select distinct source user IDs for this phone list (one extra to compute hasMore), then join SourceUsers
+        var distinctUserIds = await distinctUsers
+            .OrderBy(userId => userId)
             .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+            .Take(pageSize + 1)
             .ToListAsync();
 
+        var hasMore = distinctUserIds.Count > pageSize;
+        var pageIds = distinctUserIds.Take(pageSize).ToList();
+
         var contacts = await _db.SourceUsers
-            .Where(u => distinctUserIds.Contains(u.Id))
+            .Where(u => pageIds.Contains(u.Id))
             .OrderBy(u => u.DisplayName)
             .Select(u => new ContactDto(
                 u.Id,
@@ -221,6 +229,6 @@ public class PhoneListsController : ControllerBase
             .AsNoTracking()
             .ToListAsync();
 
-        return Ok(contacts);
+        return Ok(new PagedResult<ContactDto>(contacts, hasMore, total));
     }
 }

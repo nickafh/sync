@@ -40,7 +40,7 @@ export function useDeletePhoneList() {
 export function usePhoneListContacts(id: number, page: number, pageSize: number) {
   return useQuery({
     queryKey: ['phone-list-contacts', id, page, pageSize],
-    queryFn: () => api.phoneLists.getContacts(id, page, pageSize + 1),
+    queryFn: () => api.phoneLists.getContacts(id, page, pageSize),
     staleTime: 5 * 60 * 1000,
     enabled: id > 0,
   });

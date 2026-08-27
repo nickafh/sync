@@ -1,5 +1,6 @@
 using AFHSync.Shared.Data;
 using AFHSync.Api.DTOs;
+using AFHSync.Api.Services;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
@@ -152,14 +153,13 @@ public class SyncRunsController : ControllerBase
         [FromQuery] int pageSize = 20,
         [FromServices] AFHSyncDbContext db = null!)
     {
-        if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 20;
-        if (pageSize > 100) pageSize = 100;
+        (page, pageSize) = Paging.Clamp(page, pageSize, defaultSize: 20, max: 100);
 
+        // Fetch one extra row to know whether another page exists (§3.3).
         var runs = await db.SyncRuns
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+            .Take(pageSize + 1)
             .Select(r => new SyncRunDto(
                 r.Id,
                 EnumHelpers.ToPgName(r.RunType),
@@ -178,7 +178,7 @@ public class SyncRunsController : ControllerBase
                 r.ThrottleEvents))
             .ToListAsync();
 
-        return Ok(runs);
+        return Ok(new PagedResult<SyncRunDto>(runs.Take(pageSize).ToList(), runs.Count > pageSize));
     }
 
     /// <summary>
@@ -326,9 +326,7 @@ public class SyncRunsController : ControllerBase
         if (!runExists)
             return NotFound(new { message = $"Sync run {id} not found" });
 
-        if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 50;
-        if (pageSize > 200) pageSize = 200;
+        (page, pageSize) = Paging.Clamp(page, pageSize, defaultSize: 50, max: 200);
 
         var query = db.SyncRunItems
             .Where(i => i.SyncRunId == id);
@@ -348,7 +346,7 @@ public class SyncRunsController : ControllerBase
         var rawItems = await query
             .OrderByDescending(i => i.CreatedAt)
             .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+            .Take(pageSize + 1)
             .Select(i => new
             {
                 i.Id,
@@ -389,7 +387,8 @@ public class SyncRunsController : ControllerBase
                 .ToDictionaryAsync(m => m.Id, m => m.Email)
             : new Dictionary<int, string>();
 
-        var items = rawItems.Select(i => new SyncRunItemDto(
+        var hasMore = rawItems.Count > pageSize;
+        var items = rawItems.Take(pageSize).Select(i => new SyncRunItemDto(
             i.Id,
             i.TunnelId,
             i.SourceUserId,
@@ -404,7 +403,7 @@ public class SyncRunsController : ControllerBase
             i.CreatedAt
         )).ToList();
 
-        return Ok(items);
+        return Ok(new PagedResult<SyncRunItemDto>(items, hasMore));
     }
 
     /// <summary>Per-tunnel counts derived from sync_run_items (the pre-Phase-3 source of truth).</summary>

@@ -166,9 +166,54 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var runs = await response.Content.ReadFromJsonAsync<List<System.Text.Json.JsonElement>>();
-        Assert.NotNull(runs);
-        Assert.True(runs.Count >= 3);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.True(body.GetProperty("items").GetArrayLength() >= 3);
+        Assert.Contains(body.GetProperty("hasMore").ValueKind, new[] { System.Text.Json.JsonValueKind.True, System.Text.Json.JsonValueKind.False });
+        Assert.False(body.TryGetProperty("total", out _));     // runs carry no total
+    }
+
+    [Fact]
+    public async Task GetRuns_HasMore_IsTrueWhenAnotherPageExists()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        for (int i = 0; i < 3; i++)
+        {
+            db.SyncRuns.Add(new SyncRun
+            {
+                RunType = RunType.Scheduled, Status = SyncStatus.Success, IsDryRun = false,
+                StartedAt = DateTime.UtcNow.AddHours(-i), CompletedAt = DateTime.UtcNow.AddHours(-i).AddMinutes(5), CreatedAt = DateTime.UtcNow.AddHours(-i)
+            });
+        }
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedGetAsync("/api/sync-runs?page=1&pageSize=2");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.Equal(2, body.GetProperty("items").GetArrayLength());     // exactly pageSize, never pageSize + 1
+        Assert.True(body.GetProperty("hasMore").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GetRunItems_ReturnsEnvelope_AndLastPageHasMoreFalse()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var run = new SyncRun { RunType = RunType.Manual, Status = SyncStatus.Success, StartedAt = DateTime.UtcNow, CompletedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow };
+        db.SyncRuns.Add(run);
+        await db.SaveChangesAsync();
+        for (int i = 0; i < 3; i++)
+            db.SyncRunItems.Add(new SyncRunItem { SyncRunId = run.Id, Action = "created", CreatedAt = DateTime.UtcNow.AddSeconds(-i) });
+        await db.SaveChangesAsync();
+
+        var first = await (await AuthenticatedGetAsync($"/api/sync-runs/{run.Id}/items?page=1&pageSize=2")).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var second = await (await AuthenticatedGetAsync($"/api/sync-runs/{run.Id}/items?page=2&pageSize=2")).Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+
+        Assert.Equal(2, first.GetProperty("items").GetArrayLength());
+        Assert.True(first.GetProperty("hasMore").GetBoolean());
+        Assert.Equal(1, second.GetProperty("items").GetArrayLength());
+        Assert.False(second.GetProperty("hasMore").GetBoolean());
     }
 
     [Fact]

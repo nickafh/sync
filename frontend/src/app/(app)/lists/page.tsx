@@ -70,8 +70,12 @@ export default function PhoneListsPage() {
   const updatePhoneList = useUpdatePhoneList();
   const deletePhoneList = useDeletePhoneList();
 
-  const { data: contacts, isLoading: contactsLoading } =
-    usePhoneListContacts(selectedListId ?? 0, contactPage + 1, 200);
+  const CONTACTS_PAGE_SIZE = 200;
+  const { data: contactsPage, isLoading: contactsLoading } =
+    usePhoneListContacts(selectedListId ?? 0, contactPage + 1, CONTACTS_PAGE_SIZE);
+  const contacts = contactsPage?.items ?? [];
+  const contactsTotal = contactsPage?.total ?? 0;
+  const contactsShown = contactPage * CONTACTS_PAGE_SIZE + contacts.length;
 
   useEffect(() => {
     if (phoneLists && phoneLists.length > 0 && selectedListId === null) {
@@ -394,7 +398,7 @@ export default function PhoneListsPage() {
           </div>
 
           {/* Right panel: iPhone frame preview */}
-          <div className="lg:w-[55%] flex justify-center lg:justify-start">
+          <div className="lg:w-[55%] flex flex-col items-center lg:items-start">
             <IPhoneFrame title={selectedList?.name ?? ''}>
               <div className="relative h-full">
                 <div
@@ -405,7 +409,7 @@ export default function PhoneListsPage() {
                   }
                 >
                   <ContactList
-                    contacts={contacts ?? []}
+                    contacts={contacts}
                     onSelectContact={(c) => setSelectedContact(c)}
                     isLoading={contactsLoading}
                   />
@@ -427,6 +431,25 @@ export default function PhoneListsPage() {
                 </div>
               </div>
             </IPhoneFrame>
+            <div className="mt-3 flex items-center gap-4 text-xs text-text-muted">
+              <span>Showing {contactsShown} of {contactsTotal}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={contactPage === 0}
+                onClick={() => setContactPage((p) => Math.max(0, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!contactsPage?.hasMore}
+                onClick={() => setContactPage((p) => p + 1)}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </div>
       )}

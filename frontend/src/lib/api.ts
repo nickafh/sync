@@ -8,6 +8,7 @@ import type { DdgDto, DdgMemberDto } from '@/types/ddg';
 import type { SecurityGroupDto, OrgContactDto, OrgContactFilterInput, UserSearchResult, SourceContactDto, ContactExclusionInput } from '@/types/tunnel';
 import type { UserFolderStateDto } from '@/types/user-lookup';
 import type { UnavailableMailboxesDto } from '@/types/targets';
+import type { PagedResult } from '@/types/common';
 
 const API_BASE = '/api';
 
@@ -82,10 +83,10 @@ export const api = {
 
   syncRuns: {
     list: (page: number, pageSize: number) =>
-      fetchApi<SyncRunDto[]>(`/sync-runs?page=${page}&pageSize=${pageSize}`),
+      fetchApi<PagedResult<SyncRunDto>>(`/sync-runs?page=${page}&pageSize=${pageSize}`),
     get: (id: number) => fetchApi<SyncRunDetailDto>(`/sync-runs/${id}`),
     getItems: (id: number, page: number, pageSize: number, action?: string) =>
-      fetchApi<SyncRunItemDto[]>(
+      fetchApi<PagedResult<SyncRunItemDto>>(
         `/sync-runs/${id}/items?page=${page}&pageSize=${pageSize}${action ? `&action=${action}` : ''}`
       ),
     trigger: (req: TriggerSyncRequest) =>
@@ -98,7 +99,7 @@ export const api = {
     list: () => fetchApi<PhoneListDto[]>('/phone-lists'),
     get: (id: number) => fetchApi<PhoneListDetailDto>(`/phone-lists/${id}`),
     getContacts: (id: number, page: number, pageSize: number) =>
-      fetchApi<ContactDto[]>(`/phone-lists/${id}/contacts?page=${page}&pageSize=${pageSize}`),
+      fetchApi<PagedResult<ContactDto>>(`/phone-lists/${id}/contacts?page=${page}&pageSize=${pageSize}`),
     create: (data: CreatePhoneListRequest) =>
       fetchApi<{ id: number; name: string }>('/phone-lists', { method: 'POST', body: JSON.stringify(data) }),
     update: (id: number, data: CreatePhoneListRequest) =>
