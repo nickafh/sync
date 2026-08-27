@@ -669,8 +669,52 @@ public sealed class SyncEngine(
         bool skipStale,
         CancellationToken ct)
     {
-        int created = 0, updated = 0, skipped = 0, failed = 0, removed = 0;
+        var counters = new MailboxCounters();
 
+        // A. Contact folder (null ⇒ the mailbox is done: unavailable, or failed and recorded).
+        var folder = await ResolveMailboxFolderAsync(tunnel, canonicalPhoneList, mailbox, run, isDryRun, counters, ct);
+        if (folder is null)
+            return counters.ToTuple();
+        var (folderId, folderWasCreated) = folder.Value;
+
+        // B. A reconcile left pending by a previous run (§3.7).
+        await ReconcileIfPendingAsync(tunnel, canonicalPhoneList, mailbox, folderId, sourceUsers, isDryRun, counters, ct);
+
+        // C. Existing sync state for this (tunnel, mailbox), de-duplicated; duplicates cleaned up.
+        var existingStates = await LoadExistingStatesAsync(tunnel, canonicalPhoneList, allPhoneListIds, mailbox,
+            folderId, folderWasCreated, isDryRun, counters, ct);
+
+        // D. Classify every source user as create / update / skip — no Graph calls.
+        var (pendingCreates, pendingUpdates) = ClassifyContacts(tunnel, canonicalPhoneList, mailbox, run,
+            sourceUsers, fieldSettings, existingStates, counters);
+
+        // E/F. Graph writes (or dry-run reporting), persisted per chunk (§2.6a).
+        await ExecuteCreatesAsync(tunnel, canonicalPhoneList, mailbox, run, folderId, sourceUsers, pendingCreates, isDryRun, counters, ct);
+        var statesToHeal = await ExecuteUpdatesAsync(tunnel, canonicalPhoneList, mailbox, run, pendingUpdates, isDryRun, counters, ct);
+
+        // Note: live progress for the dashboard is updated in the per-tunnel loop
+        // (ProcessTunnelAsync caller) which has access to the overall totals.
+
+        // G. Drop states whose contact 404'd on update; H. stale pass (skipped when a source failed, §2.3).
+        await HealDeadStatesAsync(statesToHeal, isDryRun);
+        await HandleStaleContactsAsync(tunnel, allPhoneListIds, mailbox, run, sourceUsers, isDryRun, skipStale, counters, ct);
+
+        return counters.ToTuple();
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.8) step A: resolves the tunnel's contact folder in one mailbox. Returns null when
+    /// the mailbox is done for this run — unavailable (stamped, no run item) or failed (recorded).
+    /// </summary>
+    private async Task<(string? folderId, bool wasCreated)?> ResolveMailboxFolderAsync(
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        TargetMailbox mailbox,
+        SyncRun run,
+        bool isDryRun,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
         // Get or create the contact folder (looked up only, never created, in a dry run).
         string? folderId;
         bool folderWasCreated;
@@ -695,20 +739,36 @@ public sealed class SyncEngine(
                     "Mailbox {Email} (Id={MailboxId}) is unavailable for REST — skipping for {Days} days: {Reason}",
                     mailbox.Email, mailbox.Id, MailboxAvailability.ReprobeInterval.TotalDays, ex.Message);
                 await MarkMailboxUnavailableAsync(mailbox.Id, ex.Message);
-                return (created, updated, skipped, failed, removed);
+                return null;
             }
 
             logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
             // Record as a SyncRunItem so the failure shows up in the run-detail "Failed" tab.
             RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, null, $"Folder '{tunnel.Name}': {ex.Message}");
-            failed++;
-            return (created, updated, skipped, failed, removed);
+            counters.Failed++;
+            return null;
         }
 
         // Phase 2 (§2.1): the first successful folder lookup after an unavailable stamp clears it.
         if (mailbox.MailboxUnavailableAt is not null)
             await ClearMailboxUnavailableAsync(mailbox.Id);
 
+        return (folderId, folderWasCreated);
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.8) step B: runs the reconcile a previous run left pending (§3.7).
+    /// </summary>
+    private async Task ReconcileIfPendingAsync(
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        TargetMailbox mailbox,
+        string? folderId,
+        List<SourceUser> sourceUsers,
+        bool isDryRun,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
         // Phase 3 (§3.7): a flag left by a previous run (crash/shutdown between a create batch and
         // its bookkeeping) means Graph may hold contacts with no state row — reconcile BEFORE
         // classification so they are adopted (and PATCHed below) instead of created twice.
@@ -716,10 +776,26 @@ public sealed class SyncEngine(
         {
             logger.LogInformation("Reconcile pending for tunnel {TunnelId} in mailbox {Email} from a previous run", tunnel.Id, mailbox.Email);
             var pendingResult = await folderReconciler.ReconcileAsync(tunnel, mailbox, folderId, canonicalPhoneList.Id, sourceUsers, ct);
-            removed += pendingResult.Removed;
+            counters.Removed += pendingResult.Removed;
             await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
         }
+    }
 
+    /// <summary>
+    /// Phase 3 (§3.8) step C: loads the existing sync state for this (tunnel, mailbox) across all of
+    /// the tunnel's phone lists, de-duplicated, and cleans up the duplicate rows it found.
+    /// </summary>
+    private async Task<Dictionary<int, ContactSyncState>> LoadExistingStatesAsync(
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        List<int> allPhoneListIds,
+        TargetMailbox mailbox,
+        string? folderId,
+        bool folderWasCreated,
+        bool isDryRun,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
         // Clear across ALL phone lists so all contacts get re-created in the new folder.
         if (folderWasCreated && !isDryRun)
@@ -812,10 +888,28 @@ public sealed class SyncEngine(
                 await dupeDb.ContactSyncStates
                     .Where(s => dupeIds.Contains(s.Id))
                     .ExecuteDeleteAsync(ct);
-                removed += duplicateStates.Count;
+                counters.Removed += duplicateStates.Count;
             }
         }
 
+        return existingStates;
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.8) step D: classifies every source user as create, update or skip. No Graph calls.
+    /// </summary>
+    private (List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)> pendingCreates,
+             List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)> pendingUpdates)
+        ClassifyContacts(
+            Tunnel tunnel,
+            PhoneList canonicalPhoneList,
+            TargetMailbox mailbox,
+            SyncRun run,
+            List<SourceUser> sourceUsers,
+            List<FieldProfileField> fieldSettings,
+            Dictionary<int, ContactSyncState> existingStates,
+            MailboxCounters counters)
+    {
         // Phase 1: Compute payloads and classify each source user as create, update, or skip.
         // No Graph calls happen here — just delta hash comparison.
         var pendingCreates = new List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)>();
@@ -839,7 +933,7 @@ public sealed class SyncEngine(
                 }
                 else
                 {
-                    skipped++;
+                    counters.Skipped++;
                 }
             }
             catch (Exception ex)
@@ -848,15 +942,28 @@ public sealed class SyncEngine(
                     sourceUser.Id, mailbox.Id);
 
                 RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, sourceUser.Id, ex.Message);
-                failed++;
+                counters.Failed++;
             }
         }
 
-        // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
-        // Sync-state IDs whose contact 404'd on update (deleted on the device). We drop the dead
-        // state row at the end of the mailbox so the next run recreates the contact.
-        var statesToHeal = new List<int>();
+        return (pendingCreates, pendingUpdates);
+    }
 
+    /// <summary>
+    /// Phase 3 (§3.8) step E: the create batch (or the dry-run report), persisted per chunk (§2.6a).
+    /// </summary>
+    private async Task ExecuteCreatesAsync(
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        TargetMailbox mailbox,
+        SyncRun run,
+        string? folderId,
+        List<SourceUser> sourceUsers,
+        List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)> pendingCreates,
+        bool isDryRun,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
         if (!isDryRun && pendingCreates.Count > 0)
         {
             var targetFolderId = folderId
@@ -904,7 +1011,7 @@ public sealed class SyncEngine(
                             Action = "created",
                             CreatedAt = DateTime.UtcNow
                         });
-                        created++;
+                        counters.Created++;
                     }
                     else
                     {
@@ -913,7 +1020,7 @@ public sealed class SyncEngine(
                             pending.sourceUserId, mailbox.Id, error);
 
                         RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, error);
-                        failed++;
+                        counters.Failed++;
                     }
                 }
 
@@ -934,7 +1041,7 @@ public sealed class SyncEngine(
             {
                 logger.LogWarning("Create batch had an unknown outcome for tunnel {TunnelId} in mailbox {Email} — reconciling the folder", tunnel.Id, mailbox.Email);
                 var reconcile = await folderReconciler.ReconcileAsync(tunnel, mailbox, targetFolderId, canonicalPhoneList.Id, sourceUsers, ct);
-                removed += reconcile.Removed;
+                counters.Removed += reconcile.Removed;
             }
             await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
 
@@ -943,7 +1050,7 @@ public sealed class SyncEngine(
                 logger.LogError("Batch create returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     pending.sourceUserId, mailbox.Id);
                 RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, "No batch result returned");
-                failed++;
+                counters.Failed++;
             }
         }
         else if (isDryRun)
@@ -961,9 +1068,29 @@ public sealed class SyncEngine(
                     Action = "created",
                     CreatedAt = DateTime.UtcNow
                 });
-                created++;
+                counters.Created++;
             }
         }
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.8) step F: the update batch (or the dry-run report), persisted per chunk (§2.6a).
+    /// Returns the sync-state IDs whose contact 404'd, for the heal pass (step G).
+    /// </summary>
+    private async Task<List<int>> ExecuteUpdatesAsync(
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        TargetMailbox mailbox,
+        SyncRun run,
+        List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)> pendingUpdates,
+        bool isDryRun,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
+        // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
+        // Sync-state IDs whose contact 404'd on update (deleted on the device). We drop the dead
+        // state row at the end of the mailbox so the next run recreates the contact.
+        var statesToHeal = new List<int>();
 
         if (!isDryRun && pendingUpdates.Count > 0)
         {
@@ -997,7 +1124,7 @@ public sealed class SyncEngine(
                             FieldChanges = fieldChangesJson,
                             CreatedAt = DateTime.UtcNow
                         });
-                        updated++;
+                        counters.Updated++;
                     }
                     else if (result.NotFound)
                     {
@@ -1018,7 +1145,7 @@ public sealed class SyncEngine(
                             Action = "removed",
                             CreatedAt = DateTime.UtcNow
                         });
-                        removed++;
+                        counters.Removed++;
                     }
                     else
                     {
@@ -1027,7 +1154,7 @@ public sealed class SyncEngine(
                             pending.sourceUserId, mailbox.Id, error);
 
                         RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, error);
-                        failed++;
+                        counters.Failed++;
                     }
                 }
 
@@ -1043,7 +1170,7 @@ public sealed class SyncEngine(
                 logger.LogError("Batch update returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     pending.sourceUserId, mailbox.Id);
                 RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, "No batch result returned");
-                failed++;
+                counters.Failed++;
             }
         }
         else if (isDryRun)
@@ -1064,13 +1191,18 @@ public sealed class SyncEngine(
                     FieldChanges = fieldChangesJson,
                     CreatedAt = DateTime.UtcNow
                 });
-                updated++;
+                counters.Updated++;
             }
         }
 
-        // Note: live progress for the dashboard is updated in the per-tunnel loop
-        // (ProcessTunnelAsync caller) which has access to the overall totals.
+        return statesToHeal;
+    }
 
+    /// <summary>
+    /// Phase 3 (§3.8) step G: drops the sync-state rows whose contact 404'd on update.
+    /// </summary>
+    private async Task HealDeadStatesAsync(List<int> statesToHeal, bool isDryRun)
+    {
         // Heals only: a contact that 404'd on update — drop the dead state so the next run
         // recreates it. Creates and hash updates were persisted per chunk above (§2.6a).
         if (!isDryRun && statesToHeal.Count > 0)
@@ -1082,7 +1214,22 @@ public sealed class SyncEngine(
             healDb.ContactSyncStates.RemoveRange(healStates);
             await healDb.SaveChangesAsync(CancellationToken.None);
         }
+    }
 
+    /// <summary>
+    /// Phase 3 (§3.8) step H: the stale pass — removes contacts no longer in the source set.
+    /// </summary>
+    private async Task HandleStaleContactsAsync(
+        Tunnel tunnel,
+        List<int> allPhoneListIds,
+        TargetMailbox mailbox,
+        SyncRun run,
+        List<SourceUser> sourceUsers,
+        bool isDryRun,
+        bool skipStale,
+        MailboxCounters counters,
+        CancellationToken ct)
+    {
         // Handle stale contacts after processing all source users.
         // Check across all phone lists for this tunnel+mailbox (stale handler scopes by phone list,
         // so call it for each phone list to catch records from any phone list).
@@ -1122,11 +1269,9 @@ public sealed class SyncEngine(
                     });
                 }
 
-                removed += staleResult.Removed;
+                counters.Removed += staleResult.Removed;
             }
         }
-
-        return (created, updated, skipped, failed, removed);
     }
 
     /// <summary>
@@ -1884,5 +2029,17 @@ public sealed class SyncEngine(
         if (tunnelsFailed > 0 || tunnelsWarned > 0 || totalFailed > 0)
             return SyncStatus.Warning;
         return SyncStatus.Success;
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.8): one mailbox's tallies. A class (not a tuple) because the batch chunk callbacks
+    /// close over it and increment from inside ContactWriter's chunk loop.
+    /// </summary>
+    private sealed class MailboxCounters
+    {
+        public int Created, Updated, Skipped, Failed, Removed;
+
+        public (int created, int updated, int skipped, int failed, int removed) ToTuple()
+            => (Created, Updated, Skipped, Failed, Removed);
     }
 }
