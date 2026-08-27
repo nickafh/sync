@@ -1,13 +1,16 @@
 namespace AFHSync.Worker.Services;
 
 /// <summary>
-/// Result of a single operation within a batch request.
+/// Result of a single operation within a batch request. Phase 3 (§3.7): <see cref="OutcomeUnknown"/>
+/// is true when the $batch POST itself threw or returned no response — Graph may or may not have
+/// applied the step, so the caller reconciles the folder instead of trusting <see cref="Success"/>.
 /// </summary>
 public record BatchOperationResult(
     bool Success,
     string? GraphContactId = null,
     string? Error = null,
-    bool NotFound = false);
+    bool NotFound = false,
+    bool OutcomeUnknown = false);
 
 /// <summary>
 /// Writes contacts to a target mailbox's contact folder via Microsoft Graph.

@@ -90,6 +90,7 @@ try
     services.AddScoped<IContactPayloadBuilder, ContactPayloadBuilder>();
     services.AddScoped<IContactWriter, ContactWriter>();
     services.AddScoped<IContactFolderManager, ContactFolderManager>();
+    services.AddScoped<IFolderReconciler, FolderReconciler>();
     services.AddScoped<IStaleContactHandler, StaleContactHandler>();
     services.AddScoped<IRunLogger, RunLogger>();
     services.AddScoped<IRunClaimService, RunClaimService>();

@@ -255,15 +255,16 @@ public class ContactWriter : IContactWriter
         catch (Exception ex)
         {
             _logger.LogError(ex, "Batch request failed entirely");
+            // Phase 3 (§3.7): the request may have reached Graph — the caller reconciles the folder.
             foreach (var key in stepIdToKey.Values)
-                results[key] = new BatchOperationResult(false, Error: ex.Message);
+                results[key] = new BatchOperationResult(false, Error: ex.Message, OutcomeUnknown: true);
             return;
         }
 
         if (response == null)
         {
             foreach (var key in stepIdToKey.Values)
-                results[key] = new BatchOperationResult(false, Error: "Null batch response");
+                results[key] = new BatchOperationResult(false, Error: "Null batch response", OutcomeUnknown: true);
             return;
         }
 

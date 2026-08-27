@@ -31,6 +31,7 @@ public sealed class SyncEngine(
     IContactPayloadBuilder contactPayloadBuilder,
     IContactWriter contactWriter,
     IContactFolderManager contactFolderManager,
+    IFolderReconciler folderReconciler,
     IStaleContactHandler staleContactHandler,
     IRunLogger runLogger,
     IRunClaimService runClaimService,
@@ -742,6 +743,17 @@ public sealed class SyncEngine(
         if (mailbox.MailboxUnavailableAt is not null)
             await ClearMailboxUnavailableAsync(mailbox.Id);
 
+        // Phase 3 (§3.7): a flag left by a previous run (crash/shutdown between a create batch and
+        // its bookkeeping) means Graph may hold contacts with no state row — reconcile BEFORE
+        // classification so they are adopted (and PATCHed below) instead of created twice.
+        if (!isDryRun && folderId is not null && await IsReconcilePendingAsync(tunnel.Id, mailbox.Id))
+        {
+            logger.LogInformation("Reconcile pending for tunnel {TunnelId} in mailbox {Email} from a previous run", tunnel.Id, mailbox.Email);
+            var pendingResult = await folderReconciler.ReconcileAsync(tunnel, mailbox, folderId, canonicalPhoneList.Id, sourceUsers, ct);
+            removed += pendingResult.Removed;
+            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
+        }
+
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
         // Clear across ALL phone lists so all contacts get re-created in the new folder.
         if (folderWasCreated && !isDryRun)
@@ -963,8 +975,22 @@ public sealed class SyncEngine(
                     await PersistStateChangesAsync(chunkStates, [], mailbox.Id, isDryRun);
             }
 
-            await contactWriter.CreateContactsBatchAsync(
+            // Phase 3 (§3.7): flag the folder before the first chunk goes out; only a clean finish
+            // (every chunk answered and persisted) clears it. Anything in between — a crash, a
+            // shutdown, an exception — leaves it for the next run to reconcile.
+            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: true);
+            var createOutcomeUnknown = false;
+            var createResults = await contactWriter.CreateContactsBatchAsync(
                 mailbox.EntraId, targetFolderId, batchOps, OnCreateChunkCompleted, ct);
+            createOutcomeUnknown = createResults.Values.Any(r => r.OutcomeUnknown);
+
+            if (createOutcomeUnknown)
+            {
+                logger.LogWarning("Create batch had an unknown outcome for tunnel {TunnelId} in mailbox {Email} — reconciling the folder", tunnel.Id, mailbox.Email);
+                var reconcile = await folderReconciler.ReconcileAsync(tunnel, mailbox, targetFolderId, canonicalPhoneList.Id, sourceUsers, ct);
+                removed += reconcile.Removed;
+            }
+            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
 
             foreach (var pending in pendingCreates.Where(p => !handledKeys.Contains(p.key)))
             {
@@ -1631,6 +1657,49 @@ public sealed class SyncEngine(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to clear the unavailable stamp on mailbox {MailboxId}", mailboxId);
+        }
+    }
+
+    /// <summary>Phase 3 (§3.7): reads tunnel_mailbox_folders.reconcile_pending_at for the pair (false when no row).</summary>
+    private async Task<bool> IsReconcilePendingAsync(int tunnelId, int mailboxId)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            return await db.TunnelMailboxFolders
+                .AnyAsync(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId && f.ReconcilePendingAt != null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to read the reconcile flag for tunnel {TunnelId} mailbox {MailboxId}", tunnelId, mailboxId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.7): sets or clears reconcile_pending_at. No-op when the folder row does not exist
+    /// yet (it is upserted by ContactFolderManager before any contact write in production). Fresh
+    /// context + CancellationToken.None — the flag must outlive a cancel.
+    /// </summary>
+    private async Task SetReconcilePendingAsync(int tunnelId, int mailboxId, bool pending)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var row = await db.TunnelMailboxFolders
+                .FirstOrDefaultAsync(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId, CancellationToken.None);
+            if (row is null)
+                return;
+            var value = pending ? DateTime.UtcNow : (DateTime?)null;
+            if (row.ReconcilePendingAt == value || (!pending && row.ReconcilePendingAt is null))
+                return;
+            row.ReconcilePendingAt = value;
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to {Action} the reconcile flag for tunnel {TunnelId} mailbox {MailboxId}",
+                pending ? "set" : "clear", tunnelId, mailboxId);
         }
     }
 

@@ -72,6 +72,7 @@ public class SyncEngineTests
         FakeContactPayloadBuilder? payloadBuilder = null,
         FakeContactWriter? contactWriter = null,
         FakeContactFolderManager? folderManager = null,
+        FakeFolderReconciler? folderReconciler = null,
         IStaleContactHandler? staleHandler = null,
         FakeRunLogger? runLogger = null,
         ThrottleCounter? throttleCounter = null,
@@ -85,6 +86,7 @@ public class SyncEngineTests
             payloadBuilder ?? new FakeContactPayloadBuilder(),
             contactWriter ?? new FakeContactWriter(),
             folderManager ?? new FakeContactFolderManager(),
+            folderReconciler ?? new FakeFolderReconciler(),
             staleHandler ?? new FakeStaleContactHandler(),
             runLogger ?? new FakeRunLogger(),
             new RunClaimService(CreateFactory(dbName), NullLogger<RunClaimService>.Instance),
@@ -1425,6 +1427,107 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 3 (3.7): orphaned Graph contacts are reconciled
+    // ==============================
+
+    private static async Task SeedKnownFolderAsync(string dbName, int tunnelId, int mailboxId, DateTime? reconcilePendingAt)
+    {
+        using var ctx = MakeDbContext(dbName);
+        ctx.TunnelMailboxFolders.Add(new TunnelMailboxFolder
+        {
+            TunnelId = tunnelId, TargetMailboxId = mailboxId, GraphFolderId = "fake-folder-id", FolderName = "Avail Tunnel",
+            UpdatedAt = DateTime.UtcNow, ReconcilePendingAt = reconcilePendingAt
+        });
+        await ctx.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateBatchOutcomeUnknown_ReconcilesTheFolderInRun()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: new FakeContactWriter { CreateOutcomeUnknown = true },
+            folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var call = Assert.Single(reconciler.Calls);
+        Assert.Equal((1, 1, "fake-folder-id"), call);
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateBatchSucceeds_DoesNotReconcile_AndClearsTheFlag()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        await SeedKnownFolderAsync(dbName, tunnelId: 1, mailboxId: 1, reconcilePendingAt: null);
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Null((await verifyCtx.TunnelMailboxFolders.SingleAsync()).ReconcilePendingAt);   // set before the batch, cleared after
+    }
+
+    [Fact]
+    public async Task RunAsync_ReconcilePendingFromPreviousRun_ReconcilesBeforeClassification_AndClearsTheFlag()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        await SeedKnownFolderAsync(dbName, 1, 1, reconcilePendingAt: DateTime.UtcNow.AddHours(-5));   // a crash left it set
+        var reconciler = new FakeFolderReconciler();
+        // Zero source members would skip the tunnel before any mailbox runs, so give it one user
+        // whose contact already exists (the skip path) — the pending reconcile must still fire.
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.ContactSyncStates.Add(new ContactSyncState
+            {
+                SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1,
+                GraphContactId = "g-existing", DataHash = "new-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(reconciler.Calls);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Null((await verifyCtx.TunnelMailboxFolders.SingleAsync()).ReconcilePendingAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_DryRun_NeverReconciles_EvenWithFlagSet()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        await SeedKnownFolderAsync(dbName, 1, 1, reconcilePendingAt: DateTime.UtcNow.AddHours(-5));
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.DryRun, isDryRun: true, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.NotNull((await verifyCtx.TunnelMailboxFolders.SingleAsync()).ReconcilePendingAt);   // untouched by a dry run
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -1486,6 +1589,9 @@ public class SyncEngineTests
         /// <summary>When true, batch creates report the no-id failure (Graph 2xx without an id).</summary>
         public bool CreateReturnsNoId { get; init; }
 
+        /// <summary>When true, batch creates report every key as OutcomeUnknown (transport failure).</summary>
+        public bool CreateOutcomeUnknown { get; init; }
+
         /// <summary>Operations per chunk handed to onChunkCompleted (real writer: 20).</summary>
         public int ChunkSize { get; init; } = 20;
 
@@ -1531,6 +1637,11 @@ public class SyncEngineTests
                     if (CreateReturnsNoId)
                     {
                         chunkResults[key] = new BatchOperationResult(false, Error: ContactWriter.NoContactIdError);
+                        continue;
+                    }
+                    if (CreateOutcomeUnknown)
+                    {
+                        chunkResults[key] = new BatchOperationResult(false, Error: "connection reset", OutcomeUnknown: true);
                         continue;
                     }
                     var id = Guid.NewGuid().ToString();
@@ -1616,6 +1727,18 @@ public class SyncEngineTests
         }
 
         public void ResetCache() { }
+    }
+
+    private sealed class FakeFolderReconciler : IFolderReconciler
+    {
+        public List<(int TunnelId, int MailboxId, string FolderId)> Calls { get; } = [];
+
+        public Task<FolderReconcileResult> ReconcileAsync(Tunnel tunnel, TargetMailbox mailbox, string folderId,
+            int canonicalPhoneListId, IReadOnlyList<SourceUser> sourceUsers, CancellationToken ct)
+        {
+            Calls.Add((tunnel.Id, mailbox.Id, folderId));
+            return Task.FromResult(new FolderReconcileResult(0, 0, 0));
+        }
     }
 
     private sealed class FakeStaleContactHandler : IStaleContactHandler

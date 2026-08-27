@@ -309,12 +309,51 @@ public class ContactWriterTests
         Assert.All(chunk1.Values, r => Assert.True(r.Success)); // no per-key "canceled" failures
     }
 
+    // ── Phase 3 (3.7): a transport failure means Graph MAY have applied the chunk ──────────────
+
+    [Fact]
+    public async Task CreateContactsBatchAsync_TransportThrows_MarksEveryKeyOutcomeUnknown()
+    {
+        var (writer, handler) = BuildWriterWithFakeGraphTransport(throwOnSend: new HttpRequestException("connection reset"));
+        var ops = new List<(string key, SortedDictionary<string, string> payload)>
+        {
+            ("k1", new SortedDictionary<string, string> { ["DisplayName"] = "A" }),
+            ("k2", new SortedDictionary<string, string> { ["DisplayName"] = "B" }),
+        };
+
+        var results = await writer.CreateContactsBatchAsync("mbx1", "folder1", ops, onChunkCompleted: null, CancellationToken.None);
+
+        Assert.Equal(1, handler.CallCount);
+        Assert.Equal(2, results.Count);
+        Assert.All(results.Values, r =>
+        {
+            Assert.False(r.Success);
+            Assert.True(r.OutcomeUnknown);
+            Assert.Contains("connection reset", r.Error);
+        });
+    }
+
+    [Fact]
+    public async Task CreateContactsBatchAsync_StepFailsWithStatus_IsNotOutcomeUnknown()
+    {
+        var (writer, _) = BuildWriterWithFakeGraphTransport();
+        var ops = new List<(string key, SortedDictionary<string, string> payload)>
+        {
+            ("k1", new SortedDictionary<string, string> { ["DisplayName"] = "A" }),
+        };
+
+        var results = await writer.CreateContactsBatchAsync("mbx1", "folder1", ops, onChunkCompleted: null, CancellationToken.None);
+
+        Assert.True(results["k1"].Success);
+        Assert.False(results["k1"].OutcomeUnknown);   // a definite answer from Graph is never "unknown"
+    }
+
     // ── Fake Graph SDK transport (no network, no credential) ─────────────────────────────────
 
     private static (ContactWriter writer, FakeBatchHandler handler) BuildWriterWithFakeGraphTransport(
-        Action? onBatchHandled = null)
+        Action? onBatchHandled = null, Exception? throwOnSend = null)
     {
-        var handler = new FakeBatchHandler(onBatchHandled);
+        var handler = new FakeBatchHandler(onBatchHandled, throwOnSend);
         var httpClient = new HttpClient(handler);
         var client = new GraphServiceClient(httpClient, new NoOpAuthenticationProvider());
         var factory = new GraphClientFactory(client);
@@ -334,7 +373,7 @@ public class ContactWriterTests
     /// Fake $batch transport: echoes a 201-with-id success for every step in the incoming
     /// request, so ContactWriter's real batch/retry code runs end to end without hitting Graph.
     /// </summary>
-    private sealed class FakeBatchHandler(Action? onBatchHandled) : HttpMessageHandler
+    private sealed class FakeBatchHandler(Action? onBatchHandled, Exception? throwOnSend = null) : HttpMessageHandler
     {
         public int CallCount { get; private set; }
 
@@ -342,6 +381,8 @@ public class ContactWriterTests
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             CallCount++;
+            if (throwOnSend is not null)
+                throw throwOnSend;
             var bodyStr = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
