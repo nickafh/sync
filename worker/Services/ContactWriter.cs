@@ -1,6 +1,8 @@
+using System.Net;
 using AFHSync.Worker.Graph;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
 using GraphClientFactory = AFHSync.Worker.Graph.GraphClientFactory;
 
 namespace AFHSync.Worker.Services;
@@ -14,12 +16,47 @@ namespace AFHSync.Worker.Services;
 public class ContactWriter : IContactWriter
 {
     private readonly GraphClientFactory _graphClientFactory;
+    private readonly ThrottleCounter _throttleCounter;
     private readonly ILogger<ContactWriter> _logger;
+    private readonly Func<TimeSpan, Task> _delay;
 
-    public ContactWriter(GraphClientFactory graphClientFactory, ILogger<ContactWriter> logger)
+    /// <param name="delay">
+    /// Phase 4 (§4.2): how to wait between batch-step retries. Defaults to <see cref="Task.Delay(TimeSpan)"/>;
+    /// unit tests inject a recorder so they never sleep.
+    /// </param>
+    public ContactWriter(
+        GraphClientFactory graphClientFactory,
+        ThrottleCounter throttleCounter,
+        ILogger<ContactWriter> logger,
+        Func<TimeSpan, Task>? delay = null)
     {
         _graphClientFactory = graphClientFactory;
+        _throttleCounter = throttleCounter;
         _logger = logger;
+        _delay = delay ?? (d => Task.Delay(d));
+    }
+
+    /// <summary>Phase 4 (§4.2): a throttled / timed-out batch step is re-posted at most this many times.</summary>
+    internal const int MaxBatchStepRetries = 3;
+    private static readonly TimeSpan StepRetryBaseDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromMinutes(5);
+
+    /// <summary>Statuses Graph uses for "try this step again later": 429, 503, 504.</summary>
+    internal static bool IsRetryableStepStatus(HttpStatusCode status)
+        => (int)status is 429 or 503 or 504;
+
+    /// <summary>
+    /// The wait before retry number <paramref name="attempt"/> (1-based): the server's Retry-After
+    /// clamped to [0, 5 min] when it sent one, otherwise 2 s × attempt.
+    /// </summary>
+    internal static TimeSpan RetryDelayFor(int attempt, TimeSpan? retryAfter)
+    {
+        if (retryAfter is TimeSpan ra)
+        {
+            if (ra < TimeSpan.Zero) return TimeSpan.Zero;
+            return ra > MaxRetryAfter ? MaxRetryAfter : ra;
+        }
+        return StepRetryBaseDelay * attempt;
     }
 
     /// <inheritdoc />
@@ -116,27 +153,24 @@ public class ContactWriter : IContactWriter
             // before starting a new one.
             ct.ThrowIfCancellationRequested();
 
-            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
-            var stepIdToKey = new Dictionary<string, string>();
+            var byKey = chunk.ToDictionary(c => c.key);
+            var keys = chunk.Select(c => c.key).ToList();
 
-            foreach (var (key, payload) in chunk)
-            {
-                var contact = MapPayloadToContact(payload, isCreate: true);
-                var requestInfo = _graphClientFactory.Client
+            await ExecuteBatchWithRetryAsync(
+                mailboxEntraId,
+                keys,
+                key => _graphClientFactory.Client
                     .Users[mailboxEntraId]
                     .ContactFolders[folderId]
                     .Contacts
-                    .ToPostRequestInformation(contact);
-                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
-                stepIdToKey[stepId] = key;
-            }
-
-            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, async (response, stepId) =>
-            {
-                var created = await response.GetResponseByIdAsync<Contact>(stepId);
-                return MapCreateResponse(created);
-            });
-            await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
+                    .ToPostRequestInformation(MapPayloadToContact(byKey[key].payload, isCreate: true)),
+                results,
+                async (response, stepId) =>
+                {
+                    var created = await response.GetResponseByIdAsync<Contact>(stepId);
+                    return MapCreateResponse(created);
+                });
+            await NotifyChunkCompletedAsync(onChunkCompleted, keys, results);
         }
 
         _logger.LogDebug("Batch create complete: {Success} succeeded, {Failed} failed",
@@ -164,23 +198,19 @@ public class ContactWriter : IContactWriter
             // Chunk boundary is the cancellation granularity — see CreateContactsBatchAsync.
             ct.ThrowIfCancellationRequested();
 
-            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
-            var stepIdToKey = new Dictionary<string, string>();
+            var byKey = chunk.ToDictionary(c => c.key);
+            var keys = chunk.Select(c => c.key).ToList();
 
-            foreach (var (key, graphContactId, payload) in chunk)
-            {
-                var contact = MapPayloadToContact(payload, isCreate: false);
-                var requestInfo = _graphClientFactory.Client
+            await ExecuteBatchWithRetryAsync(
+                mailboxEntraId,
+                keys,
+                key => _graphClientFactory.Client
                     .Users[mailboxEntraId]
-                    .Contacts[graphContactId]
-                    .ToPatchRequestInformation(contact);
-                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
-                stepIdToKey[stepId] = key;
-            }
-
-            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
-                Task.FromResult(new BatchOperationResult(true)));
-            await NotifyChunkCompletedAsync(onChunkCompleted, stepIdToKey, results);
+                    .Contacts[byKey[key].graphContactId]
+                    .ToPatchRequestInformation(MapPayloadToContact(byKey[key].payload, isCreate: false)),
+                results,
+                (_, _) => Task.FromResult(new BatchOperationResult(true)));
+            await NotifyChunkCompletedAsync(onChunkCompleted, keys, results);
         }
 
         _logger.LogDebug("Batch update complete: {Success} succeeded, {Failed} failed",
@@ -207,21 +237,18 @@ public class ContactWriter : IContactWriter
             // Chunk boundary is the cancellation granularity — see CreateContactsBatchAsync.
             ct.ThrowIfCancellationRequested();
 
-            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
-            var stepIdToKey = new Dictionary<string, string>();
+            var byKey = chunk.ToDictionary(c => c.key);
+            var keys = chunk.Select(c => c.key).ToList();
 
-            foreach (var (key, graphContactId) in chunk)
-            {
-                var requestInfo = _graphClientFactory.Client
+            await ExecuteBatchWithRetryAsync(
+                mailboxEntraId,
+                keys,
+                key => _graphClientFactory.Client
                     .Users[mailboxEntraId]
-                    .Contacts[graphContactId]
-                    .ToDeleteRequestInformation();
-                var stepId = await batchContent.AddBatchRequestStepAsync(requestInfo);
-                stepIdToKey[stepId] = key;
-            }
-
-            await ExecuteBatchWithRetryAsync(batchContent, stepIdToKey, results, (_, _) =>
-                Task.FromResult(new BatchOperationResult(true)));
+                    .Contacts[byKey[key].graphContactId]
+                    .ToDeleteRequestInformation(),
+                results,
+                (_, _) => Task.FromResult(new BatchOperationResult(true)));
         }
 
         _logger.LogDebug("Batch delete complete: {Success} succeeded, {Failed} failed",
@@ -231,9 +258,18 @@ public class ContactWriter : IContactWriter
     }
 
     /// <summary>
-    /// Executes a batch request with retry for 429/5xx failures.
-    /// On success, calls <paramref name="onSuccess"/> to extract the result (e.g., created contact ID).
-    /// Failed items are retried up to <see cref="MaxBatchRetries"/> times.
+    /// Builds and posts a batch for <paramref name="keys"/> (via <paramref name="buildStep"/>) and
+    /// maps each step's answer into <paramref name="results"/>.
+    ///
+    /// Phase 4 (§4.2): steps answering 429/503/504 are retried — up to <see cref="MaxBatchStepRetries"/>
+    /// times, waiting the largest per-step Retry-After (else 2 s × attempt) — by rebuilding a brand
+    /// new batch from just the retried keys on each attempt. <see cref="BatchRequestContentCollection.NewBatchWithFailedRequests"/>
+    /// was tried first, but Microsoft.Graph.Core 3.2.5's implementation re-adds each failed step via
+    /// <c>AddBatchRequestStep(HttpRequestMessage)</c>, which always mints a fresh <see cref="Guid"/> for
+    /// the new step id — it does not preserve the original id. Rebuilding the batch ourselves keeps
+    /// step-id assignment entirely in our control, so the id ↔ key mapping is always correct. Each
+    /// retried step bumps <see cref="ThrottleCounter"/> so SyncRun.ThrottleEvents reflects batch-level
+    /// throttling too.
     ///
     /// Phase 2 (§2.6a follow-up): posts with <see cref="CancellationToken.None"/> — the caller's
     /// chunk loop already checked <c>ct.ThrowIfCancellationRequested()</c> before this batch was
@@ -242,60 +278,114 @@ public class ContactWriter : IContactWriter
     /// turning every key in the batch into a swallowed "canceled" failure.
     /// </summary>
     private async Task ExecuteBatchWithRetryAsync(
-        BatchRequestContentCollection batchContent,
-        Dictionary<string, string> stepIdToKey,
+        string mailboxEntraId,
+        IReadOnlyList<string> keys,
+        Func<string, RequestInformation> buildStep,
         Dictionary<string, BatchOperationResult> results,
         Func<BatchResponseContentCollection, string, Task<BatchOperationResult>> onSuccess)
     {
-        BatchResponseContentCollection? response = null;
+        var pendingKeys = keys;
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var batchContent = new BatchRequestContentCollection(_graphClientFactory.Client);
+            var stepIdToKey = new Dictionary<string, string>();
+            foreach (var key in pendingKeys)
+            {
+                var stepId = await batchContent.AddBatchRequestStepAsync(buildStep(key));
+                stepIdToKey[stepId] = key;
+            }
+
+            BatchResponseContentCollection? response;
+            try
+            {
+                response = await _graphClientFactory.Client.Batch.PostAsync(batchContent, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Batch request failed entirely (post {Attempt})", attempt + 1);
+                // Phase 3 (§3.7): the request may have reached Graph — the caller reconciles the folder.
+                // Only the keys in THIS post are unknown; earlier definitive answers stand.
+                foreach (var key in pendingKeys)
+                    results[key] = new BatchOperationResult(false, Error: ex.Message, OutcomeUnknown: true);
+                return;
+            }
+
+            if (response == null)
+            {
+                foreach (var key in pendingKeys)
+                    results[key] = new BatchOperationResult(false, Error: "Null batch response", OutcomeUnknown: true);
+                return;
+            }
+
+            var statusCodes = await response.GetResponsesStatusCodesAsync();
+            var retryKeys = new List<string>();
+            TimeSpan? retryAfter = null;
+
+            foreach (var (stepId, statusCode) in statusCodes)
+            {
+                if (!stepIdToKey.TryGetValue(stepId, out var key)) continue;
+
+                if (BatchResponseContent.IsSuccessStatusCode(statusCode))
+                {
+                    try
+                    {
+                        results[key] = await onSuccess(response, stepId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse batch response for step {StepId}", stepId);
+                        results[key] = new BatchOperationResult(false, Error: NoContactIdError);
+                    }
+                }
+                else if (IsRetryableStepStatus(statusCode) && attempt < MaxBatchStepRetries)
+                {
+                    retryKeys.Add(key);
+                    _throttleCounter.Increment();
+                    var stepRetryAfter = await ReadRetryAfterAsync(response, stepId);
+                    if (stepRetryAfter is not null && (retryAfter is null || stepRetryAfter > retryAfter))
+                        retryAfter = stepRetryAfter;
+                    // Provisional — overwritten by the retry's answer (or kept if it keeps failing).
+                    results[key] = new BatchOperationResult(false, Error: $"HTTP {(int)statusCode}");
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
+                        stepId, key, (int)statusCode);
+                    results[key] = new BatchOperationResult(
+                        false,
+                        Error: $"HTTP {(int)statusCode}",
+                        NotFound: (int)statusCode == 404);
+                }
+            }
+
+            if (retryKeys.Count == 0)
+                return;
+
+            var delay = RetryDelayFor(attempt + 1, retryAfter);
+            _logger.LogWarning(
+                "Retrying {Count} throttled batch step(s) for mailbox {MailboxId}, attempt {Attempt}/{Max}, after {DelayMs}ms",
+                retryKeys.Count, mailboxEntraId, attempt + 1, MaxBatchStepRetries, delay.TotalMilliseconds);
+            await _delay(delay);
+            pendingKeys = retryKeys;
+        }
+    }
+
+    /// <summary>One step's Retry-After (delta seconds or an HTTP date), or null when absent or unreadable.</summary>
+    private static async Task<TimeSpan?> ReadRetryAfterAsync(BatchResponseContentCollection response, string stepId)
+    {
         try
         {
-            response = await _graphClientFactory.Client.Batch.PostAsync(batchContent, CancellationToken.None);
+            using var http = await response.GetResponseByIdAsync(stepId);
+            var header = http.Headers.RetryAfter;
+            if (header?.Delta is TimeSpan delta) return delta;
+            if (header?.Date is DateTimeOffset date) return date - DateTimeOffset.UtcNow;
+            return null;
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogError(ex, "Batch request failed entirely");
-            // Phase 3 (§3.7): the request may have reached Graph — the caller reconciles the folder.
-            foreach (var key in stepIdToKey.Values)
-                results[key] = new BatchOperationResult(false, Error: ex.Message, OutcomeUnknown: true);
-            return;
-        }
-
-        if (response == null)
-        {
-            foreach (var key in stepIdToKey.Values)
-                results[key] = new BatchOperationResult(false, Error: "Null batch response", OutcomeUnknown: true);
-            return;
-        }
-
-        var statusCodes = await response.GetResponsesStatusCodesAsync();
-
-        foreach (var (stepId, statusCode) in statusCodes)
-        {
-            if (!stepIdToKey.TryGetValue(stepId, out var key)) continue;
-
-            if (BatchResponseContent.IsSuccessStatusCode(statusCode))
-            {
-                try
-                {
-                    results[key] = await onSuccess(response, stepId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to parse batch response for step {StepId}", stepId);
-                    results[key] = new BatchOperationResult(false, Error: NoContactIdError);
-                }
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Batch step {StepId} (key={Key}) failed with HTTP {StatusCode}",
-                    stepId, key, (int)statusCode);
-                results[key] = new BatchOperationResult(
-                    false,
-                    Error: $"HTTP {(int)statusCode}",
-                    NotFound: (int)statusCode == 404);
-            }
+            return null;
         }
     }
 
@@ -305,13 +395,13 @@ public class ContactWriter : IContactWriter
     /// </summary>
     private static async Task NotifyChunkCompletedAsync(
         Func<IReadOnlyDictionary<string, BatchOperationResult>, Task>? onChunkCompleted,
-        Dictionary<string, string> stepIdToKey,
+        IReadOnlyList<string> keys,
         Dictionary<string, BatchOperationResult> results)
     {
         if (onChunkCompleted is null) return;
 
         var chunkResults = new Dictionary<string, BatchOperationResult>();
-        foreach (var key in stepIdToKey.Values)
+        foreach (var key in keys)
         {
             if (results.TryGetValue(key, out var result))
                 chunkResults[key] = result;

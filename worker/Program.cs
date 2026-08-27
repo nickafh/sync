@@ -11,6 +11,10 @@ using Microsoft.Graph;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
+    // Phase 4 (§4.5): the Docker health check hits /health every 30 s and ASP.NET Core logged five
+    // Information lines per probe, burying the sync log. Startup (Microsoft.Hosting.Lifetime),
+    // Hangfire and the app's own categories are unaffected.
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
     .WriteTo.Console(new Serilog.Formatting.Json.JsonFormatter())
     .CreateLogger();
 
