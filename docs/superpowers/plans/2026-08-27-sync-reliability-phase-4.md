@@ -1059,7 +1059,7 @@ Expected: empty status; 3 commits (spec, §4.1, §4.2+§4.5) plus this plan if c
 
 - [ ] **Step 2: Integration choice**
 
-Present the merge / PR / keep options (superpowers:finishing-a-development-branch). PR body:
+Merged locally 2026-08-27 (Nick's choice). Final PR-body / deploy notes as shipped:
 
 ```markdown
 ## Why
@@ -1074,26 +1074,42 @@ Spec: docs/superpowers/specs/2026-08-25-sync-reliability-design.md (Phase 4 §4.
   rewrites a stored hash that matches the legacy formula locally (`LastResult = "rehashed"`, no Graph
   write) — the formula change migrates itself on the next run instead of PATCHing ~1M contacts. No
   runbook, no cron pause.
-- §4.2 `ContactWriter` re-posts only the 429/503/504 steps (`NewBatchWithFailedRequests`) up to 3×,
-  waiting the largest `Retry-After` (≤ 5 min) else 2 s × attempt; each retried step increments
-  `ThrottleCounter`; a transport failure on a retry marks only that retry batch `OutcomeUnknown`.
+- §4.2 `ContactWriter` builds every `$batch` itself (initial and retry) from the original operations and
+  re-posts only the 429/503/504 steps up to 3×, waiting the largest `Retry-After` (≤ 5 min) else
+  2 s × attempt; each retried step increments `ThrottleCounter`; a transport failure on a retry marks only
+  that post's steps `OutcomeUnknown`. (`NewBatchWithFailedRequests` was rejected: Microsoft.Graph.Core
+  3.2.5 renumbers step ids.) The retry wait is cancellable so worker shutdown is not delayed.
 - §4.5 Serilog override `Microsoft.AspNetCore` → Warning in the worker.
 
 ## Tests
-- Unit: 355 passed / 1 pre-existing skip (was 331): builder hash/legacy ×4, engine rehash ×2, batch retry
-  ×5 facts + 13 theory rows.
+- Unit: 356 passed / 1 pre-existing skip (was 331): builder hash/legacy ×4, engine rehash ×2, batch retry
+  ×6 facts + 13 theory rows (incl. shutdown-abandons-retries), post-retry chunk-callback assertion.
 - Integration: 49/0 with Postgres (unchanged — no API or schema change). Frontend untouched (19/19).
 
 ## Deploy
 1. `./deploy.sh` (let it pull; only `worker/` changed ⇒ it rebuilds the worker). No migration.
-2. First run after deploy: `docker logs afh-worker | grep Rehashed` shows `Rehashed N contact state(s) …`
-   per mailbox (N ≈ every contact whose profile has an AddMissing value — Department in the default
-   profile); run detail shows those contacts as **skipped**, not updated, and `contactsUpdated` stays
-   small. The second run logs no rehashes.
-3. `docker logs afh-worker` no longer shows `/health` request lines; `Retrying N throttled batch step(s)…`
-   appears when Graph throttles, and the run's Throttle Events counter now includes batch-level retries.
-4. Rollback: revert the worker image; rows already rehashed carry the new formula, which the old code would
-   treat as changed and PATCH once — harmless.
+2. First run after deploy: `docker logs afh-worker | grep Rehashed` shows `Rehashed N contact state(s) in
+   mailbox …` per mailbox (N ≈ every contact whose profile has a non-blank AddMissing value — Department in
+   the default profile); run detail shows those contacts as **skipped**; `contactsUpdated` stays small
+   (real source changes, plus rows whose Department changed since their last sync — those take one
+   harmless PATCH, the payload excludes AddMissing for existing contacts). The second run logs zero
+   `Rehashed` lines. Run 1 should not be materially longer than run 0 (the rehash is local).
+3. `docker exec afh-postgres psql -U afhsync -d afhsync -c "SELECT count(*) FROM contact_sync_state WHERE last_result = 'rehashed';"`
+   after run 1 ≈ contacts with a non-blank Department; `previous_data_hash` populated on those rows.
+4. `docker logs afh-worker` no longer shows `Request starting HTTP/1.1 GET /health` lines (`Now listening on`
+   and sync lines still present). When Graph throttles: `Retrying N throttled batch step(s) for mailbox …,
+   attempt A/3, after Dms` appears, the run's Throttle Events > 0, and steps that recovered produce no
+   `HTTP 429` failure items. Throttle Events now counts retries at both layers (a whole-POST retry = 1, a
+   batch with 20 throttled steps = 20).
+5. Shutdown check: `docker compose stop worker` during a run still finalizes it `Cancelled · worker shutting
+   down` within 60 s — the retry wait is cancellable.
+6. **Rollback.** Before the first post-deploy run: revert the worker image, free. After it: every rehashed
+   row carries the new formula, and the old worker would PATCH each once — exactly the ~1M-write wave §4.1
+   avoids. If you must roll back after run 1, pause the cron (`sync_schedule_cron`), redeploy the old
+   worker, trigger one manual run off-hours, re-enable. Keep the legacy-hash code for at least one rollback
+   cycle; delete it once a full run has completed with zero `Rehashed` lines (follow-up).
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
 ---
