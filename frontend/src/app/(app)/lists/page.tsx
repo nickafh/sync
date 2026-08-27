@@ -17,6 +17,7 @@ import { Phone, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { UserSearchResult } from '@/types/tunnel';
 import type { ContactDto, PhoneListDto, TargetUserFilterDdg, TargetUserFilterShape } from '@/types/phone-list';
+import type { DdgMemberDto } from '@/types/ddg';
 import { DDGSearchList } from '@/components/DDGSearchList';
 import { UnavailableMailboxes } from '@/components/UnavailableMailboxes';
 
@@ -525,7 +526,16 @@ function EmailSearchPicker({
   const handleAddGroup = async (groupEmail: string) => {
     setAddingGroup(groupEmail);
     try {
-      const members = await api.ddgs.getMembers(groupEmail, 1, 999);
+      // Phase 3 (§3.4): the endpoint pages; walk every page (a DDG can exceed one Graph page).
+      const members: DdgMemberDto[] = [];
+      let page = 1;
+      let hasMore = true;
+      while (hasMore && page <= 20) {
+        const result = await api.ddgs.getMembers(groupEmail, page, 999);
+        members.push(...result.items);
+        hasMore = result.hasMore;
+        page += 1;
+      }
       const newEmails = members
         .map((m) => m.email)
         .filter((e): e is string => !!e)

@@ -429,13 +429,8 @@ public class TunnelsController : ControllerBase
                 {
                     if (src.SourceType == "mailbox_contacts")
                     {
-                        // Count contacts in the shared mailbox
-                        var contactsPage = await _graphClient.Users[src.SourceIdentifier].Contacts.GetAsync(cfg =>
-                        {
-                            cfg.QueryParameters.Select = ["id"];
-                            cfg.QueryParameters.Top = 999;
-                        });
-                        totalNewCount += contactsPage?.Value?.Count ?? 0;
+                        // Phase 3 (§3.4): count every page of the configured folder (root when none).
+                        totalNewCount += await CountMailboxContactsAsync(src.SourceIdentifier, src.ContactFolderId, HttpContext.RequestAborted);
                     }
                     else if (src.SourceType == "org_contacts")
                     {
@@ -463,7 +458,8 @@ public class TunnelsController : ControllerBase
                             cfg.QueryParameters.Count = true;
                             cfg.Headers.Add("ConsistencyLevel", "eventual");
                         });
-                        totalNewCount += usersPage?.Value?.Count ?? 0;
+                        // Phase 3 (§3.4): @odata.count is the tenant-wide match count; Value.Count was one page.
+                        totalNewCount += (int?)usersPage?.OdataCount ?? usersPage?.Value?.Count ?? 0;
                     }
                 }
 
@@ -502,6 +498,40 @@ public class TunnelsController : ControllerBase
         }
 
         return Ok(new ImpactPreviewResponse(estimatedCreates, estimatedUpdates, estimatedRemovals));
+    }
+
+    /// <summary>
+    /// Counts the contacts in a mailbox's contact folder (root Contacts when <paramref name="contactFolderId"/>
+    /// is null) by paging Graph — personal contacts do not support $count.
+    /// </summary>
+    private async Task<int> CountMailboxContactsAsync(string mailbox, string? contactFolderId, CancellationToken ct)
+    {
+        Microsoft.Graph.Models.ContactCollectionResponse? response;
+        if (!string.IsNullOrEmpty(contactFolderId))
+        {
+            response = await _graphClient.Users[mailbox].ContactFolders[contactFolderId].Contacts.GetAsync(cfg =>
+            {
+                cfg.QueryParameters.Select = ["id"];
+                cfg.QueryParameters.Top = 999;
+            }, ct);
+        }
+        else
+        {
+            response = await _graphClient.Users[mailbox].Contacts.GetAsync(cfg =>
+            {
+                cfg.QueryParameters.Select = ["id"];
+                cfg.QueryParameters.Top = 999;
+            }, ct);
+        }
+
+        if (response?.Value is null)
+            return 0;
+
+        var count = 0;
+        var iterator = PageIterator<Microsoft.Graph.Models.Contact, Microsoft.Graph.Models.ContactCollectionResponse>
+            .CreatePageIterator(_graphClient, response, _ => { count++; return true; });
+        await iterator.IterateAsync(ct);
+        return count;
     }
 
     /// <summary>

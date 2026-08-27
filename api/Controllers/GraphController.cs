@@ -85,48 +85,60 @@ public class GraphController : ControllerBase
     }
 
     /// <summary>
-    /// GET /api/graph/ddgs/{id}/members?top=10 - Get sample members of a DDG via Graph.
-    /// Uses the converted $filter to query users from Microsoft Graph.
-    /// Per DDG-03: Returns sample members with displayName, email, jobTitle, department, officeLocation.
+    /// GET /api/graph/ddgs/{id}/members?page=1&amp;pageSize=50 - Members of a DDG via Graph.
+    /// Uses the converted $filter to query users from Microsoft Graph, paging through Graph
+    /// (which has no $skip for /users) with a PageWindow (§3.4). Max pageSize 999.
     /// </summary>
     [HttpGet("ddgs/{id}/members")]
-    public async Task<ActionResult<DdgMemberDto[]>> GetDdgMembers(
-        string id, [FromQuery] int top = 10, CancellationToken ct = default)
+    public async Task<ActionResult<PagedResult<DdgMemberDto>>> GetDdgMembers(
+        string id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
     {
         var ddg = await _ddgResolver.GetDdgAsync(id, ct);
         if (ddg == null)
             return NotFound(new { message = $"DDG not found: {id}" });
+
+        var window = new PageWindow<DdgMemberDto>(page, pageSize, maxPageSize: 999);
 
         var conversion = _filterConverter.Convert(ddg.RecipientFilter);
         if (!conversion.Success || string.IsNullOrWhiteSpace(conversion.Filter))
         {
             Response.Headers.Append("X-Filter-Warning",
                 conversion.Warning ?? "Filter conversion failed");
-            return Ok(Array.Empty<DdgMemberDto>());
+            return Ok(window.ToResult());
         }
 
         try
         {
-            var users = await _graphClient.Users.GetAsync(config =>
+            var response = await _graphClient.Users.GetAsync(config =>
             {
                 config.QueryParameters.Filter = conversion.Filter;
-                config.QueryParameters.Top = top;
+                config.QueryParameters.Top = 999;
                 config.QueryParameters.Select =
                     ["id", "displayName", "mail", "jobTitle", "department", "officeLocation"];
+                config.QueryParameters.Orderby = ["displayName"];
                 config.Headers.Add("ConsistencyLevel", "eventual");
                 config.QueryParameters.Count = true;
             }, ct);
 
-            var members = (users?.Value ?? []).Select(u => new DdgMemberDto(
-                Id: u.Id ?? string.Empty,
-                DisplayName: u.DisplayName ?? string.Empty,
-                Email: u.Mail,
-                JobTitle: u.JobTitle,
-                Department: u.Department,
-                OfficeLocation: u.OfficeLocation
-            )).ToArray();
+            if (response?.Value != null)
+            {
+                var iterator = PageIterator<User, UserCollectionResponse>
+                    .CreatePageIterator(_graphClient, response, u => window.Accept(new DdgMemberDto(
+                        Id: u.Id ?? string.Empty,
+                        DisplayName: u.DisplayName ?? string.Empty,
+                        Email: u.Mail,
+                        JobTitle: u.JobTitle,
+                        Department: u.Department,
+                        OfficeLocation: u.OfficeLocation)),
+                    req =>
+                    {
+                        req.Headers.Add("ConsistencyLevel", "eventual");
+                        return req;
+                    });
+                await iterator.IterateAsync(ct);
+            }
 
-            return Ok(members);
+            return Ok(window.ToResult());
         }
         catch (Exception ex)
         {
@@ -135,7 +147,7 @@ public class GraphController : ControllerBase
                 id, conversion.Filter);
             Response.Headers.Append("X-Filter-Warning",
                 $"Graph query failed: {ex.Message}");
-            return Ok(Array.Empty<DdgMemberDto>());
+            return Ok(new PagedResult<DdgMemberDto>([], false));
         }
     }
 
@@ -148,24 +160,42 @@ public class GraphController : ControllerBase
     {
         try
         {
-            var groups = await _graphClient.Groups.GetAsync(config =>
+            var result = new List<SecurityGroupDto>();
+            var response = await _graphClient.Groups.GetAsync(config =>
             {
                 config.QueryParameters.Filter = "securityEnabled eq true and mailEnabled eq false";
                 config.QueryParameters.Select = ["id", "displayName", "description", "membershipRule"];
-                config.QueryParameters.Top = 200;
+                config.QueryParameters.Top = 999;
                 config.QueryParameters.Orderby = ["displayName"];
                 config.QueryParameters.Count = true;
                 config.Headers.Add("ConsistencyLevel", "eventual");
             }, ct);
 
-            var result = (groups?.Value ?? []).Select(g => new SecurityGroupDto(
-                g.Id ?? string.Empty,
-                g.DisplayName ?? string.Empty,
-                g.Description,
-                g.MembershipRule
-            )).ToArray();
+            // Phase 3 (§3.4): page through every group instead of returning the first 200,
+            // capped at GraphQuery.SecurityGroupCap so a huge tenant can't stall the picker.
+            if (response?.Value != null)
+            {
+                var iterator = PageIterator<Group, GroupCollectionResponse>
+                    .CreatePageIterator(_graphClient, response, g =>
+                    {
+                        result.Add(new SecurityGroupDto(
+                            g.Id ?? string.Empty,
+                            g.DisplayName ?? string.Empty,
+                            g.Description,
+                            g.MembershipRule));
+                        return result.Count < GraphQuery.SecurityGroupCap;
+                    },
+                    req =>
+                    {
+                        req.Headers.Add("ConsistencyLevel", "eventual");
+                        return req;
+                    });
+                await iterator.IterateAsync(ct);
+                if (result.Count >= GraphQuery.SecurityGroupCap)
+                    _logger.LogWarning("Security group listing hit the cap of {Cap}; the picker is truncated", GraphQuery.SecurityGroupCap);
+            }
 
-            return Ok(result);
+            return Ok(result.ToArray());
         }
         catch (Exception ex)
         {
@@ -249,8 +279,9 @@ public class GraphController : ControllerBase
         {
             var users = await _graphClient.Users.GetAsync(config =>
             {
+                var escaped = GraphQuery.EscapeLiteral(q);
                 config.QueryParameters.Filter =
-                    $"startsWith(displayName,'{q}') or startsWith(mail,'{q}')";
+                    $"startsWith(displayName,'{escaped}') or startsWith(mail,'{escaped}')";
                 config.QueryParameters.Select = ["id", "displayName", "mail", "jobTitle"];
                 config.QueryParameters.Top = 10;
                 config.QueryParameters.Orderby = ["displayName"];

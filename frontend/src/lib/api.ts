@@ -130,7 +130,7 @@ export const api = {
     list: () => fetchApi<DdgDto[]>('/graph/ddgs'),
     get: (id: string) => fetchApi<DdgDto>(`/graph/ddgs/${id}`),
     getMembers: (id: string, page: number, pageSize: number) =>
-      fetchApi<DdgMemberDto[]>(`/graph/ddgs/${id}/members?page=${page}&pageSize=${pageSize}`),
+      fetchApi<PagedResult<DdgMemberDto>>(`/graph/ddgs/${id}/members?page=${page}&pageSize=${pageSize}`),
   },
 
   securityGroups: {
