@@ -72,12 +72,16 @@ public class FolderReconcilerTests
     private static readonly Tunnel Tunnel = new() { Id = 1, Name = "Buckhead" };
     private static readonly TargetMailbox Mailbox = new() { Id = 7, EntraId = "mbx-7", Email = "seven@contoso.com" };
 
-    private static async Task SeedStateAsync(string dbName, int sourceUserId, string graphContactId)
+    private static Task SeedStateAsync(string dbName, int sourceUserId, string graphContactId)
+        => SeedStateAsync(dbName, sourceUserId, graphContactId, Tunnel.Id);
+
+    /// <summary>Overload that lets a test set TunnelId explicitly — including null, for a legacy row.</summary>
+    private static async Task SeedStateAsync(string dbName, int sourceUserId, string graphContactId, int? tunnelId)
     {
         using var ctx = MakeDbContext(dbName);
         ctx.ContactSyncStates.Add(new ContactSyncState
         {
-            SourceUserId = sourceUserId, PhoneListId = 1, TargetMailboxId = Mailbox.Id, TunnelId = Tunnel.Id,
+            SourceUserId = sourceUserId, PhoneListId = 1, TargetMailboxId = Mailbox.Id, TunnelId = tunnelId,
             GraphContactId = graphContactId, DataHash = "h", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
         });
         await ctx.SaveChangesAsync();
@@ -163,6 +167,42 @@ public class FolderReconcilerTests
 
         Assert.Equal(new FolderReconcileResult(1, 0, 0), result);
         Assert.Empty(writer.DeletedContactIds);
+    }
+
+    [Fact]
+    public async Task ContactKnownToAnotherTunnelInSameMailbox_IsNeitherAdoptedNorRemoved()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedStateAsync(dbName, sourceUserId: 2, graphContactId: "g-other", tunnelId: 2);
+        var writer = new RecordingContactWriter();
+        var reconciler = new FakeFolderReconciler(dbName, writer);
+        reconciler.FolderContacts.Add(new GraphContactStub("g-other", "Other", "other@contoso.com"));
+        var users = new List<SourceUser> { new() { Id = 2, EntraId = "u2", DisplayName = "Other", Email = "other@contoso.com" } };
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, users, CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(1, 0, 0), result);
+        Assert.Empty(writer.DeletedContactIds);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.ContactSyncStates.CountAsync());   // nothing adopted — the row for tunnel 2 is untouched
+    }
+
+    [Fact]
+    public async Task ContactKnownByLegacyRowWithoutTunnel_IsLeftAlone()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedStateAsync(dbName, sourceUserId: 2, graphContactId: "g-other", tunnelId: null);
+        var writer = new RecordingContactWriter();
+        var reconciler = new FakeFolderReconciler(dbName, writer);
+        reconciler.FolderContacts.Add(new GraphContactStub("g-other", "Other", "other@contoso.com"));
+        var users = new List<SourceUser> { new() { Id = 2, EntraId = "u2", DisplayName = "Other", Email = "other@contoso.com" } };
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, users, CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(1, 0, 0), result);
+        Assert.Empty(writer.DeletedContactIds);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.ContactSyncStates.CountAsync());   // nothing adopted
     }
 
     [Fact]

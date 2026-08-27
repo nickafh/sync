@@ -14,7 +14,10 @@ public sealed record GraphContactStub(string Id, string? DisplayName, string? Em
 /// lower-cased, else display name lower-cased); if a current source user has that key and no
 /// state row yet, ADOPT the contact (state row with the Graph id, data_hash NULL so the next
 /// classification PATCHes it into shape); otherwise REMOVE it. Known contacts — including stale
-/// ones — are never touched; that is the stale handler's job.
+/// ones — are never touched; that is the stale handler's job. A contact is "known" when ANY
+/// contact_sync_state row in this mailbox references its Graph id, regardless of which tunnel
+/// (or no tunnel, for legacy rows) owns that row — tunnel names are not unique, so two tunnels
+/// can share one Graph folder and must not steal or delete each other's contacts.
 ///
 /// Graph listing is a <c>protected virtual</c> seam so unit tests can subclass this class.
 /// </summary>
@@ -62,14 +65,22 @@ public class FolderReconciler : IFolderReconciler
 
         // Bookkeeping writes use CancellationToken.None: an adopted row must not be lost to a shutdown.
         await using var db = await _dbContextFactory.CreateDbContextAsync(CancellationToken.None);
-        var states = await db.ContactSyncStates
-            .Where(s => s.TunnelId == tunnel.Id && s.TargetMailboxId == mailbox.Id)
+        var mailboxStates = await db.ContactSyncStates
+            .Where(s => s.TargetMailboxId == mailbox.Id)
             .ToListAsync(CancellationToken.None);
-        var knownIds = states
+        // Known = any state row in this mailbox, from any tunnel (including legacy rows with
+        // tunnel_id IS NULL) — two tunnels can share one Graph folder (tunnel names are not
+        // unique), so a contact another tunnel owns must never look like a stray here.
+        var knownIds = mailboxStates
             .Where(s => !string.IsNullOrEmpty(s.GraphContactId))
             .Select(s => s.GraphContactId!)
             .ToHashSet(StringComparer.Ordinal);
-        var usersWithState = states.Select(s => s.SourceUserId).ToHashSet();
+        // Adoption eligibility is still scoped to THIS tunnel: a user with a state row under a
+        // different tunnel may still need one adopted for this tunnel's own folder.
+        var usersWithState = mailboxStates
+            .Where(s => s.TunnelId == tunnel.Id)
+            .Select(s => s.SourceUserId)
+            .ToHashSet();
 
         var usersByKey = new Dictionary<string, SourceUser>(StringComparer.Ordinal);
         foreach (var user in sourceUsers)

@@ -99,6 +99,7 @@ public sealed class SyncEngine(
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
         _targetMailboxesRefreshed = false;
+        TargetMailboxRefreshAttempts = 0;
 
         // Clear any stale cancel_sync flag from a prior aborted run so this run
         // doesn't immediately self-cancel. A sync that gets killed externally
@@ -1032,10 +1033,9 @@ public sealed class SyncEngine(
             // (every chunk answered and persisted) clears it. Anything in between — a crash, a
             // shutdown, an exception — leaves it for the next run to reconcile.
             await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: true);
-            var createOutcomeUnknown = false;
             var createResults = await contactWriter.CreateContactsBatchAsync(
                 mailbox.EntraId, targetFolderId, batchOps, OnCreateChunkCompleted, ct);
-            createOutcomeUnknown = createResults.Values.Any(r => r.OutcomeUnknown);
+            var createOutcomeUnknown = createResults.Values.Any(r => r.OutcomeUnknown);
 
             if (createOutcomeUnknown)
             {
@@ -1087,7 +1087,7 @@ public sealed class SyncEngine(
         MailboxCounters counters,
         CancellationToken ct)
     {
-        // Phase 2: Execute Graph writes using batching (up to 20 per HTTP call).
+        // Update batch (up to 20 PATCHes per $batch call); creates were executed in ExecuteCreatesAsync.
         // Sync-state IDs whose contact 404'd on update (deleted on the device). We drop the dead
         // state row at the end of the mailbox so the next run recreates the contact.
         var statesToHeal = new List<int>();

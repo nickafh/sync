@@ -6,5 +6,5 @@ public class RunLocksTests
 {
     [Fact]
     public void AcquireRunStartLockSql_UsesTheSharedKey()
-        => Assert.Equal($"SELECT pg_advisory_xact_lock({RunLocks.RunStartAdvisoryKey})", RunLocks.AcquireRunStartLockSql);
+        => Assert.Equal(RunLocks.AcquireRunStartLockSql, $"SELECT pg_advisory_xact_lock({RunLocks.RunStartAdvisoryKey})");
 }

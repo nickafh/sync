@@ -98,7 +98,11 @@ public class TunnelsController : ControllerBase
                 t.FieldProfile?.Name,
                 t.TunnelPhoneLists.Select(tp => new TunnelTargetListDto(tp.PhoneList.Id, tp.PhoneList.Name)).ToArray(),
                 stats?.ContactCount ?? 0,
-                latest?.TargetsCount ?? stats?.TargetUserCount ?? 0,
+                // A Failed/Cancelled record's TargetsCount is 0 (no targets were resolved that
+                // run) and must not shadow the state-derived count from the last successful sync.
+                latest is not null && latest.Status is SyncStatus.Success or SyncStatus.Warning
+                    ? latest.TargetsCount
+                    : stats?.TargetUserCount ?? 0,
                 lastSync,
                 t.PhotoSyncEnabled,
                 t.TargetGroupId,

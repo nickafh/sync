@@ -1400,6 +1400,8 @@ public class SyncEngineTests
         await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
 
         Assert.Equal(1, engine.TargetMailboxRefreshAttempts);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(2, await verifyCtx.SyncRunTunnels.CountAsync());   // one row per tunnel
     }
 
     [Fact]
@@ -1476,6 +1478,29 @@ public class SyncEngineTests
         Assert.Empty(reconciler.Calls);
         await using var verifyCtx = MakeDbContext(dbName);
         Assert.Null((await verifyCtx.TunnelMailboxFolders.SingleAsync()).ReconcilePendingAt);   // set before the batch, cleared after
+    }
+
+    [Fact]
+    public async Task RunAsync_CreateBatchThrows_LeavesReconcileFlagSetForNextRun()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        await SeedKnownFolderAsync(dbName, tunnelId: 1, mailboxId: 1, reconcilePendingAt: null);
+        var reconciler = new FakeFolderReconciler();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: new FakeContactWriter { ThrowOnChunkIndex = 0 },
+            folderReconciler: reconciler,
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);   // the batch threw before any result — no unknown-outcome reconcile
+        Assert.True(runLogger.WasFinalized);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.NotNull((await verifyCtx.TunnelMailboxFolders.SingleAsync()).ReconcilePendingAt);   // set before the batch, never cleared
     }
 
     [Fact]

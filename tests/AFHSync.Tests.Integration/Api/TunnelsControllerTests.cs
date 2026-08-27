@@ -300,6 +300,42 @@ public class TunnelsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task GetAll_FailedLatestRecord_FallsBackToStateDerivedTargetUsers()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        var tunnel = new Tunnel { Name = "Failed Record Tunnel", StalePolicy = StalePolicy.FlagHold, StaleHoldDays = 14, Status = TunnelStatus.Active, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.Tunnels.Add(tunnel);
+        var mailbox = new TargetMailbox { EntraId = "mbx-failed", Email = "failed@contoso.com", IsActive = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.TargetMailboxes.Add(mailbox);
+        var sourceUser = new SourceUser { EntraId = "u-failed", DisplayName = "Failed User", Email = "user@contoso.com", IsEnabled = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        db.SourceUsers.Add(sourceUser);
+        var run = new SyncRun { RunType = RunType.Scheduled, Status = SyncStatus.Failed, StartedAt = DateTime.UtcNow.AddHours(-1), CompletedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow.AddHours(-1) };
+        db.SyncRuns.Add(run);
+        await db.SaveChangesAsync();
+
+        db.ContactSyncStates.Add(new ContactSyncState
+        {
+            SourceUserId = sourceUser.Id, TunnelId = tunnel.Id, PhoneListId = 1, TargetMailboxId = mailbox.Id,
+            GraphContactId = "g-1", DataHash = "h", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        db.SyncRunTunnels.Add(new SyncRunTunnel
+        {
+            SyncRunId = run.Id, TunnelId = tunnel.Id, TunnelName = tunnel.Name, Status = SyncStatus.Failed,
+            TargetsCount = 0, ContactsUpdated = 0, StartedAt = DateTime.UtcNow.AddHours(-1), CompletedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedGetAsync("/api/tunnels");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var tunnels = await response.Content.ReadFromJsonAsync<List<System.Text.Json.JsonElement>>();
+        var dto = tunnels!.Single(t => t.GetProperty("id").GetInt32() == tunnel.Id);
+        Assert.Equal(1, dto.GetProperty("estimatedTargetUsers").GetInt32());
+        Assert.Equal("failed", dto.GetProperty("lastSync").GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task PostTunnel_EmptyTargetUserEmails_Returns400()
     {
         var createRequest = new
