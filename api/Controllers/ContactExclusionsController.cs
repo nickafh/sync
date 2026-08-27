@@ -127,7 +127,7 @@ public class ContactExclusionsController : ControllerBase
                         break;
 
                     case SourceType.MailboxContacts:
-                        var contacts = await ResolveMailboxContactsAsync(source.SourceIdentifier, ct);
+                        var contacts = await ResolveMailboxContactsAsync(source.SourceIdentifier, source.ContactFolderId, ct);
                         resolved.AddRange(contacts.Select(c => new SourceContactDto(
                             0, c.entraId, c.displayName, c.email, c.companyName, c.jobTitle, null,
                             excludedSet.Contains(c.entraId))));
@@ -197,30 +197,33 @@ public class ContactExclusionsController : ControllerBase
         if (!exists)
             return NotFound(new { message = $"Tunnel {tunnelId} not found." });
 
-        // Clear existing exclusions
-        await _db.TunnelContactExclusions
+        // Phase 3 (§3.5): delete + insert in ONE SaveChangesAsync (one transaction on Postgres),
+        // de-duplicated by EntraId so a doubled-up request can't insert the same contact twice.
+        var existing = await _db.TunnelContactExclusions
             .Where(e => e.TunnelId == tunnelId)
-            .ExecuteDeleteAsync();
+            .ToListAsync();
+        _db.TunnelContactExclusions.RemoveRange(existing);
 
-        // Insert new exclusions
-        if (request.Exclusions is { Length: > 0 })
+        var distinct = (request.Exclusions ?? [])
+            .Where(e => !string.IsNullOrWhiteSpace(e.EntraId))
+            .DistinctBy(e => e.EntraId.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var now = DateTime.UtcNow;
+        foreach (var exclusion in distinct)
         {
-            var now = DateTime.UtcNow;
-            foreach (var exclusion in request.Exclusions)
+            _db.TunnelContactExclusions.Add(new TunnelContactExclusion
             {
-                _db.TunnelContactExclusions.Add(new TunnelContactExclusion
-                {
-                    TunnelId = tunnelId,
-                    EntraId = exclusion.EntraId,
-                    DisplayName = exclusion.DisplayName,
-                    Email = exclusion.Email,
-                    CreatedAt = now,
-                });
-            }
-            await _db.SaveChangesAsync();
+                TunnelId = tunnelId,
+                EntraId = exclusion.EntraId.Trim(),
+                DisplayName = exclusion.DisplayName,
+                Email = exclusion.Email,
+                CreatedAt = now,
+            });
         }
+        await _db.SaveChangesAsync();
 
-        return Ok(new { message = $"Saved {request.Exclusions?.Length ?? 0} exclusion(s)." });
+        return Ok(new { message = $"Saved {distinct.Count} exclusion(s)." });
     }
 
     // --- Graph resolution helpers ---
@@ -256,23 +259,44 @@ public class ContactExclusionsController : ControllerBase
         return results;
     }
 
+    /// <summary>
+    /// Phase 3 (§3.5): reads the configured contact folder (root Contacts when none) and pages
+    /// through it, so a Contact Filters list for a subfolder source shows that subfolder.
+    /// </summary>
     private async Task<List<(string entraId, string? displayName, string? email, string? companyName, string? jobTitle)>>
-        ResolveMailboxContactsAsync(string mailboxEmail, CancellationToken ct)
+        ResolveMailboxContactsAsync(string mailboxEmail, string? contactFolderId, CancellationToken ct)
     {
         var results = new List<(string, string?, string?, string?, string?)>();
-        var response = await _graphClient.Users[mailboxEmail].Contacts.GetAsync(config =>
+        var select = new[] { "id", "displayName", "emailAddresses", "companyName", "jobTitle" };
+
+        ContactCollectionResponse? response;
+        if (!string.IsNullOrEmpty(contactFolderId))
         {
-            config.QueryParameters.Select = ["id", "displayName", "emailAddresses", "companyName", "jobTitle"];
-            config.QueryParameters.Top = 999;
-        }, ct);
+            response = await _graphClient.Users[mailboxEmail].ContactFolders[contactFolderId].Contacts.GetAsync(config =>
+            {
+                config.QueryParameters.Select = select;
+                config.QueryParameters.Top = 999;
+            }, ct);
+        }
+        else
+        {
+            response = await _graphClient.Users[mailboxEmail].Contacts.GetAsync(config =>
+            {
+                config.QueryParameters.Select = select;
+                config.QueryParameters.Top = 999;
+            }, ct);
+        }
 
         if (response?.Value != null)
         {
-            foreach (var contact in response.Value)
-            {
-                var email = contact.EmailAddresses?.FirstOrDefault()?.Address;
-                results.Add((contact.Id ?? "", contact.DisplayName, email, contact.CompanyName, contact.JobTitle));
-            }
+            var pageIterator = PageIterator<Contact, ContactCollectionResponse>
+                .CreatePageIterator(_graphClient, response, contact =>
+                {
+                    var email = contact.EmailAddresses?.FirstOrDefault()?.Address;
+                    results.Add((contact.Id ?? "", contact.DisplayName, email, contact.CompanyName, contact.JobTitle));
+                    return true;
+                });
+            await pageIterator.IterateAsync(ct);
         }
         return results;
     }
