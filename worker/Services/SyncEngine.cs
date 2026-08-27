@@ -409,14 +409,7 @@ public sealed class SyncEngine(
             logger.LogError("Tunnel {TunnelName}: source '{Source}' failed: {Reason}",
                 tunnel.Name, failure.DisplayName, failure.Reason);
             tunnelErrors.Add($"{tunnel.Name}: source '{failure.DisplayName}' failed: {failure.Reason}");
-            runLogger.AddItem(new SyncRunItem
-            {
-                SyncRunId = run.Id,
-                TunnelId = tunnel.Id,
-                Action = "failed",
-                ErrorMessage = $"Source '{failure.DisplayName}': {failure.Reason}",
-                CreatedAt = DateTime.UtcNow
-            });
+            RecordFailedItem(run, tunnel, null, null, null, $"Source '{failure.DisplayName}': {failure.Reason}");
             sourceFailures++;
         }
         var skipStale = sourceFailures > 0;
@@ -487,15 +480,7 @@ public sealed class SyncEngine(
                             "Tunnel {TunnelName}: DDG target '{Ddg}' failed: {Reason}",
                             tunnel.Name, ddgName, failure.Reason);
                         tunnelErrors.Add($"{tunnel.Name}: DDG target '{ddgName}' failed: {failure.Reason}");
-                        runLogger.AddItem(new SyncRunItem
-                        {
-                            SyncRunId = run.Id,
-                            TunnelId = tunnel.Id,
-                            PhoneListId = canonicalPl.Id,
-                            Action = "failed",
-                            ErrorMessage = $"DDG target '{ddgName}': {failure.Reason}",
-                            CreatedAt = DateTime.UtcNow
-                        });
+                        RecordFailedItem(run, tunnel, canonicalPl.Id, null, null, $"DDG target '{ddgName}': {failure.Reason}");
                         ddgTargetFailures++;
                     }
                 }
@@ -636,16 +621,7 @@ public sealed class SyncEngine(
                     "Unhandled error processing mailbox {MailboxId} ({Email}) for tunnel {TunnelId}; counting as a single failure and continuing",
                     mailbox.Id, mailbox.Email, tunnel.Id);
 
-                runLogger.AddItem(new SyncRunItem
-                {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = canonicalPhoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    Action = "failed",
-                    ErrorMessage = $"Mailbox '{mailbox.Email}': {ex.Message}",
-                    CreatedAt = DateTime.UtcNow
-                });
+                RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, null, $"Mailbox '{mailbox.Email}': {ex.Message}");
 
                 lock (counterLock)
                 {
@@ -724,17 +700,7 @@ public sealed class SyncEngine(
 
             logger.LogError(ex, "Failed to get/create folder '{FolderName}' in mailbox {MailboxId}", tunnel.Name, mailbox.Id);
             // Record as a SyncRunItem so the failure shows up in the run-detail "Failed" tab.
-            runLogger.AddItem(new SyncRunItem
-            {
-                SyncRunId = run.Id,
-                TunnelId = tunnel.Id,
-                PhoneListId = canonicalPhoneList.Id,
-                TargetMailboxId = mailbox.Id,
-                SourceUserId = null,
-                Action = "failed",
-                ErrorMessage = $"Folder '{tunnel.Name}': {ex.Message}",
-                CreatedAt = DateTime.UtcNow
-            });
+            RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, null, $"Folder '{tunnel.Name}': {ex.Message}");
             failed++;
             return (created, updated, skipped, failed, removed);
         }
@@ -881,17 +847,7 @@ public sealed class SyncEngine(
                 logger.LogError(ex, "Failed to build payload for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     sourceUser.Id, mailbox.Id);
 
-                runLogger.AddItem(new SyncRunItem
-                {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = canonicalPhoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    SourceUserId = sourceUser.Id,
-                    Action = "failed",
-                    ErrorMessage = ex.Message,
-                    CreatedAt = DateTime.UtcNow
-                });
+                RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, sourceUser.Id, ex.Message);
                 failed++;
             }
         }
@@ -956,17 +912,7 @@ public sealed class SyncEngine(
                         logger.LogError("Batch create failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
                             pending.sourceUserId, mailbox.Id, error);
 
-                        runLogger.AddItem(new SyncRunItem
-                        {
-                            SyncRunId = run.Id,
-                            TunnelId = tunnel.Id,
-                            PhoneListId = canonicalPhoneList.Id,
-                            TargetMailboxId = mailbox.Id,
-                            SourceUserId = pending.sourceUserId,
-                            Action = "failed",
-                            ErrorMessage = error,
-                            CreatedAt = DateTime.UtcNow
-                        });
+                        RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, error);
                         failed++;
                     }
                 }
@@ -996,17 +942,7 @@ public sealed class SyncEngine(
             {
                 logger.LogError("Batch create returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     pending.sourceUserId, mailbox.Id);
-                runLogger.AddItem(new SyncRunItem
-                {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = canonicalPhoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    SourceUserId = pending.sourceUserId,
-                    Action = "failed",
-                    ErrorMessage = "No batch result returned",
-                    CreatedAt = DateTime.UtcNow
-                });
+                RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, "No batch result returned");
                 failed++;
             }
         }
@@ -1090,17 +1026,7 @@ public sealed class SyncEngine(
                         logger.LogError("Batch update failed for SourceUserId={SourceUserId} in mailbox {MailboxId}: {Error}",
                             pending.sourceUserId, mailbox.Id, error);
 
-                        runLogger.AddItem(new SyncRunItem
-                        {
-                            SyncRunId = run.Id,
-                            TunnelId = tunnel.Id,
-                            PhoneListId = canonicalPhoneList.Id,
-                            TargetMailboxId = mailbox.Id,
-                            SourceUserId = pending.sourceUserId,
-                            Action = "failed",
-                            ErrorMessage = error,
-                            CreatedAt = DateTime.UtcNow
-                        });
+                        RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, error);
                         failed++;
                     }
                 }
@@ -1116,17 +1042,7 @@ public sealed class SyncEngine(
             {
                 logger.LogError("Batch update returned no result for SourceUserId={SourceUserId} in mailbox {MailboxId}",
                     pending.sourceUserId, mailbox.Id);
-                runLogger.AddItem(new SyncRunItem
-                {
-                    SyncRunId = run.Id,
-                    TunnelId = tunnel.Id,
-                    PhoneListId = canonicalPhoneList.Id,
-                    TargetMailboxId = mailbox.Id,
-                    SourceUserId = pending.sourceUserId,
-                    Action = "failed",
-                    ErrorMessage = "No batch result returned",
-                    CreatedAt = DateTime.UtcNow
-                });
+                RecordFailedItem(run, tunnel, canonicalPhoneList.Id, mailbox.Id, pending.sourceUserId, "No batch result returned");
                 failed++;
             }
         }
@@ -1829,6 +1745,22 @@ public sealed class SyncEngine(
         {
             logger.LogWarning(ex, "Failed to record per-tunnel result for RunId={RunId} tunnel {TunnelId}", runId, tunnel.Id);
         }
+    }
+
+    /// <summary>Phase 3 (§3.8): the one way a "failed" run item is recorded.</summary>
+    private void RecordFailedItem(SyncRun run, Tunnel tunnel, int? phoneListId, int? mailboxId, int? sourceUserId, string message)
+    {
+        runLogger.AddItem(new SyncRunItem
+        {
+            SyncRunId = run.Id,
+            TunnelId = tunnel.Id,
+            PhoneListId = phoneListId,
+            TargetMailboxId = mailboxId,
+            SourceUserId = sourceUserId,
+            Action = "failed",
+            ErrorMessage = message,
+            CreatedAt = DateTime.UtcNow
+        });
     }
 
     /// <summary>
