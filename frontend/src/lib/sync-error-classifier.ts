@@ -12,6 +12,7 @@ export type SyncErrorCategory =
   | 'contact-recreated'
   | 'internal'
   | 'rate-limit'
+  | 'transient-graph'
   | 'unknown';
 
 export interface ClassifiedError {
@@ -81,6 +82,15 @@ const RULES: Rule[] = [
     guidance:
       'Microsoft temporarily throttled requests. These retry automatically on the next sync — no action needed.',
     test: /throttl|\b429\b|retry-?after|rate limit/i,
+  },
+  {
+    category: 'transient-graph',
+    severity: 'info',
+    title: 'Microsoft Graph timed out',
+    guidance:
+      'Microsoft Graph returned a temporary server error (HTTP 5xx) for this contact. Nothing was written, so it is retried automatically on the next sync — no action needed.',
+    // Batch steps report bare "HTTP 504"/"HTTP 503"; single calls surface Graph's own wording.
+    test: /\bHTTP 5\d\d\b|gateway time-?out|service unavailable|bad gateway/i,
   },
   {
     category: 'internal',
@@ -164,6 +174,7 @@ export function isAutoSkipped(category: SyncErrorCategory): boolean {
     category === 'mailbox-removed' ||
     category === 'user-invalid' ||
     category === 'contact-recreated' ||
-    category === 'rate-limit'
+    category === 'rate-limit' ||
+    category === 'transient-graph'
   );
 }

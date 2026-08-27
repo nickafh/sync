@@ -158,6 +158,8 @@ Migration: new table `sync_run_tunnels(id, sync_run_id, tunnel_id, status, targe
 
 - **4.1 AddMissing excluded from hash.** `ContactPayloadBuilder` excludes AddMissing fields from `hashInput`. Causes a one-time full update wave; ship with a runbook step: pause the cron (`sync_schedule_cron`), deploy, trigger one manual run off-hours, re-enable.
 - **4.2 `$batch` per-step retry.** In `ExecuteBatchWithRetryAsync`, steps returning 429/503/504 are retried up to 3× honoring `Retry-After`; each retry increments `ThrottleCounter`.
+- **4.3 Dashboard notices runs it did not start** (shipped 2026-08-27 on `sync-reliability/phase-3-followups`, ahead of 4.1/4.2). `useDashboard` polls every 15 s when idle (3 s while a run is active) so the photo sync chained after a contact run, and scheduled runs, show the "Syncing…" header and progress panel without a manual refresh; the page already adopts any running/pending run from `recentRuns`.
+- **4.4 Transient Graph errors read as transient** (shipped with 4.3). `sync-error-classifier.ts` classifies `HTTP 5xx` / gateway-timeout messages as `transient-graph` (info, auto-skipped: nothing was written, the contact is retried next run), so a `$batch` 504 is no longer an "Unexpected error". The root fix — retrying those steps in-run — remains §4.2.
 
 ## Out of scope
 

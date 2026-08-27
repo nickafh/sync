@@ -5,12 +5,18 @@ import { api } from '@/lib/api';
 import type { TriggerSyncRequest } from '@/types/sync-run';
 import type { SyncRunDto } from '@/types/sync-run';
 
+/** Dashboard poll cadence while a run is active vs idle. The idle poll is what lets the page
+ *  notice runs it did not start — the photo sync chained after a contact run finalizes, and
+ *  scheduled runs — without a manual refresh (page.tsx adopts any running/pending run it sees). */
+export const DASHBOARD_POLL_ACTIVE_MS = 3000;
+export const DASHBOARD_POLL_IDLE_MS = 15000;
+
 export function useDashboard(isSyncing = false) {
   return useQuery({
     queryKey: ['dashboard'],
     queryFn: () => api.dashboard.get(),
     staleTime: 30 * 1000,
-    refetchInterval: isSyncing ? 3000 : false,
+    refetchInterval: isSyncing ? DASHBOARD_POLL_ACTIVE_MS : DASHBOARD_POLL_IDLE_MS,
   });
 }
 

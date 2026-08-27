@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifySyncError, groupSyncErrors } from './sync-error-classifier';
+import { classifySyncError, groupSyncErrors, isAutoSkipped } from './sync-error-classifier';
 
 describe('classifySyncError', () => {
   it('classifies an inactive/soft-deleted/on-premise mailbox as auto-skipped (info)', () => {
@@ -46,6 +46,21 @@ describe('classifySyncError', () => {
     expect(c.title).toBe('Microsoft rate limit');
   });
 
+  it('classifies a Graph 5xx (gateway timeout etc.) as transient — retried next run (info)', () => {
+    for (const raw of ['HTTP 504', 'HTTP 503', 'HTTP 502', 'Gateway Timeout while writing contact']) {
+      const c = classifySyncError(raw);
+      expect(c.category, raw).toBe('transient-graph');
+      expect(c.severity, raw).toBe('info');
+      expect(c.title, raw).toBe('Microsoft Graph timed out');
+      expect(c.guidance, raw).toMatch(/next sync/i);
+    }
+  });
+
+  it('does not treat a 4xx (other than 429) as transient', () => {
+    expect(classifySyncError('HTTP 404').category).toBe('unknown');
+    expect(classifySyncError('HTTP 400').category).toBe('unknown');
+  });
+
   it('falls back to unknown/error for unrecognized text, preserving the raw message', () => {
     const c = classifySyncError('Some brand new error nobody mapped yet');
     expect(c.category).toBe('unknown');
@@ -80,5 +95,13 @@ describe('groupSyncErrors', () => {
     expect(groups[0].count).toBe(1);
     expect(groups[1].category).toBe('mailbox-removed');
     expect(groups[1].count).toBe(2);
+  });
+});
+
+describe('isAutoSkipped', () => {
+  it('counts transient Graph errors as auto-handled, like rate limits', () => {
+    expect(isAutoSkipped('transient-graph')).toBe(true);
+    expect(isAutoSkipped('rate-limit')).toBe(true);
+    expect(isAutoSkipped('unknown')).toBe(false);
   });
 });
