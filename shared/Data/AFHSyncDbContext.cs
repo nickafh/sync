@@ -23,6 +23,7 @@ public class AFHSyncDbContext : DbContext
     public DbSet<TunnelContactExclusion> TunnelContactExclusions => Set<TunnelContactExclusion>();
     public DbSet<CleanupJob> CleanupJobs => Set<CleanupJob>();
     public DbSet<TunnelMailboxFolder> TunnelMailboxFolders => Set<TunnelMailboxFolder>();
+    public DbSet<SyncRunTunnel> SyncRunTunnels => Set<SyncRunTunnel>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

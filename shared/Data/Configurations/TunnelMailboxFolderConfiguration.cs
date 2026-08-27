@@ -17,6 +17,7 @@ public class TunnelMailboxFolderConfiguration : IEntityTypeConfiguration<TunnelM
         builder.Property(e => e.GraphFolderId).HasColumnName("graph_folder_id").HasMaxLength(300).IsRequired();
         builder.Property(e => e.FolderName).HasColumnName("folder_name").HasMaxLength(200).IsRequired();
         builder.Property(e => e.UpdatedAt).HasColumnName("updated_at").HasDefaultValueSql("NOW()");
+        builder.Property(e => e.ReconcilePendingAt).HasColumnName("reconcile_pending_at");
 
         builder.HasIndex(e => new { e.TunnelId, e.TargetMailboxId })
             .IsUnique()

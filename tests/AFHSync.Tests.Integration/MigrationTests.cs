@@ -26,6 +26,25 @@ public class MigrationTests
         Assert.Contains(sql, s => s.Contains("DELETE FROM contact_sync_state WHERE graph_contact_id IS NULL", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Phase3Migration_CreatesSyncRunTunnels_AndReconcileFlag()
+    {
+        var migration = new Phase3RunTunnels();
+
+        var ops = migration.UpOperations;
+        var table = Assert.Single(ops.OfType<CreateTableOperation>());
+        Assert.Equal("sync_run_tunnels", table.Name);
+        Assert.Equal(
+            new[] { "completed_at", "contacts_created", "contacts_failed", "contacts_removed", "contacts_skipped", "contacts_updated",
+                    "error_summary", "id", "started_at", "status", "sync_run_id", "targets_count", "tunnel_id", "tunnel_name" },
+            table.Columns.Select(c => c.Name).OrderBy(n => n).ToArray());
+
+        var addColumn = Assert.Single(ops.OfType<AddColumnOperation>());
+        Assert.Equal("tunnel_mailbox_folders", addColumn.Table);
+        Assert.Equal("reconcile_pending_at", addColumn.Name);
+        Assert.True(addColumn.IsNullable);
+    }
+
     [PostgresFact]
     public async Task MigrateAsync_CreatesPhase2Columns_Table_And_UniqueIndex()
     {
@@ -77,7 +96,7 @@ public class MigrationTests
                     .SqlQueryRaw<string>("SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'tunnel_mailbox_folders'")
                     .ToListAsync();
                 Assert.Equal(
-                    new[] { "folder_name", "graph_folder_id", "id", "target_mailbox_id", "tunnel_id", "updated_at" },
+                    new[] { "folder_name", "graph_folder_id", "id", "reconcile_pending_at", "target_mailbox_id", "tunnel_id", "updated_at" },
                     folderColumns.OrderBy(c => c).ToArray());
 
                 var indexDefs = await db.Database
@@ -86,6 +105,30 @@ public class MigrationTests
                 var unique = Assert.Single(indexDefs);
                 Assert.Contains("UNIQUE", unique);
                 Assert.Contains("(tunnel_id, target_mailbox_id)", unique);
+
+                var runTunnelColumns = await db.Database
+                    .SqlQueryRaw<string>("SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'sync_run_tunnels'")
+                    .ToListAsync();
+                Assert.Equal(
+                    new[] { "completed_at", "contacts_created", "contacts_failed", "contacts_removed", "contacts_skipped", "contacts_updated",
+                            "error_summary", "id", "started_at", "status", "sync_run_id", "targets_count", "tunnel_id", "tunnel_name" },
+                    runTunnelColumns.OrderBy(c => c).ToArray());
+
+                var statusType = await db.Database
+                    .SqlQueryRaw<string>("SELECT udt_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'sync_run_tunnels' AND column_name = 'status'")
+                    .ToListAsync();
+                Assert.Equal("sync_status", Assert.Single(statusType));
+
+                var runTunnelIndexes = await db.Database
+                    .SqlQueryRaw<string>("SELECT indexname AS \"Value\" FROM pg_indexes WHERE tablename = 'sync_run_tunnels'")
+                    .ToListAsync();
+                Assert.Contains("idx_sync_run_tunnels_run", runTunnelIndexes);
+                Assert.Contains("idx_sync_run_tunnels_tunnel_completed", runTunnelIndexes);
+
+                var reconcileColumn = await db.Database
+                    .SqlQueryRaw<string>("SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'tunnel_mailbox_folders' AND column_name = 'reconcile_pending_at'")
+                    .ToListAsync();
+                Assert.Single(reconcileColumn);
 
                 var enums = await db.Database
                     .SqlQueryRaw<string>("SELECT typname AS \"Value\" FROM pg_type WHERE typtype = 'e'")

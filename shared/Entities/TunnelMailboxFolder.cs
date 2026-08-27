@@ -14,6 +14,14 @@ public class TunnelMailboxFolder
     public string FolderName { get; set; } = string.Empty;
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>
+    /// Phase 3 (§3.7): set by the worker before the first create batch for this (tunnel, mailbox)
+    /// and cleared only after every chunk's state rows are persisted. A non-null value at the
+    /// start of a run means a crash or shutdown may have left Graph contacts with no state row —
+    /// the folder is reconciled before classification.
+    /// </summary>
+    public DateTime? ReconcilePendingAt { get; set; }
+
     // Navigation properties
     public Tunnel Tunnel { get; set; } = null!;
     public TargetMailbox TargetMailbox { get; set; } = null!;

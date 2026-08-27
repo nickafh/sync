@@ -43,4 +43,5 @@ public class SyncRun
 
     // Navigation properties
     public ICollection<SyncRunItem> SyncRunItems { get; set; } = [];
+    public ICollection<SyncRunTunnel> TunnelRecords { get; set; } = [];
 }
