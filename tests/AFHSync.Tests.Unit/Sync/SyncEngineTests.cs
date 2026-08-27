@@ -1553,6 +1553,70 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 4 (4.1): a stored hash from the old formula is rewritten locally, not PATCHed
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_StoredHashEqualsLegacyHash_RehashesWithoutGraphWrite()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.ContactSyncStates.Add(new ContactSyncState
+            {
+                Id = 1, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1,
+                GraphContactId = "g-1", DataHash = "legacy-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            payloadBuilder: new FakeContactPayloadBuilder { LegacyHash = "legacy-hash" },
+            contactWriter: writer,
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(writer.UpdatedContactIds);                 // no PATCH
+        Assert.DoesNotContain(runLogger.AddedItems, i => i.Action == "updated");
+        Assert.Equal(1, runLogger.FinalizedSkipped);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var state = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal("new-hash", state.DataHash);                // rewritten to the current formula
+        Assert.Equal("legacy-hash", state.PreviousDataHash);
+        Assert.Equal("rehashed", state.LastResult);
+    }
+
+    [Fact]
+    public async Task RunAsync_DryRun_DoesNotRehash()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.ContactSyncStates.Add(new ContactSyncState
+            {
+                Id = 1, SourceUserId = 1, TunnelId = 1, PhoneListId = 1, TargetMailboxId = 1,
+                GraphContactId = "g-1", DataHash = "legacy-hash", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            payloadBuilder: new FakeContactPayloadBuilder { LegacyHash = "legacy-hash" });
+
+        await engine.RunAsync(null, RunType.DryRun, isDryRun: true, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal("legacy-hash", (await verifyCtx.ContactSyncStates.SingleAsync()).DataHash);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -1584,17 +1648,20 @@ public class SyncEngineTests
 
     /// <summary>
     /// Always returns hash "new-hash" so existing states with "old-hash" trigger updates,
-    /// and states with "new-hash" are skipped.
+    /// and states with "new-hash" are skipped. Phase 4: <see cref="LegacyHash"/> (default null)
+    /// is returned as LegacyDataHash so tests can exercise the rehash path.
     /// </summary>
     private sealed class FakeContactPayloadBuilder : IContactPayloadBuilder
     {
+        public string? LegacyHash { get; init; }
+
         public ContactPayloadResult BuildPayload(
             SourceUser source,
             IReadOnlyList<FieldProfileField> fieldSettings,
             ContactSyncState? existingState)
         {
             var payload = new SortedDictionary<string, string> { { "DisplayName", source.DisplayName ?? "Unknown" } };
-            return new ContactPayloadResult(payload, "new-hash");
+            return new ContactPayloadResult(payload, "new-hash", LegacyHash);
         }
     }
 

@@ -686,8 +686,11 @@ public sealed class SyncEngine(
             folderId, folderWasCreated, isDryRun, counters, ct);
 
         // D. Classify every source user as create / update / skip — no Graph calls.
-        var (pendingCreates, pendingUpdates) = ClassifyContacts(tunnel, canonicalPhoneList, mailbox, run,
+        var (pendingCreates, pendingUpdates, rehashes) = ClassifyContacts(tunnel, canonicalPhoneList, mailbox, run,
             sourceUsers, fieldSettings, existingStates, counters);
+
+        // D'. Phase 4 (§4.1): migrate rows hashed by the old formula — a local write, no Graph call.
+        await RehashStatesAsync(rehashes, mailbox.Id, isDryRun);
 
         // E/F. Graph writes (or dry-run reporting), persisted per chunk (§2.6a).
         await ExecuteCreatesAsync(tunnel, canonicalPhoneList, mailbox, run, folderId, sourceUsers, pendingCreates, isDryRun, counters, ct);
@@ -900,7 +903,8 @@ public sealed class SyncEngine(
     /// Phase 3 (§3.8) step D: classifies every source user as create, update or skip. No Graph calls.
     /// </summary>
     private (List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)> pendingCreates,
-             List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)> pendingUpdates)
+             List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)> pendingUpdates,
+             List<(int stateId, string oldHash, string newHash)> rehashes)
         ClassifyContacts(
             Tunnel tunnel,
             PhoneList canonicalPhoneList,
@@ -915,6 +919,8 @@ public sealed class SyncEngine(
         // No Graph calls happen here — just delta hash comparison.
         var pendingCreates = new List<(string key, int sourceUserId, SortedDictionary<string, string> payload, string dataHash)>();
         var pendingUpdates = new List<(string key, int sourceUserId, string graphContactId, int stateId, SortedDictionary<string, string> payload, string dataHash, string? previousHash)>();
+        // Phase 4 (§4.1): rows whose stored hash was written by the pre-Phase-4 formula.
+        var rehashes = new List<(int stateId, string oldHash, string newHash)>();
 
         foreach (var sourceUser in sourceUsers)
         {
@@ -926,6 +932,15 @@ public sealed class SyncEngine(
                 if (existingState == null)
                 {
                     pendingCreates.Add((sourceUser.Id.ToString(), sourceUser.Id, result.Payload, result.DataHash));
+                }
+                else if (existingState.DataHash != result.DataHash
+                         && result.LegacyDataHash is not null
+                         && existingState.DataHash == result.LegacyDataHash)
+                {
+                    // Phase 4 (§4.1): nothing changed at the source — only the hash formula did.
+                    // Rewrite the stored hash locally; no PATCH.
+                    rehashes.Add((existingState.Id, existingState.DataHash!, result.DataHash));
+                    counters.Skipped++;
                 }
                 else if (existingState.DataHash != result.DataHash)
                 {
@@ -947,7 +962,7 @@ public sealed class SyncEngine(
             }
         }
 
-        return (pendingCreates, pendingUpdates);
+        return (pendingCreates, pendingUpdates, rehashes);
     }
 
     /// <summary>
@@ -1214,6 +1229,36 @@ public sealed class SyncEngine(
             healDb.ContactSyncStates.RemoveRange(healStates);
             await healDb.SaveChangesAsync(CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// Phase 4 (§4.1): rewrites the stored hash of rows whose value matched the pre-Phase-4
+    /// formula, so the AddMissing hash change migrates without PATCHing every contact. Fresh
+    /// context + CancellationToken.None like the other bookkeeping writes; never in a dry run.
+    /// </summary>
+    private async Task RehashStatesAsync(List<(int stateId, string oldHash, string newHash)> rehashes, int mailboxId, bool isDryRun)
+    {
+        if (isDryRun || rehashes.Count == 0)
+            return;
+
+        await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+        var ids = rehashes.Select(r => r.stateId).ToList();
+        var rows = await db.ContactSyncStates
+            .Where(s => ids.Contains(s.Id))
+            .ToListAsync(CancellationToken.None);
+        var byId = rehashes.ToDictionary(r => r.stateId);
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            if (!byId.TryGetValue(row.Id, out var r) || row.DataHash != r.oldHash)
+                continue;   // changed underneath us — leave it for the next run
+            row.PreviousDataHash = r.oldHash;
+            row.DataHash = r.newHash;
+            row.LastResult = "rehashed";
+            row.UpdatedAt = now;
+        }
+        await db.SaveChangesAsync(CancellationToken.None);
+        logger.LogInformation("Rehashed {Count} contact state(s) in mailbox {MailboxId} (AddMissing hash migration)", rows.Count, mailboxId);
     }
 
     /// <summary>

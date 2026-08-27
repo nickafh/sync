@@ -12,7 +12,7 @@ namespace AFHSync.Worker.Services;
 ///
 /// Per D-04: reflective field mapper uses a static dictionary of FieldName -> SourceUser accessor.
 /// Per D-05: SHA-256 hash computed from JSON serialization of SortedDictionary (sorted keys, null exclusion).
-/// Per D-06: Nosync excludes; AddMissing includes for new contacts only; Always always includes; RemoveBlank clears empty.
+/// Per D-06: Nosync excludes; AddMissing writes on create only and never affects the hash (Phase 4 §4.1); Always always includes; RemoveBlank clears empty.
 /// </summary>
 public class ContactPayloadBuilder : IContactPayloadBuilder
 {
@@ -52,7 +52,7 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
     /// Hash behavior per field:
     /// - Nosync: excluded from hash (user doesn't want this field — changes shouldn't trigger updates)
     /// - Always: included in hash with trimmed value if non-null and non-empty
-    /// - AddMissing: included in hash (source value is tracked even if not written to existing contacts)
+    /// - AddMissing: EXCLUDED from the hash (Phase 4 §4.1) — a change to a field we only add on create must not trigger an update; the value is still folded into LegacyDataHash so rows hashed by the old formula migrate without a Graph write
     /// - RemoveBlank: included in hash (empty string when source is blank, trimmed value otherwise)
     ///
     /// Graph payload behavior per field:
@@ -68,6 +68,9 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
     {
         var payload = new SortedDictionary<string, string>(StringComparer.Ordinal);
         var hashInput = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        // Phase 4 (§4.1): AddMissing values used to be hashed. Keep them in a side dictionary so
+        // the legacy hash can still be computed for rows written before the formula changed.
+        var legacyAddMissing = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var field in fieldSettings)
         {
@@ -99,13 +102,13 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
 
                 case SyncBehavior.AddMissing:
                 {
-                    // Hash: always include (track source value for delta detection).
+                    // Hash: EXCLUDED (Phase 4 §4.1) — only the legacy hash still sees this value.
                     // Payload: include only for new contacts (no existing sync state).
                     // When a contact already exists, the existing value is preserved.
                     var value = GetFieldValue(source, field.FieldName);
                     if (value is not null)
                     {
-                        hashInput[field.FieldName] = value;
+                        legacyAddMissing[field.FieldName] = value;
                         if (existingState is null)
                         {
                             payload[field.FieldName] = value;
@@ -134,7 +137,17 @@ public class ContactPayloadBuilder : IContactPayloadBuilder
         }
 
         var hash = ComputeHash(hashInput);
-        return new ContactPayloadResult(payload, hash);
+
+        string? legacyHash = null;
+        if (legacyAddMissing.Count > 0)
+        {
+            var legacyInput = new SortedDictionary<string, string>(hashInput, StringComparer.Ordinal);
+            foreach (var (name, value) in legacyAddMissing)
+                legacyInput[name] = value;
+            legacyHash = ComputeHash(legacyInput);
+        }
+
+        return new ContactPayloadResult(payload, hash, legacyHash);
     }
 
     /// <summary>
