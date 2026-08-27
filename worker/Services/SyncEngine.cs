@@ -48,6 +48,12 @@ public sealed class SyncEngine(
     /// <summary>Phase 2 (§2.6b): errorSummary when Hangfire's shutdown/delete token stops a run.</summary>
     internal const string WorkerShutdownReason = "worker shutting down";
 
+    /// <summary>Phase 3 (§3.6): the tenant enumeration (Graph /users) runs at most once per run.</summary>
+    private bool _targetMailboxesRefreshed;
+
+    /// <summary>Test hook: how many times this run attempted the tenant enumeration (memoised ⇒ 0 or 1).</summary>
+    internal int TargetMailboxRefreshAttempts { get; private set; }
+
     public async Task<SyncRun> RunAsync(
         int? runId,
         RunType runType,
@@ -91,6 +97,7 @@ public sealed class SyncEngine(
 
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
+        _targetMailboxesRefreshed = false;
 
         // Clear any stale cancel_sync flag from a prior aborted run so this run
         // doesn't immediately self-cancel. A sync that gets killed externally
@@ -1324,11 +1331,16 @@ public sealed class SyncEngine(
         // If tunnel is scoped to a security group, filter mailboxes to group members only.
         if (!string.IsNullOrEmpty(tunnel.TargetGroupId))
         {
+            // Phase 3 (§3.6): a group member who was never auto-provisioned is not in the cache
+            // table — enumerate the tenant (once per run) before filtering, exactly like AllUsers.
+            await EnsureTargetMailboxesRefreshedAsync(ct);
+            await using var groupDb = await dbContextFactory.CreateDbContextAsync(ct);
+            var groupCandidates = await AvailableActiveMailboxes(groupDb, reprobeCutoff).ToListAsync(ct);
             var groupMemberIds = await ResolveGroupMemberIdsAsync(tunnel.TargetGroupId, ct);
-            var filtered = allMailboxes.Where(m => groupMemberIds.Contains(m.EntraId)).ToList();
+            var filtered = groupCandidates.Where(m => groupMemberIds.Contains(m.EntraId)).ToList();
             logger.LogInformation(
                 "Tunnel {TunnelName}: scoped to group {GroupName} ({GroupId}) — {Filtered}/{Total} mailboxes matched",
-                tunnel.Name, tunnel.TargetGroupName, tunnel.TargetGroupId, filtered.Count, allMailboxes.Count);
+                tunnel.Name, tunnel.TargetGroupName, tunnel.TargetGroupId, filtered.Count, groupCandidates.Count);
             return filtered;
         }
 
@@ -1340,7 +1352,7 @@ public sealed class SyncEngine(
         // (logs warning, leaves cache as-is). Mirrors api/CleanupController.EnumerateTenantMailboxesAsync.
         logger.LogInformation(
             "Tunnel {TunnelName}: AllUsers scope — enumerating tenant via Graph", tunnel.Name);
-        await RefreshTargetMailboxesAsync(ct);
+        await EnsureTargetMailboxesRefreshedAsync(ct);
 
         await using var refreshedDb = await dbContextFactory.CreateDbContextAsync(ct);
         var refreshed = await AvailableActiveMailboxes(refreshedDb, reprobeCutoff).ToListAsync(ct);
@@ -1408,6 +1420,20 @@ public sealed class SyncEngine(
             .Select(e => e.EntraId)
             .ToListAsync(ct);
         return entraIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.6): runs <see cref="RefreshTargetMailboxesAsync"/> at most once per run, whichever
+    /// scope asks first. The flag is set before the attempt so a Graph failure is not retried by
+    /// every following tunnel (the refresh already swallows and logs its own failures).
+    /// </summary>
+    private async Task EnsureTargetMailboxesRefreshedAsync(CancellationToken ct)
+    {
+        if (_targetMailboxesRefreshed)
+            return;
+        _targetMailboxesRefreshed = true;
+        TargetMailboxRefreshAttempts++;
+        await RefreshTargetMailboxesAsync(ct);
     }
 
     /// <summary>

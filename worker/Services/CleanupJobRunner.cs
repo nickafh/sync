@@ -1,7 +1,6 @@
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Enums;
 using AFHSync.Shared.Services;
-using Hangfire;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Graph;
 
@@ -29,7 +28,6 @@ public sealed class CleanupJobRunner(
     private const int MailboxParallelism = 8;
     internal const int ProgressFlushEvery = 25;
 
-    [AutomaticRetry(Attempts = 0)]
     public async Task RunAsync(Guid jobId, CleanupJobItem[] items, CancellationToken ct)
     {
         // Phase 1: flip Queued → Running and stamp StartedAt.

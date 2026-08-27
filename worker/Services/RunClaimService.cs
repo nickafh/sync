@@ -1,6 +1,7 @@
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
+using AFHSync.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
@@ -17,7 +18,7 @@ public sealed class RunClaimService(
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
 
-        // Advisory lock key 1 = sync run start serialisation. Postgres-specific and
+        // RunLocks.RunStartAdvisoryKey serialises run start with the API's trigger guard. Postgres-specific and
         // transaction-scoped, so skip it on non-relational providers (the in-memory
         // provider used by unit tests) — mirrors the IsInMemory checks elsewhere.
         IDbContextTransaction? tx = db.Database.IsRelational()
@@ -25,7 +26,7 @@ public sealed class RunClaimService(
             : null;
         await using var _tx = tx;
         if (tx is not null)
-            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(1)", ct);
+            await db.Database.ExecuteSqlRawAsync(RunLocks.AcquireRunStartLockSql, ct);
 
         SyncRun? requested = null;
         if (runId.HasValue)

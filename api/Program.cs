@@ -107,7 +107,8 @@ builder.Services.AddSingleton(sp =>
 });
 
 // DDG resolution services (per D-01, D-02)
-builder.Services.AddScoped<IDDGResolver, DDGResolver>();
+// Phase 3 (§3.6): one Exchange Online session per process (the resolver serialises its own calls).
+builder.Services.AddSingleton<IDDGResolver, DDGResolver>();
 builder.Services.AddSingleton<IFilterConverter, FilterConverter>();
 builder.Services.AddScoped<IContactExportService, ContactExportService>();
 

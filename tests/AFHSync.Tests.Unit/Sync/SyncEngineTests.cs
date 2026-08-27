@@ -1370,6 +1370,61 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 3 (3.6): the tenant enumeration runs once per run, and group scope uses it too
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_TwoAllUsersTunnels_RefreshTargetMailboxesOnce()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+            var t1 = new Tunnel { Id = 1, Name = "T1", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+            var t2 = new Tunnel { Id = 2, Name = "T2", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+            var tpl1 = new TunnelPhoneList { TunnelId = 1, PhoneListId = 1, Tunnel = t1, PhoneList = phoneList };
+            var tpl2 = new TunnelPhoneList { TunnelId = 2, PhoneListId = 1, Tunnel = t2, PhoneList = phoneList };
+            t1.TunnelPhoneLists.Add(tpl1);
+            t2.TunnelPhoneLists.Add(tpl2);
+            seedCtx.Tunnels.AddRange(t1, t2);
+            seedCtx.PhoneLists.Add(phoneList);
+            seedCtx.TunnelPhoneLists.AddRange(tpl1, tpl2);
+            seedCtx.TargetMailboxes.Add(new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+            await seedCtx.SaveChangesAsync();
+        }
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]));
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(1, engine.TargetMailboxRefreshAttempts);
+    }
+
+    [Fact]
+    public async Task RunAsync_GroupScopedTunnel_AlsoRefreshesTargetMailboxes()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            var phoneList = new PhoneList { Id = 1, Name = "AFH Contacts" };
+            var tunnel = new Tunnel { Id = 1, Name = "Group Tunnel", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove,
+                TargetGroupId = "group-1", TargetGroupName = "Buckhead Agents" };
+            var tpl = new TunnelPhoneList { TunnelId = 1, PhoneListId = 1, Tunnel = tunnel, PhoneList = phoneList };
+            tunnel.TunnelPhoneLists.Add(tpl);
+            seedCtx.Tunnels.Add(tunnel);
+            seedCtx.PhoneLists.Add(phoneList);
+            seedCtx.TunnelPhoneLists.Add(tpl);
+            await seedCtx.SaveChangesAsync();
+        }
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]));
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(1, engine.TargetMailboxRefreshAttempts);   // was 0: group scope never enumerated the tenant
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 

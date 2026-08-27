@@ -43,4 +43,22 @@ public class DDGResolverTests
         // and certificate-based auth configured
         await Task.CompletedTask;
     }
+
+    [Theory]
+    [InlineData("The session has been closed by the server.")]
+    [InlineData("Access token has expired or is not yet valid")]
+    [InlineData("Cannot find the PSSession Exchange.Runspace")]
+    public void IsSessionError_RecognisesSessionAndTokenFailures(string errors)
+        => Assert.True(DDGResolver.IsSessionError(errors));
+
+    [Fact]
+    public void IsSessionError_RecognisesUnauthorizedAccessException()
+        => Assert.True(DDGResolver.IsSessionError(null, new UnauthorizedAccessException("denied")));
+
+    [Theory]
+    [InlineData("The operation couldn't be performed because object 'nope' couldn't be found on 'DM6PR...'.")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void IsSessionError_IgnoresOrdinaryFailures(string? errors)
+        => Assert.False(DDGResolver.IsSessionError(errors));
 }

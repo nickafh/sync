@@ -1,3 +1,4 @@
+using System.Reflection;
 using AFHSync.Shared.Data;
 using AFHSync.Shared.Entities;
 using AFHSync.Shared.Enums;
@@ -231,5 +232,20 @@ public class CleanupJobRunnerTests
         // No exception thrown — and the row genuinely doesn't exist.
         await using var ctx = MakeDbContext(dbName);
         Assert.False(await ctx.CleanupJobs.AnyAsync(j => j.Id == missingId));
+    }
+
+    // ============================================================
+    // Phase 3 (3.6): Hangfire dispatches ICleanupJobRunner.RunAsync — the attribute must be there
+    // ============================================================
+
+    [Fact]
+    public void RunAsync_InterfaceMethod_DisablesHangfireAutomaticRetry()
+    {
+        var method = typeof(ICleanupJobRunner).GetMethod(nameof(ICleanupJobRunner.RunAsync))!;
+
+        var attr = method.GetCustomAttribute<Hangfire.AutomaticRetryAttribute>();
+
+        Assert.NotNull(attr);
+        Assert.Equal(0, attr!.Attempts);
     }
 }

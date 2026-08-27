@@ -106,8 +106,9 @@ try
     // to union with explicit emails in PhoneList.TargetUserFilter. Reuses the api project's
     // resolver (ExchangeOnlineManagement PowerShell + the OPATH→Graph filter converter)
     // to avoid duplicating the runspace + cert auth config in two assemblies.
-    // Lifetimes mirror api/Program.cs:109-110 — Scoped resolver, Singleton converter.
-    services.AddScoped<AFHSync.Api.Services.IDDGResolver, AFHSync.Api.Services.DDGResolver>();
+    // Lifetimes mirror api/Program.cs — Singleton resolver (one Exchange session per process,
+    // Phase 3 §3.6) and Singleton converter.
+    services.AddSingleton<AFHSync.Api.Services.IDDGResolver, AFHSync.Api.Services.DDGResolver>();
     services.AddSingleton<AFHSync.Api.Services.IFilterConverter, AFHSync.Api.Services.FilterConverter>();
 
     // Hangfire server + PostgreSQL storage (per D-07, D-16, D-17).

@@ -39,7 +39,7 @@ public class SyncRunsController : ControllerBase
         var useTransaction = !db.Database.IsInMemory();
         var tx = useTransaction ? await db.Database.BeginTransactionAsync() : null;
         if (useTransaction)
-            await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(2)");
+            await db.Database.ExecuteSqlRawAsync(RunLocks.AcquireRunStartLockSql);
 
         var isActive = await db.SyncRuns.AnyAsync(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending);
         if (isActive)

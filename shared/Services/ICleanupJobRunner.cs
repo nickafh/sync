@@ -1,3 +1,5 @@
+using Hangfire;
+
 namespace AFHSync.Shared.Services;
 
 /// <summary>
@@ -17,6 +19,8 @@ public interface ICleanupJobRunner
     /// <param name="jobId">CleanupJob row id (created by the API before enqueue).</param>
     /// <param name="items">Folders to delete — serialized into the Hangfire job payload.</param>
     /// <param name="ct">Cancellation token (Hangfire passes a default token; cancellation is not surfaced in v1).</param>
+    /// Phase 3 (§3.6): Hangfire dispatches the INTERFACE method (the API enqueues via Enqueue&lt;ICleanupJobRunner&gt;), so the retry-off attribute lives here, not on the class.
+    [AutomaticRetry(Attempts = 0)]
     Task RunAsync(Guid jobId, CleanupJobItem[] items, CancellationToken ct);
 }
 
