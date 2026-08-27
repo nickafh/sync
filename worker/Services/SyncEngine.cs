@@ -150,13 +150,15 @@ public sealed class SyncEngine(
                     break;
                 }
 
+                var tunnelStartedAt = DateTime.UtcNow;
+                var errorsBefore = tunnelErrors.Count;
                 try
                 {
-                    var (created, updated, skipped, failed, removed) =
-                        await ProcessTunnelAsync(tunnel, run, isDryRun,
+                    var outcome = await ProcessTunnelAsync(tunnel, run, isDryRun,
                             totalCreated, totalUpdated, totalSkipped, totalFailed, totalRemoved,
                             totalPhotosUpdated, totalPhotosFailed,
                             tunnelsProcessed, tunnelsWarned, tunnelsFailed, tunnelErrors, ct);
+                    var (created, updated, skipped, failed, removed, _) = outcome;
 
                     totalCreated += created;
                     totalUpdated += updated;
@@ -168,6 +170,12 @@ public sealed class SyncEngine(
                         tunnelsWarned++;
                     else
                         tunnelsProcessed++;
+
+                    // Phase 3 (§3.1): one sync_run_tunnels row per tunnel. This tunnel's errors are
+                    // the tunnelErrors entries appended since it started.
+                    await RecordTunnelRunAsync(run.Id, tunnel,
+                        failed > 0 ? SyncStatus.Warning : SyncStatus.Success,
+                        outcome, tunnelErrors.Skip(errorsBefore), tunnelStartedAt);
 
                     // Photo sync trailing pass (D-01: runs AFTER all contact creates/updates for this tunnel)
                     if (photoSyncMode == "included" && tunnel.PhotoSyncEnabled)
@@ -200,6 +208,8 @@ public sealed class SyncEngine(
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     logger.LogInformation("Shutdown requested during tunnel {TunnelId} ({TunnelName}) — stopping", tunnel.Id, tunnel.Name);
+                    await RecordTunnelRunAsync(run.Id, tunnel, SyncStatus.Cancelled, TunnelOutcome.Empty,
+                        [WorkerShutdownReason], tunnelStartedAt);
                     wasCancelled = true;
                     cancelReason = WorkerShutdownReason;
                     break;
@@ -210,6 +220,8 @@ public sealed class SyncEngine(
                         tunnel.Id, tunnel.Name);
                     tunnelsFailed++;
                     tunnelErrors.Add($"{tunnel.Name}: {ex.Message}");
+                    await RecordTunnelRunAsync(run.Id, tunnel, SyncStatus.Failed, TunnelOutcome.Empty,
+                        tunnelErrors.Skip(errorsBefore), tunnelStartedAt);
                 }
             }
         }
@@ -364,7 +376,7 @@ public sealed class SyncEngine(
         }
     }
 
-    private async Task<(int created, int updated, int skipped, int failed, int removed)> ProcessTunnelAsync(
+    private async Task<TunnelOutcome> ProcessTunnelAsync(
         Tunnel tunnel,
         SyncRun run,
         bool isDryRun,
@@ -404,7 +416,7 @@ public sealed class SyncEngine(
         if (sourceUsers.Count == 0)
         {
             logger.LogWarning("Tunnel {TunnelName}: 0 source members resolved, skipping", tunnel.Name);
-            return (0, 0, 0, sourceFailures, 0);
+            return new TunnelOutcome(0, 0, 0, sourceFailures, 0, 0);
         }
 
         // Step 5b: Filter out excluded contacts.
@@ -572,7 +584,7 @@ public sealed class SyncEngine(
         if (phoneLists.Count == 0)
         {
             logger.LogWarning("Tunnel {TunnelName}: no phone lists configured, skipping", tunnel.Name);
-            return (0, 0, 0, sourceFailures, 0);
+            return new TunnelOutcome(0, 0, 0, sourceFailures, 0, targetMailboxes.Count);
         }
 
         var canonicalPhoneList = phoneLists[0];
@@ -652,7 +664,7 @@ public sealed class SyncEngine(
             "Tunnel {TunnelName} complete: Created={Created}, Updated={Updated}, Skipped={Skipped}, Failed={Failed}, Removed={Removed}",
             tunnel.Name, created, updated, skipped, failed, removed);
 
-        return (created, updated, skipped, failed, removed);
+        return new TunnelOutcome(created, updated, skipped, failed, removed, targetMailboxes.Count);
     }
 
     /// <summary>
@@ -1681,6 +1693,46 @@ public sealed class SyncEngine(
         catch (Exception ex)
         {
             logger.LogDebug(ex, "Failed to write interim progress for RunId={RunId}", runId);
+        }
+    }
+
+    /// <summary>
+    /// Phase 3 (§3.1): writes the tunnel's row in sync_run_tunnels. Best-effort bookkeeping with a
+    /// fresh context and CancellationToken.None — a shutdown mid-run must not lose the record.
+    /// </summary>
+    private async Task RecordTunnelRunAsync(
+        int runId,
+        Tunnel tunnel,
+        SyncStatus status,
+        TunnelOutcome outcome,
+        IEnumerable<string> errors,
+        DateTime startedAt)
+    {
+        try
+        {
+            var summary = string.Join("; ", errors);
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            db.SyncRunTunnels.Add(new SyncRunTunnel
+            {
+                SyncRunId = runId,
+                TunnelId = tunnel.Id,
+                TunnelName = tunnel.Name,
+                Status = status,
+                TargetsCount = outcome.TargetsCount,
+                ContactsCreated = outcome.Created,
+                ContactsUpdated = outcome.Updated,
+                ContactsRemoved = outcome.Removed,
+                ContactsSkipped = outcome.Skipped,
+                ContactsFailed = outcome.Failed,
+                ErrorSummary = summary.Length == 0 ? null : summary,
+                StartedAt = startedAt,
+                CompletedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to record per-tunnel result for RunId={RunId} tunnel {TunnelId}", runId, tunnel.Id);
         }
     }
 

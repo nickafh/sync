@@ -1260,6 +1260,116 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // Phase 3 (3.1): one sync_run_tunnels row per tunnel per run
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_WritesOneRecordPerTunnel_WithCountsTargetsAndSuccess()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true },
+            new TargetMailbox { Id = 2, EntraId = "mb-2", Email = "two@contoso.com", IsActive = true });
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]));
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var record = await verifyCtx.SyncRunTunnels.SingleAsync();
+        Assert.Equal(run.Id, record.SyncRunId);
+        Assert.Equal(1, record.TunnelId);
+        Assert.Equal("Avail Tunnel", record.TunnelName);
+        Assert.Equal(SyncStatus.Success, record.Status);
+        Assert.Equal(2, record.TargetsCount);
+        Assert.Equal(2, record.ContactsCreated);          // one create per mailbox
+        Assert.Equal(0, record.ContactsFailed);
+        Assert.Null(record.ErrorSummary);
+        Assert.True(record.CompletedAt >= record.StartedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_ZeroSourceMembers_StillWritesRecord()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        var engine = CreateEngine(dbName, sourceResolver: new FakeSourceResolver([]));
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var record = await verifyCtx.SyncRunTunnels.SingleAsync();
+        Assert.Equal(SyncStatus.Success, record.Status);
+        Assert.Equal(0, record.TargetsCount);              // the tunnel returned before resolving targets
+        Assert.Equal(0, record.ContactsCreated);
+    }
+
+    [Fact]
+    public async Task RunAsync_SourceFailure_WritesWarningRecordWithErrorSummary()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var resolver = new FakeSourceResolver(
+            [new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }],
+            [new SourceFailure(11, "Buckhead Staff", "Request_UnsupportedQuery")]);
+        var engine = CreateEngine(dbName, sourceResolver: resolver);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        await using var verifyCtx = MakeDbContext(dbName);
+        var record = await verifyCtx.SyncRunTunnels.SingleAsync();
+        Assert.Equal(SyncStatus.Warning, record.Status);
+        Assert.Equal(1, record.ContactsFailed);
+        Assert.Equal(1, record.ContactsCreated);
+        Assert.Equal(1, record.TargetsCount);
+        Assert.Equal("Avail Tunnel: source 'Buckhead Staff' failed: Request_UnsupportedQuery", record.ErrorSummary);
+    }
+
+    [Fact]
+    public async Task RunAsync_TunnelThrows_WritesFailedRecordWithMessage()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: new ThrowingSourceResolver(), runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(1, runLogger.FinalizedTunnelsFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var record = await verifyCtx.SyncRunTunnels.SingleAsync();
+        Assert.Equal(SyncStatus.Failed, record.Status);
+        Assert.Equal(0, record.TargetsCount);
+        Assert.Equal("Avail Tunnel: resolver exploded", record.ErrorSummary);
+    }
+
+    [Fact]
+    public async Task RunAsync_ShutdownMidTunnel_WritesCancelledRecord()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName,
+            new TargetMailbox { Id = 1, EntraId = "mb-1", Email = "one@contoso.com", IsActive = true });
+        using var cts = new CancellationTokenSource();
+        var folderManager = new FakeContactFolderManager { OnRequested = () => cts.Cancel() };
+        folderManager.Failures["mb-1"] = new OperationCanceledException();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            folderManager: folderManager);
+
+        var run = await engine.RunAsync(null, RunType.Manual, isDryRun: false, cts.Token);
+
+        Assert.Equal(SyncStatus.Cancelled, run.Status);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var record = await verifyCtx.SyncRunTunnels.SingleAsync();
+        Assert.Equal(SyncStatus.Cancelled, record.Status);
+        Assert.Equal(SyncEngine.WorkerShutdownReason, record.ErrorSummary);
+        Assert.Equal(0, record.ContactsCreated);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -1575,5 +1685,12 @@ public class SyncEngineTests
             Tunnel tunnel, int phoneListId, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
             => throw new InvalidOperationException("simulated mailbox-level failure");
+    }
+
+    /// <summary>Source resolver that throws — simulates an unhandled tunnel-level failure.</summary>
+    private sealed class ThrowingSourceResolver : ISourceResolver
+    {
+        public Task<SourceResolution> ResolveAsync(Tunnel tunnel, CancellationToken ct)
+            => throw new InvalidOperationException("resolver exploded");
     }
 }
