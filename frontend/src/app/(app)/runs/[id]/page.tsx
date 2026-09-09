@@ -36,6 +36,7 @@ const actionColorMap: Record<string, string> = {
   stale_detected: 'bg-yellow-100 text-yellow-800',
   photo_updated: 'bg-green-100 text-green-800',
   photo_failed: 'bg-red-100 text-red-800',
+  audit_missing: 'bg-sky-50 text-sky-700',
 };
 
 const actionLabelMap: Record<string, string> = {
@@ -47,6 +48,7 @@ const actionLabelMap: Record<string, string> = {
   stale_detected: 'Stale',
   photo_updated: 'Photo Updated',
   photo_failed: 'Photo Failed',
+  audit_missing: 'Audit: missing',
 };
 
 const itemColumns: ColumnDef<SyncRunItemDto, unknown>[] = [
