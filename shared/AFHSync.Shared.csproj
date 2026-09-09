@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Hangfire.Core" Version="1.8.23" />
+    <!-- Hangfire.Core only floors Newtonsoft.Json at 11.0.1 (GHSA-5crp-9r3c-p9vr: stack-overflow DoS, fixed 13.0.1); nothing else in this project lifts it. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.5" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
   </ItemGroup>

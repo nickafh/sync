@@ -18,7 +18,12 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.5" />
     <PackageReference Include="Microsoft.Graph" Version="5.103.0" />
+    <!-- Explicit Graph.Core so the Kiota set resolves to 1.22.1 (GHSA-7j59-v9qr-6fq9 / CVE-2026-44503: RedirectHandler forwarded
+         Cookie and Proxy-Authorization across hosts). Microsoft.Graph 5.x only floors Graph.Core at 3.2.5, which pins Kiota 1.21.1. -->
+    <PackageReference Include="Microsoft.Graph.Core" Version="3.2.6" />
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.0" />
+    <!-- PowerShell.SDK -> Microsoft.Windows.Compatibility floors this at 10.0.5 (GHSA-37gx-xxp4-5rgx and siblings: EncryptedXml DoS, fixed 10.0.6). -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.12" />
     <!-- Pin to the version ExchangeOnlineManagement (loaded in-process by DDGResolver)
          demands, so Connect-ExchangeOnline doesn't die on a System.IdentityModel.Tokens.Jwt
          8.17.0.0 assembly-manifest mismatch (which breaks all Get-DynamicDistributionGroup). -->
