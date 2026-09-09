@@ -783,13 +783,15 @@ public sealed class SyncEngine(
     }
 
     /// <summary>
-    /// Phase 3 (§3.8) step C: loads the existing sync state for this (tunnel, mailbox) across all of
-    /// the tunnel's phone lists, de-duplicated, and cleans up the duplicate rows it found.
+    /// Phase 3 (§3.8) step C, scoped per §5.1: loads every existing sync state row of this
+    /// (tunnel, mailbox) pair — whatever phone list created it — de-duplicated to one row per source
+    /// user, cleans up the duplicate rows (Graph contact + row), and re-points kept rows that sit under
+    /// a phone list no longer attached to the tunnel onto the canonical list.
     /// </summary>
     private async Task<Dictionary<int, ContactSyncState>> LoadExistingStatesAsync(
         Tunnel tunnel,
         PhoneList canonicalPhoneList,
-        List<int> allPhoneListIds,
+        List<int> attachedPhoneListIds,
         TargetMailbox mailbox,
         string? folderId,
         bool folderWasCreated,
@@ -798,32 +800,29 @@ public sealed class SyncEngine(
         CancellationToken ct)
     {
         // If the folder was just created, any existing sync state is stale (contacts were deleted).
-        // Clear across ALL phone lists so all contacts get re-created in the new folder.
+        // Clear every row of the pair so all contacts get re-created in the new folder.
         if (folderWasCreated && !isDryRun)
         {
             await using var cleanupDb = await dbContextFactory.CreateDbContextAsync(ct);
-            var staleCount = await cleanupDb.ContactSyncStates
-                .Where(s => s.TunnelId == tunnel.Id
-                            && allPhoneListIds.Contains(s.PhoneListId)
-                            && s.TargetMailboxId == mailbox.Id)
-                .ExecuteDeleteAsync(ct);
-            if (staleCount > 0)
+            var staleRows = await cleanupDb.ContactSyncStates
+                .Where(s => s.TunnelId == tunnel.Id && s.TargetMailboxId == mailbox.Id)
+                .ToListAsync(ct);
+            if (staleRows.Count > 0)
+            {
+                cleanupDb.ContactSyncStates.RemoveRange(staleRows);
+                await cleanupDb.SaveChangesAsync(ct);
                 logger.LogInformation(
                     "Cleared {Count} stale sync states for tunnel {TunnelId} in mailbox {MailboxId} (folder was recreated)",
-                    staleCount, tunnel.Id, mailbox.Id);
+                    staleRows.Count, tunnel.Id, mailbox.Id);
+            }
         }
 
-        // Load existing sync state across ALL phone lists for this tunnel+mailbox.
-        // This finds records regardless of which phone list originally created them,
-        // preventing duplicates when multiple phone lists exist.
-        // If a SourceUser has records under multiple phone lists, keep the first one found
-        // (the others are duplicates from before this fix and will be cleaned up below).
+        // §5.1: the scope is the (tunnel, mailbox) pair. Rows created under a phone list that has
+        // since been detached from the tunnel are found here too, instead of lingering forever.
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
         var allExistingStates = await db.ContactSyncStates
             .AsNoTracking()
-            .Where(s => s.TunnelId == tunnel.Id
-                        && allPhoneListIds.Contains(s.PhoneListId)
-                        && s.TargetMailboxId == mailbox.Id)
+            .Where(s => s.TunnelId == tunnel.Id && s.TargetMailboxId == mailbox.Id)
             .ToListAsync(ct);
 
         // Deduplicate: keep one state per SourceUserId (prefer canonical phone list, then lowest ID).
@@ -839,12 +838,8 @@ public sealed class SyncEngine(
         if (isDryRun && folderId is null)
             existingStates = new Dictionary<int, ContactSyncState>();
 
-        // Identify duplicate sync state records to clean up (from before this fix).
-        // These have Graph contacts that are duplicates in the same folder.
-        // Minor: skip when isDryRun && folderId is null — existingStates was just reset to empty
-        // above (no folder to compare against), so every existing row would spuriously look like
-        // a "duplicate" and the dry-run log below would wrongly claim "would clean up N
-        // duplicates" for contacts that aren't duplicates at all.
+        // Duplicate rows: every row that is not the kept one for its user. Their Graph contacts are
+        // second copies in the same folder (the §5.1 April leftovers, or pre-fix duplicates).
         var duplicateStates = isDryRun && folderId is null
             ? []
             : allExistingStates
@@ -866,7 +861,6 @@ public sealed class SyncEngine(
                     "Found {Count} duplicate sync states for tunnel {TunnelId} in mailbox {MailboxId} — cleaning up",
                     duplicateStates.Count, tunnel.Id, mailbox.Id);
 
-                // Batch delete duplicate Graph contacts.
                 var dupeOps = duplicateStates
                     .Where(d => !string.IsNullOrEmpty(d.GraphContactId))
                     .Select(d => (d.Id.ToString(), d.GraphContactId!))
@@ -886,10 +880,44 @@ public sealed class SyncEngine(
 
                 await using var dupeDb = await dbContextFactory.CreateDbContextAsync(ct);
                 var dupeIds = duplicateStates.Select(d => d.Id).ToList();
-                await dupeDb.ContactSyncStates
+                var dupeRows = await dupeDb.ContactSyncStates
                     .Where(s => dupeIds.Contains(s.Id))
-                    .ExecuteDeleteAsync(ct);
+                    .ToListAsync(ct);
+                dupeDb.ContactSyncStates.RemoveRange(dupeRows);
+                await dupeDb.SaveChangesAsync(ct);
                 counters.Removed += duplicateStates.Count;
+            }
+        }
+
+        // §5.1: kept rows under a phone list no longer attached to the tunnel are re-pointed to the
+        // canonical list. After the dedupe there is exactly one row per source user for the pair, so
+        // the unique index (source_user, phone_list, mailbox, tunnel) cannot conflict.
+        if (!isDryRun)
+        {
+            var retiredIds = existingStates.Values
+                .Where(s => !attachedPhoneListIds.Contains(s.PhoneListId))
+                .Select(s => s.Id)
+                .ToHashSet();
+            if (retiredIds.Count > 0)
+            {
+                await using var repointDb = await dbContextFactory.CreateDbContextAsync(ct);
+                var retiredRows = await repointDb.ContactSyncStates
+                    .Where(s => retiredIds.Contains(s.Id))
+                    .ToListAsync(ct);
+                foreach (var row in retiredRows)
+                {
+                    row.PhoneListId = canonicalPhoneList.Id;
+                    row.UpdatedAt = DateTime.UtcNow;
+                }
+                await repointDb.SaveChangesAsync(ct);
+                foreach (var kept in existingStates.Values)
+                {
+                    if (retiredIds.Contains(kept.Id))
+                        kept.PhoneListId = canonicalPhoneList.Id;
+                }
+                logger.LogInformation(
+                    "Re-pointed {Count} state row(s) from retired phone list(s) to list {PhoneListId} for tunnel {TunnelId} in mailbox {MailboxId}",
+                    retiredIds.Count, canonicalPhoneList.Id, tunnel.Id, mailbox.Id);
             }
         }
 

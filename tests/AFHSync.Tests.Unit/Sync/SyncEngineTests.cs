@@ -1553,6 +1553,110 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // §5.1: existing state is scoped by tunnel + mailbox; retired phone-list rows are cleaned up
+    // ==============================
+
+    /// <summary>Tunnel 1 is attached to phone list 13 only; list 10 exists but is retired; one active mailbox (Id 1, EntraId "mbx").</summary>
+    private static async Task SeedTunnelWithRetiredListAsync(string dbName, params ContactSyncState[] states)
+    {
+        using var seedCtx = MakeDbContext(dbName);
+        var tunnel = new Tunnel { Id = 1, Name = "Buckhead", Status = TunnelStatus.Active, StalePolicy = StalePolicy.AutoRemove };
+        var current = new PhoneList { Id = 13, Name = "All Users" };
+        var retired = new PhoneList { Id = 10, Name = "Nick Jp test and david" };
+        var tpl = new TunnelPhoneList { TunnelId = 1, PhoneListId = 13, Tunnel = tunnel, PhoneList = current };
+        tunnel.TunnelPhoneLists.Add(tpl);
+        seedCtx.Tunnels.Add(tunnel);
+        seedCtx.PhoneLists.AddRange(current, retired);
+        seedCtx.TunnelPhoneLists.Add(tpl);
+        seedCtx.TargetMailboxes.Add(new TargetMailbox { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true });
+        seedCtx.ContactSyncStates.AddRange(states);
+        await seedCtx.SaveChangesAsync();
+    }
+
+    private static ContactSyncState State(int id, int sourceUserId, int phoneListId, string graphContactId, string? dataHash) => new()
+    {
+        Id = id, SourceUserId = sourceUserId, TunnelId = 1, PhoneListId = phoneListId, TargetMailboxId = 1,
+        GraphContactId = graphContactId, DataHash = dataHash, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+    };
+
+    [Fact]
+    public async Task RunAsync_RetiredListRowBesideCanonicalRow_DeletesTheRetiredContactAndRow()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithRetiredListAsync(dbName,
+            State(1, sourceUserId: 1, phoneListId: 13, graphContactId: "g-13", dataHash: "new-hash"),
+            State(2, sourceUserId: 1, phoneListId: 10, graphContactId: "g-10", dataHash: null));   // April leftover: a second contact for Alice
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: writer, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { "g-10" }, writer.DeletedContactIds);           // the duplicate under the retired list
+        Assert.Empty(writer.CreatedContactIds);
+        Assert.Empty(writer.UpdatedContactIds);                               // hash matches: nothing to PATCH
+        Assert.Equal(1, runLogger.FinalizedRemoved);
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var remaining = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal(1, remaining.Id);
+        Assert.Equal(13, remaining.PhoneListId);
+    }
+
+    [Fact]
+    public async Task RunAsync_RetiredListRowAlone_ForCurrentMember_IsReusedAndRepointed()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithRetiredListAsync(dbName,
+            State(2, sourceUserId: 1, phoneListId: 10, graphContactId: "g-10", dataHash: "old-hash"));
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: writer, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(writer.CreatedContactIds);                               // no second contact for Alice
+        Assert.Equal(new[] { "g-10" }, writer.UpdatedContactIds);             // old-hash ⇒ PATCH the contact we already have
+        Assert.Empty(writer.DeletedContactIds);
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var row = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal(2, row.Id);
+        Assert.Equal(13, row.PhoneListId);                                    // re-pointed to the canonical list
+        Assert.Equal("new-hash", row.DataHash);
+    }
+
+    [Fact]
+    public async Task RunAsync_RetiredListRowAlone_ForDepartedMember_IsRemovedByTheStalePass()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithRetiredListAsync(dbName,
+            State(2, sourceUserId: 9, phoneListId: 10, graphContactId: "g-ghost", dataHash: null));   // user 9 left months ago
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: writer,
+            staleHandler: new StaleContactHandler(CreateFactory(dbName), writer, NullLogger<StaleContactHandler>.Instance),
+            runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { "g-ghost" }, writer.DeletedContactIds);
+        Assert.Single(writer.CreatedContactIds);                               // Alice is created as usual
+        Assert.Equal(1, runLogger.FinalizedRemoved);
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var alice = Assert.Single(await verifyCtx.ContactSyncStates.ToListAsync());
+        Assert.Equal(1, alice.SourceUserId);
+        Assert.Equal(13, alice.PhoneListId);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -1817,6 +1921,7 @@ public class SyncEngineTests
         public int FinalizedUpdated { get; private set; }
         public int FinalizedSkipped { get; private set; }
         public int FinalizedFailed { get; private set; }
+        public int FinalizedRemoved { get; private set; }
         public int FinalizedTunnelsFailed { get; private set; }
         public int FinalizedThrottleEvents { get; private set; }
         public string? FinalizedErrorSummary { get; private set; }
@@ -1854,6 +1959,7 @@ public class SyncEngineTests
             FinalizedUpdated = contactsUpdated;
             FinalizedSkipped = contactsSkipped;
             FinalizedFailed = contactsFailed;
+            FinalizedRemoved = contactsRemoved;
             FinalizedTunnelsFailed = tunnelsFailed;
             FinalizedThrottleEvents = throttleEvents;
             FinalizedErrorSummary = errorSummary;
