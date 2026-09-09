@@ -678,8 +678,8 @@ public sealed class SyncEngine(
             return counters.ToTuple();
         var (folderId, folderWasCreated) = folder.Value;
 
-        // B. A reconcile left pending by a previous run (§3.7).
-        await ReconcileIfPendingAsync(tunnel, canonicalPhoneList, mailbox, folderId, sourceUsers, isDryRun, counters, ct);
+        // B. Folder reconcile (§3.7 pending flag, §5.2 requested or daily audit).
+        await ReconcileFolderAsync(tunnel, canonicalPhoneList, mailbox, run, folderId, folderWasCreated, sourceUsers, isDryRun, counters, ct);
 
         // C. Existing sync state for this (tunnel, mailbox), de-duplicated; duplicates cleaned up.
         var existingStates = await LoadExistingStatesAsync(tunnel, canonicalPhoneList, allPhoneListIds, mailbox,
@@ -758,28 +758,70 @@ public sealed class SyncEngine(
     }
 
     /// <summary>
-    /// Phase 3 (§3.8) step B: runs the reconcile a previous run left pending (§3.7).
+    /// Phase 3 (§3.8) step B, extended by §5.2. Reconciles the folder — strays adopted or removed,
+    /// missing rows dropped — when a previous run left the §3.7 flag pending, when the run asks for an
+    /// audit, or when a scheduled run has not audited this folder today. Never in a dry run; never when
+    /// the folder was just created (the §2.5 wipe in step C covers that). Runs BEFORE classification so
+    /// adopted strays are PATCHed and dropped rows are recreated in this same run.
     /// </summary>
-    private async Task ReconcileIfPendingAsync(
+    private async Task ReconcileFolderAsync(
         Tunnel tunnel,
         PhoneList canonicalPhoneList,
         TargetMailbox mailbox,
+        SyncRun run,
         string? folderId,
+        bool folderWasCreated,
         List<SourceUser> sourceUsers,
         bool isDryRun,
         MailboxCounters counters,
         CancellationToken ct)
     {
-        // Phase 3 (§3.7): a flag left by a previous run (crash/shutdown between a create batch and
-        // its bookkeeping) means Graph may hold contacts with no state row — reconcile BEFORE
-        // classification so they are adopted (and PATCHed below) instead of created twice.
-        if (!isDryRun && folderId is not null && await IsReconcilePendingAsync(tunnel.Id, mailbox.Id))
-        {
+        if (isDryRun || folderId is null || folderWasCreated)
+            return;
+
+        var pending = await IsReconcilePendingAsync(tunnel.Id, mailbox.Id);
+        var due = pending
+            || run.AuditFolders
+            || (run.RunType == RunType.Scheduled && await IsAuditDueAsync(tunnel.Id, mailbox.Id));
+        if (!due)
+            return;
+
+        if (pending)
             logger.LogInformation("Reconcile pending for tunnel {TunnelId} in mailbox {Email} from a previous run", tunnel.Id, mailbox.Email);
-            var pendingResult = await folderReconciler.ReconcileAsync(tunnel, mailbox, folderId, canonicalPhoneList.Id, sourceUsers, ct);
-            counters.Removed += pendingResult.Removed;
-            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
+
+        FolderReconcileResult result;
+        try
+        {
+            result = await folderReconciler.ReconcileAsync(tunnel, mailbox, folderId, canonicalPhoneList.Id, sourceUsers, ct);
         }
+        catch (Exception ex) when (!pending && ex is not OperationCanceledException)
+        {
+            // §5.2: an audit is opportunistic. Warn, leave last_audited_at alone so the next scheduled
+            // run retries, and let the mailbox carry on. A PENDING reconcile keeps today's behaviour:
+            // the exception reaches the per-mailbox catch and the mailbox is skipped this run, because
+            // creating on top of an unreconciled folder is exactly what §3.7 prevents.
+            logger.LogWarning(ex, "Folder audit failed for tunnel {TunnelId} in mailbox {Email}; continuing without it", tunnel.Id, mailbox.Email);
+            return;
+        }
+
+        counters.Removed += result.Removed;
+        foreach (var sourceUserId in result.MissingSourceUserIds)
+        {
+            runLogger.AddItem(new SyncRunItem
+            {
+                SyncRunId = run.Id,
+                TunnelId = tunnel.Id,
+                PhoneListId = canonicalPhoneList.Id,
+                TargetMailboxId = mailbox.Id,
+                SourceUserId = sourceUserId,
+                Action = "audit_missing",
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        if (pending)
+            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
+        await StampAuditedAsync(tunnel.Id, mailbox.Id);
     }
 
     /// <summary>
@@ -1784,6 +1826,50 @@ public sealed class SyncEngine(
         {
             logger.LogWarning(ex, "Failed to {Action} the reconcile flag for tunnel {TunnelId} mailbox {MailboxId}",
                 pending ? "set" : "clear", tunnelId, mailboxId);
+        }
+    }
+
+    /// <summary>
+    /// §5.2: true when the folder row's last_audited_at is null or from an earlier UTC day. No folder
+    /// row ⇒ due. A read failure ⇒ not due (logged); the next scheduled run tries again.
+    /// </summary>
+    private async Task<bool> IsAuditDueAsync(int tunnelId, int mailboxId)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var last = await db.TunnelMailboxFolders
+                .Where(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId)
+                .Select(f => f.LastAuditedAt)
+                .FirstOrDefaultAsync(CancellationToken.None);
+            return last is null || last.Value.Date < DateTime.UtcNow.Date;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to read the audit stamp for tunnel {TunnelId} mailbox {MailboxId}", tunnelId, mailboxId);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// §5.2: records a completed reconcile. No-op when the folder row does not exist. Fresh context +
+    /// CancellationToken.None — the stamp must outlive a cancel, like the reconcile flag.
+    /// </summary>
+    private async Task StampAuditedAsync(int tunnelId, int mailboxId)
+    {
+        try
+        {
+            await using var db = await dbContextFactory.CreateDbContextAsync(CancellationToken.None);
+            var row = await db.TunnelMailboxFolders
+                .FirstOrDefaultAsync(f => f.TunnelId == tunnelId && f.TargetMailboxId == mailboxId, CancellationToken.None);
+            if (row is null)
+                return;
+            row.LastAuditedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to stamp the audit time for tunnel {TunnelId} mailbox {MailboxId}", tunnelId, mailboxId);
         }
     }
 

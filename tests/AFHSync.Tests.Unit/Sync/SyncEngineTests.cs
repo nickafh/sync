@@ -57,6 +57,28 @@ public class SyncEngineTests
         await seedCtx.SaveChangesAsync();
     }
 
+    /// <summary>§5.2: the folder row for tunnel 1 / mailbox 1 that FakeContactFolderManager resolves as "fake-folder-id".</summary>
+    private static async Task SeedFolderRowAsync(string dbName, DateTime? lastAuditedAt, DateTime? reconcilePendingAt = null)
+    {
+        using var ctx = MakeDbContext(dbName);
+        ctx.TunnelMailboxFolders.Add(new TunnelMailboxFolder
+        {
+            TunnelId = 1, TargetMailboxId = 1, GraphFolderId = "fake-folder-id", FolderName = "Avail Tunnel",
+            UpdatedAt = DateTime.UtcNow, LastAuditedAt = lastAuditedAt, ReconcilePendingAt = reconcilePendingAt
+        });
+        await ctx.SaveChangesAsync();
+    }
+
+    private static TargetMailbox ActiveMailbox() => new() { Id = 1, EntraId = "mbx", Email = "u@contoso.com", IsActive = true };
+
+    private static FakeSourceResolver OneUser() => new([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]);
+
+    private static async Task<TunnelMailboxFolder> FolderRowAsync(string dbName)
+    {
+        await using var ctx = MakeDbContext(dbName);
+        return await ctx.TunnelMailboxFolders.SingleAsync(f => f.TunnelId == 1 && f.TargetMailboxId == 1);
+    }
+
     private static ODataError UnavailableMailboxError() => new()
     {
         Error = new MainError
@@ -72,7 +94,7 @@ public class SyncEngineTests
         FakeContactPayloadBuilder? payloadBuilder = null,
         FakeContactWriter? contactWriter = null,
         FakeContactFolderManager? folderManager = null,
-        FakeFolderReconciler? folderReconciler = null,
+        IFolderReconciler? folderReconciler = null,
         IStaleContactHandler? staleHandler = null,
         FakeRunLogger? runLogger = null,
         ThrottleCounter? throttleCounter = null,
@@ -1657,6 +1679,229 @@ public class SyncEngineTests
     }
 
     // ==============================
+    // §5.2: folder audit gating, stamps, failure handling and audit_missing items
+    // ==============================
+
+    [Fact]
+    public async Task RunAsync_Scheduled_AuditsFolderNeverAudited_AndStampsIt()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null);
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { (1, 1, "fake-folder-id") }, reconciler.Calls);
+        var row = await FolderRowAsync(dbName);
+        Assert.NotNull(row.LastAuditedAt);
+        Assert.Equal(DateTime.UtcNow.Date, row.LastAuditedAt!.Value.Date);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_NoFolderRow_StillAudits()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());       // no tunnel_mailbox_folders row ⇒ treated as never audited
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(reconciler.Calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_AuditsFolderLastAuditedYesterday()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: DateTime.UtcNow.Date.AddDays(-1).AddHours(23));   // 23:00 UTC yesterday
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(reconciler.Calls);
+        Assert.Equal(DateTime.UtcNow.Date, (await FolderRowAsync(dbName)).LastAuditedAt!.Value.Date);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_SkipsFolderAuditedToday()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        var earlierToday = DateTime.UtcNow;                                  // same UTC date by construction
+        await SeedFolderRowAsync(dbName, lastAuditedAt: earlierToday);
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);
+        Assert.Equal(earlierToday, (await FolderRowAsync(dbName)).LastAuditedAt);   // stamp untouched
+    }
+
+    [Fact]
+    public async Task RunAsync_Manual_WithoutFlag_DoesNotAudit()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null);
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);
+        Assert.Null((await FolderRowAsync(dbName)).LastAuditedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_Manual_WithAuditFlagOnRow_Audits()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: DateTime.UtcNow);   // audited today already — the flag still wins
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.SyncRuns.Add(new SyncRun
+            {
+                Id = 7, RunType = RunType.Manual, Status = SyncStatus.Pending, IsDryRun = false,
+                AuditFolders = true, CreatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(7, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(reconciler.Calls);
+    }
+
+    [Fact]
+    public async Task RunAsync_DryRun_WithAuditFlag_NeverAudits()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null);
+        using (var seedCtx = MakeDbContext(dbName))
+        {
+            seedCtx.SyncRuns.Add(new SyncRun
+            {
+                Id = 7, RunType = RunType.DryRun, Status = SyncStatus.Pending, IsDryRun = true,
+                AuditFolders = true, CreatedAt = DateTime.UtcNow
+            });
+            await seedCtx.SaveChangesAsync();
+        }
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(7, RunType.DryRun, isDryRun: true, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);
+        Assert.Null((await FolderRowAsync(dbName)).LastAuditedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_FolderJustCreated_DoesNotAudit()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        var folderManager = new FakeContactFolderManager();
+        folderManager.MissingFolderMailboxes.Add("mbx");                     // a real run "creates" the folder ⇒ wasCreated = true
+        var reconciler = new FakeFolderReconciler();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderManager: folderManager, folderReconciler: reconciler, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(reconciler.Calls);                                       // the §2.5 wipe in step C covers a new folder
+        Assert.Equal(1, runLogger.FinalizedCreated);
+        Assert.Equal(0, runLogger.FinalizedFailed);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_AuditListingFails_WarnsAndContinues_StampUnchanged()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null);
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), contactWriter: writer,
+            folderReconciler: new ThrowingFolderReconciler(), runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(writer.CreatedContactIds);                              // the mailbox carried on
+        Assert.Equal(0, runLogger.FinalizedFailed);
+        Assert.Null((await FolderRowAsync(dbName)).LastAuditedAt);           // retried by the next scheduled run
+    }
+
+    [Fact]
+    public async Task RunAsync_PendingReconcileFails_FailsTheMailbox_AndKeepsTheFlag()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null, reconcilePendingAt: DateTime.UtcNow.AddHours(-1));
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), contactWriter: writer,
+            folderReconciler: new ThrowingFolderReconciler(), runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Empty(writer.CreatedContactIds);                               // Phase 3 (§3.7): never create on top of an unreconciled folder
+        Assert.Equal(1, runLogger.FinalizedFailed);
+        var row = await FolderRowAsync(dbName);
+        Assert.NotNull(row.ReconcilePendingAt);
+        Assert.Null(row.LastAuditedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_PendingFlag_ReconcilesOnAnyRunType_ClearsFlag_AndStamps()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null, reconcilePendingAt: DateTime.UtcNow.AddHours(-1));
+        var reconciler = new FakeFolderReconciler();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), folderReconciler: reconciler);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Single(reconciler.Calls);
+        var row = await FolderRowAsync(dbName);
+        Assert.Null(row.ReconcilePendingAt);
+        Assert.NotNull(row.LastAuditedAt);
+    }
+
+    [Fact]
+    public async Task RunAsync_Scheduled_MissingRow_WritesAuditMissingItem_ThenCreates()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        await SeedFolderRowAsync(dbName, lastAuditedAt: null);
+        var reconciler = new FakeFolderReconciler();
+        reconciler.MissingSourceUserIds.Add(1);                              // the real reconciler already dropped Alice's dead row
+        var writer = new FakeContactWriter();
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(), contactWriter: writer, folderReconciler: reconciler, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Scheduled, isDryRun: false, CancellationToken.None);
+
+        var audit = Assert.Single(runLogger.AddedItems, i => i.Action == "audit_missing");
+        Assert.Equal(1, audit.SourceUserId);
+        Assert.Equal(1, audit.TunnelId);
+        Assert.Equal(1, audit.PhoneListId);
+        Assert.Equal(1, audit.TargetMailboxId);
+        Assert.Contains(runLogger.AddedItems, i => i.Action == "created" && i.SourceUserId == 1);
+        Assert.Single(writer.CreatedContactIds);
+    }
+
+    // ==============================
     // Stub implementations
     // ==============================
 
@@ -1871,6 +2116,14 @@ public class SyncEngineTests
             Calls.Add((tunnel.Id, mailbox.Id, folderId));
             return Task.FromResult(new FolderReconcileResult(0, 0, 0, MissingSourceUserIds.ToList()));
         }
+    }
+
+    /// <summary>§5.2 failure handling: the folder listing blows up.</summary>
+    private sealed class ThrowingFolderReconciler : IFolderReconciler
+    {
+        public Task<FolderReconcileResult> ReconcileAsync(Tunnel tunnel, TargetMailbox mailbox, string folderId,
+            int canonicalPhoneListId, IReadOnlyList<SourceUser> sourceUsers, CancellationToken ct)
+            => throw new InvalidOperationException("simulated Graph listing failure");
     }
 
     private sealed class FakeStaleContactHandler : IStaleContactHandler
