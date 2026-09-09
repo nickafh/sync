@@ -8,6 +8,9 @@ public class SyncRun
     public RunType RunType { get; set; } = RunType.Manual;
     public SyncStatus Status { get; set; } = SyncStatus.Pending;
     public bool IsDryRun { get; set; }
+
+    /// <summary>§5.2: this run reconciles every folder it touches (strays and missing rows), not only flagged ones.</summary>
+    public bool AuditFolders { get; set; }
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public int? DurationMs { get; set; }

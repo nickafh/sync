@@ -15,6 +15,7 @@ public class SyncRunConfiguration : IEntityTypeConfiguration<SyncRun>
         builder.Property(e => e.RunType).HasColumnName("run_type").IsRequired();
         builder.Property(e => e.Status).HasColumnName("status").IsRequired();
         builder.Property(e => e.IsDryRun).HasColumnName("is_dry_run").HasDefaultValue(false);
+        builder.Property(e => e.AuditFolders).HasColumnName("audit_folders").HasDefaultValue(false);
         builder.Property(e => e.StartedAt).HasColumnName("started_at");
         builder.Property(e => e.CompletedAt).HasColumnName("completed_at");
         builder.Property(e => e.DurationMs).HasColumnName("duration_ms");

@@ -22,6 +22,9 @@ public class TunnelMailboxFolder
     /// </summary>
     public DateTime? ReconcilePendingAt { get; set; }
 
+    /// <summary>§5.2: when this folder was last reconciled against Graph; a scheduled run audits it once per UTC day.</summary>
+    public DateTime? LastAuditedAt { get; set; }
+
     // Navigation properties
     public Tunnel Tunnel { get; set; } = null!;
     public TargetMailbox TargetMailbox { get; set; } = null!;

@@ -45,6 +45,26 @@ public class MigrationTests
         Assert.True(addColumn.IsNullable);
     }
 
+    [Fact]
+    public void Phase5Migration_AddsAuditFoldersFlag_AndLastAuditedAt()
+    {
+        var migration = new Phase5FolderAudit();
+
+        var adds = migration.UpOperations.OfType<AddColumnOperation>().OrderBy(o => o.Name).ToList();
+        Assert.Equal(2, adds.Count);
+
+        Assert.Equal("sync_runs", adds[0].Table);
+        Assert.Equal("audit_folders", adds[0].Name);
+        Assert.False(adds[0].IsNullable);
+        Assert.Equal(false, adds[0].DefaultValue);
+
+        Assert.Equal("tunnel_mailbox_folders", adds[1].Table);
+        Assert.Equal("last_audited_at", adds[1].Name);
+        Assert.True(adds[1].IsNullable);
+
+        Assert.Empty(migration.UpOperations.OfType<SqlOperation>());   // no data fix-up: the first run cleans up (§5.0)
+    }
+
     [PostgresFact]
     public async Task MigrateAsync_CreatesPhase2Columns_Table_And_UniqueIndex()
     {
@@ -91,12 +111,13 @@ public class MigrationTests
                     .SqlQueryRaw<string>("SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'sync_runs'")
                     .ToListAsync();
                 Assert.Contains("requested_tunnel_ids", runColumns);
+                Assert.Contains("audit_folders", runColumns);
 
                 var folderColumns = await db.Database
                     .SqlQueryRaw<string>("SELECT column_name AS \"Value\" FROM information_schema.columns WHERE table_name = 'tunnel_mailbox_folders'")
                     .ToListAsync();
                 Assert.Equal(
-                    new[] { "folder_name", "graph_folder_id", "id", "reconcile_pending_at", "target_mailbox_id", "tunnel_id", "updated_at" },
+                    new[] { "folder_name", "graph_folder_id", "id", "last_audited_at", "reconcile_pending_at", "target_mailbox_id", "tunnel_id", "updated_at" },
                     folderColumns.OrderBy(c => c).ToArray());
 
                 var indexDefs = await db.Database
