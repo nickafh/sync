@@ -32,9 +32,9 @@ pgdata/
 # Misc
 cookies.txt
 
-# Planning (managed separately)
-.planning/
+# Local Claude config (managed separately)
 .claude/
+.superpowers
 CLAUDE.md
 exchange-cert.crt
 exchange-cert.key
