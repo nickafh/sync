@@ -45,7 +45,7 @@
 
 ## 5.3 API and UI
 
-- `TriggerSyncRequest` gains `bool AuditFolders = false`. `POST /api/sync-runs` stores it on the row like `IsDryRun`. `SyncRunDto` and `SyncRunDetailDto` gain `AuditFolders`.
+- `TriggerSyncRequest` gains `bool AuditFolders = false`. `POST /api/sync-runs` stores it on the row like `IsDryRun`. `SyncRunDto` and `SyncRunDetailDto` gain `AuditFolders`. A dry run never audits (§5.2), so the API stores `audit_folders = false` for dry-run requests whatever was sent, keeping the row and its badges honest.
 - Dashboard: an **Audit folders** checkbox beside **Run Sync Now**, default off, hint "Re-checks every contact folder against Graph. Slower." The trigger sends `auditFolders`.
 - Runs list and run detail: an `audit` status badge next to the existing `dry_run` badge when `auditFolders` is true. Run detail `ACTION_TABS` gains **Audit** (`audit_missing`).
 
@@ -64,10 +64,11 @@
 3. Dashboard: **Run Sync Now** with **Audit folders** checked. Expect, for the four test mailboxes, Removed plus `audit_missing` items ≈ 3,620 (the audit in step B drops list-10 rows whose contact is already gone before the step C cleanup sees them, so the split between the two is not predictable; nick@'s Charlotte row 17230 lands in `audit_missing`), plus any strays and missing rows fleet-wide, and `Reconcile:` log lines for every folder.
 4. After: the query in step 1 returns no rows; `SELECT COUNT(*) FROM tunnel_mailbox_folders WHERE last_audited_at IS NULL` is small (inactive or unavailable mailboxes only); jp@'s Outlook no longer lists Charlotte Hedgepeth (AFH) and the doubled "email • email" entries are gone; the two counts converge on about 948 plus personal contacts.
 5. Next 00:00 UTC scheduled run audits every folder (duration about five minutes longer); the following 12:00 run shows no `Reconcile:` lines and finishes in about two minutes.
+6. Behaviour change to note for users: from the first 00:00 UTC run every app-owned tunnel folder is reconciled daily, so a contact someone added by hand into one of those folders (or a leftover in a same-named folder the folder manager adopted) is removed as a stray at the next audit. Before this branch that only happened when a previous run had left the reconcile flag pending.
 
 ## Out of scope
 
-Mailboxes a tunnel no longer targets keep their folder and rows (same class of gap, separate change). Rows in inactive target mailboxes (about 44k) stay as they are. CiraSync-era Outlook categories are not the app's and are not touched.
+Mailboxes a tunnel no longer targets keep their folder and rows (same class of gap, separate change). Rows in inactive target mailboxes (about 44k) stay as they are. CiraSync-era Outlook categories are not the app's and are not touched. The tunnel edit impact preview (`TunnelsController`) still counts rows under a removed phone list as removals; after §5.1 those rows are re-pointed, not removed, whenever the mailbox is still targeted. Follow-up: make the preview count only mailboxes the tunnel would no longer target.
 
 ## Process
 
