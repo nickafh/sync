@@ -147,6 +147,12 @@ public class ContactPayloadBuilderTests
         var b = _builder.BuildPayload(withOther, fields, existingState: null);
 
         Assert.Equal(a.DataHash, b.DataHash);            // only the Always field is hashed
+
+        // The hash must not depend on existingState either — the payload does (AddMissing is
+        // written for new contacts only), the hash never does.
+        var existing = _builder.BuildPayload(withValue, fields, new ContactSyncState { Id = 1 });
+        Assert.Equal(a.DataHash, existing.DataHash);
+        Assert.False(existing.Payload.ContainsKey("JobTitle"));
     }
 
     [Fact]
