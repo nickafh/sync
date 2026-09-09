@@ -30,12 +30,6 @@ public interface IContactPayloadBuilder
 /// Keys are sorted by <see cref="StringComparer.Ordinal"/> to ensure consistent serialization.
 /// </param>
 /// <param name="DataHash">Lowercase hex SHA-256 of the hash input (Always + RemoveBlank fields).</param>
-/// <param name="LegacyDataHash">
-/// Phase 4 (§4.1): the pre-Phase-4 formula's hash — the same input plus every AddMissing value —
-/// or null when no AddMissing field contributed a value (then the two formulas agree). Lets a
-/// stored hash written by the old formula be recognised as "unchanged" and rewritten locally.
-/// </param>
 public record ContactPayloadResult(
     SortedDictionary<string, string> Payload,
-    string DataHash,
-    string? LegacyDataHash = null);
+    string DataHash);

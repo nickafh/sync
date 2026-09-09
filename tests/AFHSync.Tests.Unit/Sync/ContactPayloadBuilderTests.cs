@@ -129,7 +129,7 @@ public class ContactPayloadBuilderTests
     }
 
     // ==============================
-    // Phase 4 (§4.1): AddMissing never drives the hash; the legacy hash lets old rows migrate
+    // Phase 4 (§4.1): AddMissing never drives the hash
     // ==============================
 
     [Fact]
@@ -147,45 +147,6 @@ public class ContactPayloadBuilderTests
         var b = _builder.BuildPayload(withOther, fields, existingState: null);
 
         Assert.Equal(a.DataHash, b.DataHash);            // only the Always field is hashed
-        Assert.NotEqual(a.LegacyDataHash, b.LegacyDataHash);
-    }
-
-    [Fact]
-    public void LegacyDataHash_IsTheOldFormula_AddMissingIncludedAsIfAlways()
-    {
-        var source = CreateSourceUser(displayName: "Jane Smith", jobTitle: "Advisor");
-        var addMissing = new List<FieldProfileField>
-        {
-            CreateField("DisplayName", SyncBehavior.Always),
-            CreateField("JobTitle", SyncBehavior.AddMissing),
-        };
-        var always = new List<FieldProfileField>
-        {
-            CreateField("DisplayName", SyncBehavior.Always),
-            CreateField("JobTitle", SyncBehavior.Always),
-        };
-
-        var migrated = _builder.BuildPayload(source, addMissing, existingState: null);
-        var reference = _builder.BuildPayload(source, always, existingState: null);
-
-        // The pre-Phase-4 formula hashed AddMissing values exactly like Always values.
-        Assert.Equal(reference.DataHash, migrated.LegacyDataHash);
-        Assert.NotEqual(reference.DataHash, migrated.DataHash);
-    }
-
-    [Fact]
-    public void LegacyDataHash_IsNull_WhenNoAddMissingFieldContributed()
-    {
-        var source = CreateSourceUser(displayName: "Jane Smith", jobTitle: null);
-        var noAddMissing = new List<FieldProfileField> { CreateField("DisplayName", SyncBehavior.Always) };
-        var addMissingButNull = new List<FieldProfileField>
-        {
-            CreateField("DisplayName", SyncBehavior.Always),
-            CreateField("JobTitle", SyncBehavior.AddMissing),   // source value is null ⇒ contributed nothing
-        };
-
-        Assert.Null(_builder.BuildPayload(source, noAddMissing, existingState: null).LegacyDataHash);
-        Assert.Null(_builder.BuildPayload(source, addMissingButNull, existingState: null).LegacyDataHash);
     }
 
     [Fact]

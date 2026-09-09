@@ -1584,20 +1584,17 @@ public class SyncEngineTests
 
     /// <summary>
     /// Always returns hash "new-hash" so existing states with "old-hash" trigger updates,
-    /// and states with "new-hash" are skipped. Phase 4: <see cref="LegacyHash"/> (default null)
-    /// is returned as LegacyDataHash so tests can exercise the rehash path.
+    /// and states with "new-hash" are skipped.
     /// </summary>
     private sealed class FakeContactPayloadBuilder : IContactPayloadBuilder
     {
-        public string? LegacyHash { get; init; }
-
         public ContactPayloadResult BuildPayload(
             SourceUser source,
             IReadOnlyList<FieldProfileField> fieldSettings,
             ContactSyncState? existingState)
         {
             var payload = new SortedDictionary<string, string> { { "DisplayName", source.DisplayName ?? "Unknown" } };
-            return new ContactPayloadResult(payload, "new-hash", LegacyHash);
+            return new ContactPayloadResult(payload, "new-hash");
         }
     }
 
