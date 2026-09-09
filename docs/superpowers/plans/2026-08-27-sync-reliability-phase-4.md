@@ -1088,13 +1088,13 @@ Spec: docs/superpowers/specs/2026-08-25-sync-reliability-design.md (Phase 4 §4.
 
 ## Deploy
 1. `./deploy.sh` (let it pull; only `worker/` changed ⇒ it rebuilds the worker). No migration.
-   > **As verified 2026-09-09:** N was 0 on every run — the production profile has no `add_missing` field, so nothing needed migrating and no update wave occurred (`contacts_updated = 0` on run 844 and after). The legacy-hash code is removed by `docs/superpowers/plans/2026-09-09-sync-reliability-phase-4-legacy-hash-removal.md`.
 2. First run after deploy: `docker logs afh-worker | grep Rehashed` shows `Rehashed N contact state(s) in
    mailbox …` per mailbox (N ≈ every contact whose profile has a non-blank AddMissing value — Department in
    the default profile); run detail shows those contacts as **skipped**; `contactsUpdated` stays small
    (real source changes, plus rows whose Department changed since their last sync — those take one
    harmless PATCH, the payload excludes AddMissing for existing contacts). The second run logs zero
    `Rehashed` lines. Run 1 should not be materially longer than run 0 (the rehash is local).
+   > **As verified 2026-09-09:** N was 0 on every run — the production profile has no `add_missing` field, so nothing needed migrating and no update wave occurred (`contacts_updated = 0` on run 844 and after). The legacy-hash code is removed by `docs/superpowers/plans/2026-09-09-sync-reliability-phase-4-legacy-hash-removal.md`.
 3. `docker exec afh-postgres psql -U afhsync -d afhsync -c "SELECT count(*) FROM contact_sync_state WHERE last_result = 'rehashed';"`
    after run 1 ≈ contacts with a non-blank Department; `previous_data_hash` populated on those rows.
 4. `docker logs afh-worker` no longer shows `Request starting HTTP/1.1 GET /health` lines (`Now listening on`

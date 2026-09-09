@@ -521,10 +521,10 @@ Expected: empty status; four commits on the branch (chore .gitignore, docs(spec)
 
 ```bash
 git push -u origin sync-reliability/phase-4-followup
-gh pr create --base main --title "Remove the Phase 4 §4.1 legacy-hash migration (never fired in production)" --body-file .superpowers/sdd/2026-09-09-legacy-hash-removal/pr-body.md
+gh pr create --base main --title "Remove the Phase 4 §4.1 legacy-hash migration (never fired in production)" --body-file .superpowers/sdd/2026-09-09-sync-reliability-phase-4-legacy-hash-removal/pr-body.md
 ```
 
-PR body (`.superpowers/sdd/2026-09-09-legacy-hash-removal/pr-body.md`):
+PR body (`.superpowers/sdd/2026-09-09-sync-reliability-phase-4-legacy-hash-removal/pr-body.md`):
 
 ```markdown
 ## Why
