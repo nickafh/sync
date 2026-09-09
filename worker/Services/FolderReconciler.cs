@@ -191,7 +191,7 @@ public class FolderReconciler : IFolderReconciler
         }, ct);
 
         if (response?.Value is null)
-            return contacts;
+            throw new InvalidOperationException("Graph returned no contact collection for the folder listing");
 
         var iterator = Microsoft.Graph.PageIterator<Contact, ContactCollectionResponse>
             .CreatePageIterator(client, response, c =>

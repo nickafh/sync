@@ -1484,6 +1484,26 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public async Task RunAsync_OutcomeUnknownCreate_ReconcileReportsMissing_WritesAuditMissingItem()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithMailboxesAsync(dbName, ActiveMailbox());
+        var reconciler = new FakeFolderReconciler();
+        reconciler.MissingSourceUserIds.Add(1);
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName, sourceResolver: OneUser(),
+            contactWriter: new FakeContactWriter { CreateOutcomeUnknown = true },
+            folderReconciler: reconciler, runLogger: runLogger);
+
+        // Manual (not Scheduled), so only the outcome-unknown reconcile fires — the daily audit
+        // gate (§5.2 trigger 3) never engages, isolating this path from RunAsync_Scheduled_MissingRow_*.
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        var audit = Assert.Single(runLogger.AddedItems, i => i.Action == "audit_missing");
+        Assert.Equal(1, audit.SourceUserId);
+    }
+
+    [Fact]
     public async Task RunAsync_CreateBatchSucceeds_DoesNotReconcile_AndClearsTheFlag()
     {
         var dbName = Guid.NewGuid().ToString();
@@ -1621,6 +1641,32 @@ public class SyncEngineTests
         Assert.Empty(writer.UpdatedContactIds);                               // hash matches: nothing to PATCH
         Assert.Equal(1, runLogger.FinalizedRemoved);
         Assert.Equal(0, runLogger.FinalizedFailed);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var remaining = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal(1, remaining.Id);
+        Assert.Equal(13, remaining.PhoneListId);
+    }
+
+    [Fact]
+    public async Task RunAsync_RetiredListRowBesideCanonicalRow_DuplicateAlreadyGone_StillCleansUpAndCountsRemoved()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedTunnelWithRetiredListAsync(dbName,
+            State(1, sourceUserId: 1, phoneListId: 13, graphContactId: "g-13", dataHash: "new-hash"),
+            State(2, sourceUserId: 1, phoneListId: 10, graphContactId: "g-10", dataHash: null));   // April leftover: a second contact for Alice
+        var writer = new FakeContactWriter { DeleteReturnsNotFound = true };   // the duplicate Graph contact is already gone
+        var runLogger = new FakeRunLogger();
+        var engine = CreateEngine(dbName,
+            sourceResolver: new FakeSourceResolver([new SourceUser { Id = 1, EntraId = "u1", DisplayName = "Alice" }]),
+            contactWriter: writer, runLogger: runLogger);
+
+        await engine.RunAsync(null, RunType.Manual, isDryRun: false, CancellationToken.None);
+
+        Assert.Equal(new[] { "g-10" }, writer.DeletedContactIds);           // the duplicate under the retired list
+        Assert.Empty(writer.CreatedContactIds);
+        Assert.Empty(writer.UpdatedContactIds);                               // hash matches: nothing to PATCH
+        Assert.Equal(1, runLogger.FinalizedRemoved);                         // a 404 on the duplicate is still Removed
+        Assert.Equal(0, runLogger.FinalizedFailed);                         // ...not a failure
         await using var verifyCtx = MakeDbContext(dbName);
         var remaining = await verifyCtx.ContactSyncStates.SingleAsync();
         Assert.Equal(1, remaining.Id);
@@ -1956,6 +2002,9 @@ public class SyncEngineTests
         /// <summary>When true, batch updates return a 404 NotFound (contact deleted on the device).</summary>
         public bool UpdateReturnsNotFound { get; init; }
 
+        /// <summary>When true, batch deletes return a 404 NotFound (contact already gone).</summary>
+        public bool DeleteReturnsNotFound { get; init; }
+
         /// <summary>Phase 2 (2.6b) test hook: invoked at the start of every batch create call — lets a
         /// test simulate a shutdown token arriving while a mailbox write is in flight.</summary>
         public Action? OnCreateContactsBatch { get; set; }
@@ -2060,7 +2109,9 @@ public class SyncEngineTests
             foreach (var (key, graphContactId) in operations)
             {
                 DeletedContactIds.Add(graphContactId);
-                results[key] = new BatchOperationResult(true);
+                results[key] = DeleteReturnsNotFound
+                    ? new BatchOperationResult(false, Error: "HTTP 404", NotFound: true)
+                    : new BatchOperationResult(true);
             }
             return Task.FromResult(results);
         }

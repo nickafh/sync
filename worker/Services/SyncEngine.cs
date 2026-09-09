@@ -93,8 +93,8 @@ public sealed class SyncEngine(
                 run.Id, run.RequestedTunnelIds);
 
         logger.LogInformation(
-            "SyncEngine starting RunId={RunId}, RunType={RunType}, Tunnels={Tunnels}, IsDryRun={IsDryRun}",
-            run.Id, run.RunType, requestedTunnelIds is null ? "all" : string.Join(",", requestedTunnelIds), isDryRun);
+            "SyncEngine starting RunId={RunId}, RunType={RunType}, Tunnels={Tunnels}, IsDryRun={IsDryRun}, AuditFolders={AuditFolders}",
+            run.Id, run.RunType, requestedTunnelIds is null ? "all" : string.Join(",", requestedTunnelIds), isDryRun, run.AuditFolders);
 
         // Step 2: Reset contact folder manager cache (fresh run).
         contactFolderManager.ResetCache();
@@ -805,7 +805,26 @@ public sealed class SyncEngine(
         }
 
         counters.Removed += result.Removed;
-        foreach (var sourceUserId in result.MissingSourceUserIds)
+        RecordAuditMissingItems(run, tunnel, canonicalPhoneList, mailbox, result.MissingSourceUserIds);
+
+        if (pending)
+            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
+        await StampAuditedAsync(tunnel.Id, mailbox.Id);
+    }
+
+    /// <summary>
+    /// §5.2: one "audit_missing" run item per row a reconcile dropped as no-longer-in-the-folder.
+    /// Shared by the §3.7/§5.2 reconcile in <see cref="ReconcileFolderAsync"/> and the outcome-unknown
+    /// reconcile after a create batch (§3.7) in <see cref="ExecuteCreatesAsync"/>.
+    /// </summary>
+    private void RecordAuditMissingItems(
+        SyncRun run,
+        Tunnel tunnel,
+        PhoneList canonicalPhoneList,
+        TargetMailbox mailbox,
+        IReadOnlyList<int> sourceUserIds)
+    {
+        foreach (var sourceUserId in sourceUserIds)
         {
             runLogger.AddItem(new SyncRunItem
             {
@@ -818,10 +837,6 @@ public sealed class SyncEngine(
                 CreatedAt = DateTime.UtcNow
             });
         }
-
-        if (pending)
-            await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
-        await StampAuditedAsync(tunnel.Id, mailbox.Id);
     }
 
     /// <summary>
@@ -915,7 +930,10 @@ public sealed class SyncEngine(
 
                     foreach (var (key, result) in dupeResults)
                     {
-                        if (!result.Success)
+                        // A 404 here means the duplicate Graph contact is already gone — exactly the
+                        // desired end state, not a failure. The row is still deleted and counted as
+                        // Removed below either way.
+                        if (!result.Success && !result.NotFound)
                             logger.LogWarning("Failed to delete duplicate Graph contact (key={Key}): {Error}", key, result.Error);
                     }
                 }
@@ -1112,6 +1130,7 @@ public sealed class SyncEngine(
                 logger.LogWarning("Create batch had an unknown outcome for tunnel {TunnelId} in mailbox {Email} — reconciling the folder", tunnel.Id, mailbox.Email);
                 var reconcile = await folderReconciler.ReconcileAsync(tunnel, mailbox, targetFolderId, canonicalPhoneList.Id, sourceUsers, ct);
                 counters.Removed += reconcile.Removed;
+                RecordAuditMissingItems(run, tunnel, canonicalPhoneList, mailbox, reconcile.MissingSourceUserIds);
             }
             await SetReconcilePendingAsync(tunnel.Id, mailbox.Id, pending: false);
 
