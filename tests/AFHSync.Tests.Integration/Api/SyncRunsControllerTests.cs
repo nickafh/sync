@@ -193,6 +193,24 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task PostSync_DryRunWithAuditFolders_StoresFalse()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        db.SyncRuns.RemoveRange(db.SyncRuns.Where(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending));
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedPostAsync("/api/sync-runs",
+            new { runType = "dry_run", isDryRun = true, auditFolders = true });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var runId = (await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("runId").GetInt32();
+
+        var run = await db.SyncRuns.FindAsync(runId);
+        Assert.False(run!.AuditFolders);   // §5.3: a dry run never stores audit_folders, whatever was sent
+        Assert.True(run.IsDryRun);
+    }
+
+    [Fact]
     public async Task GetRuns_ReturnsPaginatedList()
     {
         // Seed some sync runs

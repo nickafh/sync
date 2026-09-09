@@ -58,7 +58,7 @@ public class SyncRunsController : ControllerBase
             RunType = runType,
             Status = SyncStatus.Pending,
             IsDryRun = request.IsDryRun,
-            AuditFolders = request.AuditFolders,
+            AuditFolders = request.AuditFolders && !request.IsDryRun,
             RequestedTunnelIds = request.TunnelIds is { Length: > 0 }
                 ? System.Text.Json.JsonSerializer.Serialize(request.TunnelIds)
                 : null,
