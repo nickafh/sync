@@ -18,7 +18,6 @@ public sealed class StaleContactHandler(
 {
     public async Task<StaleResult> HandleStaleAsync(
         Tunnel tunnel,
-        int phoneListId,
         int targetMailboxId,
         string mailboxEntraId,
         HashSet<int> currentSourceUserIds,
@@ -26,11 +25,11 @@ public sealed class StaleContactHandler(
     {
         await using var db = await dbContextFactory.CreateDbContextAsync(ct);
 
-        // Load all non-stale ContactSyncState records for this tunnel+phoneList+mailbox.
-        // We also need already-stale records for FlagHold hold-period check.
+        // §5.1: every row of this (tunnel, mailbox), whatever phone list created it — a row under a
+        // list no longer attached to the tunnel is a stale candidate like any other. Already-stale
+        // rows are included for the FlagHold hold-period check.
         var existingStates = await db.ContactSyncStates
             .Where(s => s.TunnelId == tunnel.Id
-                        && s.PhoneListId == phoneListId
                         && s.TargetMailboxId == targetMailboxId)
             .ToListAsync(ct);
 

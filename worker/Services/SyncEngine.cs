@@ -698,7 +698,7 @@ public sealed class SyncEngine(
 
         // G. Drop states whose contact 404'd on update; H. stale pass (skipped when a source failed, §2.3).
         await HealDeadStatesAsync(statesToHeal, isDryRun);
-        await HandleStaleContactsAsync(tunnel, allPhoneListIds, mailbox, run, sourceUsers, isDryRun, skipStale, counters, ct);
+        await HandleStaleContactsAsync(tunnel, canonicalPhoneList, mailbox, run, sourceUsers, isDryRun, skipStale, counters, ct);
 
         return counters.ToTuple();
     }
@@ -1218,10 +1218,12 @@ public sealed class SyncEngine(
 
     /// <summary>
     /// Phase 3 (§3.8) step H: the stale pass — removes contacts no longer in the source set.
+    /// §5.1: one call per (tunnel, mailbox); the handler sees every row of the pair regardless of
+    /// phone list, so rows under a retired list are handled too. Items carry the canonical list id.
     /// </summary>
     private async Task HandleStaleContactsAsync(
         Tunnel tunnel,
-        List<int> allPhoneListIds,
+        PhoneList canonicalPhoneList,
         TargetMailbox mailbox,
         SyncRun run,
         List<SourceUser> sourceUsers,
@@ -1230,48 +1232,41 @@ public sealed class SyncEngine(
         MailboxCounters counters,
         CancellationToken ct)
     {
-        // Handle stale contacts after processing all source users.
-        // Check across all phone lists for this tunnel+mailbox (stale handler scopes by phone list,
-        // so call it for each phone list to catch records from any phone list).
         // Phase 2 (§2.3): skipped when any source failed — the current set is incomplete.
-        if (!isDryRun && !skipStale)
+        if (isDryRun || skipStale)
+            return;
+
+        var currentSourceIds = new HashSet<int>(sourceUsers.Select(u => u.Id));
+        var staleResult = await staleContactHandler.HandleStaleAsync(
+            tunnel, mailbox.Id, mailbox.EntraId, currentSourceIds, ct);
+
+        for (int i = 0; i < staleResult.Removed; i++)
         {
-            var currentSourceIds = new HashSet<int>(sourceUsers.Select(u => u.Id));
-
-            foreach (var phoneListId in allPhoneListIds)
+            runLogger.AddItem(new SyncRunItem
             {
-                var staleResult = await staleContactHandler.HandleStaleAsync(
-                    tunnel, phoneListId, mailbox.Id, mailbox.EntraId, currentSourceIds, ct);
-
-                for (int i = 0; i < staleResult.Removed; i++)
-                {
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = phoneListId,
-                        TargetMailboxId = mailbox.Id,
-                        Action = "removed",
-                        CreatedAt = DateTime.UtcNow
-                    });
-                }
-
-                for (int i = 0; i < staleResult.StaleDetected; i++)
-                {
-                    runLogger.AddItem(new SyncRunItem
-                    {
-                        SyncRunId = run.Id,
-                        TunnelId = tunnel.Id,
-                        PhoneListId = phoneListId,
-                        TargetMailboxId = mailbox.Id,
-                        Action = "stale_detected",
-                        CreatedAt = DateTime.UtcNow
-                    });
-                }
-
-                counters.Removed += staleResult.Removed;
-            }
+                SyncRunId = run.Id,
+                TunnelId = tunnel.Id,
+                PhoneListId = canonicalPhoneList.Id,
+                TargetMailboxId = mailbox.Id,
+                Action = "removed",
+                CreatedAt = DateTime.UtcNow
+            });
         }
+
+        for (int i = 0; i < staleResult.StaleDetected; i++)
+        {
+            runLogger.AddItem(new SyncRunItem
+            {
+                SyncRunId = run.Id,
+                TunnelId = tunnel.Id,
+                PhoneListId = canonicalPhoneList.Id,
+                TargetMailboxId = mailbox.Id,
+                Action = "stale_detected",
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        counters.Removed += staleResult.Removed;
     }
 
     /// <summary>

@@ -1769,7 +1769,7 @@ public class SyncEngineTests
     private sealed class FakeStaleContactHandler : IStaleContactHandler
     {
         public Task<StaleResult> HandleStaleAsync(
-            Tunnel tunnel, int phoneListId, int targetMailboxId,
+            Tunnel tunnel, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
             => Task.FromResult(new StaleResult(0, 0));
     }
@@ -1779,7 +1779,7 @@ public class SyncEngineTests
         public int CallCount { get; private set; }
 
         public Task<StaleResult> HandleStaleAsync(
-            Tunnel tunnel, int phoneListId, int targetMailboxId,
+            Tunnel tunnel, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
         {
             CallCount++;
@@ -1885,7 +1885,7 @@ public class SyncEngineTests
     private sealed class ThrowingStaleContactHandler : IStaleContactHandler
     {
         public Task<StaleResult> HandleStaleAsync(
-            Tunnel tunnel, int phoneListId, int targetMailboxId,
+            Tunnel tunnel, int targetMailboxId,
             string mailboxEntraId, HashSet<int> currentSourceUserIds, CancellationToken ct)
             => throw new InvalidOperationException("simulated mailbox-level failure");
     }

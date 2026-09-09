@@ -81,7 +81,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int> { 1, 2 };
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, phoneListId: 1, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: currentSourceIds, ct: CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: currentSourceIds, ct: CancellationToken.None);
 
         // Assert: 1 stale contact detected and removed
         Assert.Equal(1, result.Removed);
@@ -119,7 +119,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int>(); // SourceUserId 99 is NOT in current set
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, phoneListId: 1, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: currentSourceIds, ct: CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: currentSourceIds, ct: CancellationToken.None);
 
         // Assert: DeleteContactAsync was called
         Assert.Contains("graph-id-abc", writer.DeletedContactIds);
@@ -160,7 +160,7 @@ public class StaleContactHandlerTests
 
         var tunnel = CreateTunnel(1, StalePolicy.AutoRemove);
 
-        var result = await handler.HandleStaleAsync(tunnel, phoneListId: 1, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: new HashSet<int>(), ct: CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, targetMailboxId: 1, mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: new HashSet<int>(), ct: CancellationToken.None);
 
         // The contact is already gone — that's the goal of removal, so count it removed and
         // clear the stale state instead of leaving a row that 404s forever.
@@ -201,7 +201,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int>(); // stale
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
 
         // Assert: NOT deleted, just marked stale
         Assert.Empty(writer.DeletedContactIds);
@@ -246,7 +246,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int>(); // still stale
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
 
         // Assert: deleted
         Assert.Contains("graph-id-expired", writer.DeletedContactIds);
@@ -285,7 +285,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int>(); // still stale
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
 
         // Assert: NOT deleted, still in hold period
         Assert.Empty(writer.DeletedContactIds);
@@ -325,7 +325,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int>(); // stale
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
 
         // Assert: Never deleted
         Assert.Empty(writer.DeletedContactIds);
@@ -364,7 +364,7 @@ public class StaleContactHandlerTests
         var currentSourceIds = new HashSet<int> { 1 }; // only userId 1 remains active
 
         // Act
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", currentSourceIds, CancellationToken.None);
 
         // Assert: 2 removed (users 2 and 3), 0 stale-detected
         Assert.Equal(2, result.Removed);
@@ -391,7 +391,7 @@ public class StaleContactHandlerTests
         var handler = new StaleContactHandler(CreateFactory(dbName), writer, NullLogger<StaleContactHandler>.Instance);
         var tunnel = CreateTunnel(1, StalePolicy.FlagHold, staleHoldDays: 14);
 
-        var result = await handler.HandleStaleAsync(tunnel, 1, 1, "mailbox@contoso.com", new HashSet<int> { 1 }, CancellationToken.None);
+        var result = await handler.HandleStaleAsync(tunnel, 1, "mailbox@contoso.com", new HashSet<int> { 1 }, CancellationToken.None);
 
         Assert.Equal(0, result.Removed);
         Assert.Equal(2, result.StaleDetected);           // user 2 (still in hold) + user 3 (newly flagged)
@@ -401,6 +401,57 @@ public class StaleContactHandlerTests
         Assert.Null(back.StaleDetectedAt);
         Assert.True((await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 2)).IsStale);
         Assert.True((await verifyCtx.ContactSyncStates.SingleAsync(s => s.Id == 3)).IsStale);
+    }
+
+    // ==============================
+    // §5.1: rows are scoped by tunnel + mailbox, whatever phone list created them
+    // ==============================
+
+    [Fact]
+    public async Task HandleStaleAsync_AutoRemove_RemovesRowsUnderAnyPhoneList_ButOnlyThisTunnel()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        seedCtx.ContactSyncStates.AddRange(
+            CreateState(1, sourceUserId: 1, tunnelId: 1, phoneListId: 13, targetMailboxId: 1, graphContactId: "g-current"),
+            CreateState(2, sourceUserId: 2, tunnelId: 1, phoneListId: 10, targetMailboxId: 1, graphContactId: "g-retired"),      // list 10 is no longer attached to tunnel 1
+            CreateState(3, sourceUserId: 2, tunnelId: 2, phoneListId: 10, targetMailboxId: 1, graphContactId: "g-other-tunnel"));
+        await seedCtx.SaveChangesAsync();
+
+        var writer = new FakeContactWriter();
+        var handler = new StaleContactHandler(CreateFactory(dbName), writer, NullLogger<StaleContactHandler>.Instance);
+
+        var result = await handler.HandleStaleAsync(CreateTunnel(1, StalePolicy.AutoRemove), targetMailboxId: 1,
+            mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: new HashSet<int> { 1 }, ct: CancellationToken.None);
+
+        Assert.Equal(1, result.Removed);
+        Assert.Equal(new[] { "g-retired" }, writer.DeletedContactIds);
+        using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(new[] { 1, 3 }, (await verifyCtx.ContactSyncStates.OrderBy(s => s.Id).Select(s => s.Id).ToListAsync()).ToArray());
+    }
+
+    [Fact]
+    public async Task HandleStaleAsync_FlagHold_FlagsRowUnderRetiredPhoneList()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using var seedCtx = MakeDbContext(dbName);
+        seedCtx.ContactSyncStates.Add(
+            CreateState(2, sourceUserId: 2, tunnelId: 1, phoneListId: 10, targetMailboxId: 1, graphContactId: "g-retired"));
+        await seedCtx.SaveChangesAsync();
+
+        var writer = new FakeContactWriter();
+        var handler = new StaleContactHandler(CreateFactory(dbName), writer, NullLogger<StaleContactHandler>.Instance);
+
+        var result = await handler.HandleStaleAsync(CreateTunnel(1, StalePolicy.FlagHold), targetMailboxId: 1,
+            mailboxEntraId: "mailbox@contoso.com", currentSourceUserIds: new HashSet<int>(), ct: CancellationToken.None);
+
+        Assert.Equal(0, result.Removed);
+        Assert.Equal(1, result.StaleDetected);
+        Assert.Empty(writer.DeletedContactIds);
+        using var verifyCtx = MakeDbContext(dbName);
+        var row = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.True(row.IsStale);
+        Assert.NotNull(row.StaleDetectedAt);
     }
 
     // ==============================
