@@ -142,6 +142,57 @@ public class SyncRunsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task PostSync_StoresAuditFolders_AndExposesItOnListAndDetail()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        db.SyncRuns.RemoveRange(db.SyncRuns.Where(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending));
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedPostAsync("/api/sync-runs", new
+        {
+            runType = "manual",
+            isDryRun = false,
+            auditFolders = true
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var runId = body.GetProperty("runId").GetInt32();
+
+        var run = await db.SyncRuns.FindAsync(runId);
+        Assert.NotNull(run);
+        Assert.True(run!.AuditFolders);
+        Assert.Equal(RunType.Manual, run.RunType);
+
+        var detail = await AuthenticatedGetAsync($"/api/sync-runs/{runId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        var detailJson = await detail.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        Assert.True(detailJson.GetProperty("auditFolders").GetBoolean());
+
+        var list = await AuthenticatedGetAsync("/api/sync-runs?page=1&pageSize=50");
+        var listJson = await list.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var item = listJson.GetProperty("items").EnumerateArray().Single(r => r.GetProperty("id").GetInt32() == runId);
+        Assert.True(item.GetProperty("auditFolders").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PostSync_WithoutAuditFolders_DefaultsToFalse()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AFHSyncDbContext>();
+        db.SyncRuns.RemoveRange(db.SyncRuns.Where(r => r.Status == SyncStatus.Running || r.Status == SyncStatus.Pending));
+        await db.SaveChangesAsync();
+
+        var response = await AuthenticatedPostAsync("/api/sync-runs", new { runType = "manual", isDryRun = false });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var runId = (await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>()).GetProperty("runId").GetInt32();
+
+        var run = await db.SyncRuns.FindAsync(runId);
+        Assert.False(run!.AuditFolders);
+    }
+
+    [Fact]
     public async Task GetRuns_ReturnsPaginatedList()
     {
         // Seed some sync runs

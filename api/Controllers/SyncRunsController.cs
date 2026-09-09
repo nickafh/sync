@@ -58,6 +58,7 @@ public class SyncRunsController : ControllerBase
             RunType = runType,
             Status = SyncStatus.Pending,
             IsDryRun = request.IsDryRun,
+            AuditFolders = request.AuditFolders,
             RequestedTunnelIds = request.TunnelIds is { Length: > 0 }
                 ? System.Text.Json.JsonSerializer.Serialize(request.TunnelIds)
                 : null,
@@ -165,6 +166,7 @@ public class SyncRunsController : ControllerBase
                 EnumHelpers.ToPgName(r.RunType),
                 EnumHelpers.ToPgName(r.Status),
                 r.IsDryRun,
+                r.AuditFolders,
                 r.StartedAt,
                 r.CompletedAt,
                 r.DurationMs,
@@ -281,6 +283,7 @@ public class SyncRunsController : ControllerBase
             EnumHelpers.ToPgName(run.RunType),
             EnumHelpers.ToPgName(run.Status),
             run.IsDryRun,
+            run.AuditFolders,
             run.StartedAt,
             run.CompletedAt,
             run.DurationMs,

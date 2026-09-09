@@ -5,6 +5,7 @@ public record SyncRunDto(
     string RunType,
     string Status,
     bool IsDryRun,
+    bool AuditFolders,
     DateTime? StartedAt,
     DateTime? CompletedAt,
     int? DurationMs,
