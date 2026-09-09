@@ -12,6 +12,7 @@ const statusConfig: Record<string, { bg: string; text: string; dot: string; puls
   warning: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
   partial: { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500' },
   dry_run: { bg: 'bg-violet-50', text: 'text-violet-700', dot: 'bg-violet-500' },
+  audit: { bg: 'bg-sky-50', text: 'text-sky-700', dot: 'bg-sky-500' },
 };
 
 const defaultConfig = { bg: 'bg-gray-100', text: 'text-gray-600', dot: 'bg-gray-400' };

@@ -96,6 +96,7 @@ const columns: ColumnDef<SyncRunDto, unknown>[] = [
       <div className="flex items-center gap-2">
         <StatusBadge status={row.original.status} />
         {row.original.isDryRun && <StatusBadge status="dry_run" />}
+        {row.original.auditFolders && <StatusBadge status="audit" />}
       </div>
     ),
   },

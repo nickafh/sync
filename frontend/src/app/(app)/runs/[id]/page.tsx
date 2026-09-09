@@ -143,6 +143,7 @@ const ACTION_TABS = [
   { label: 'Updated', value: 'updated' },
   { label: 'Failed', value: 'failed,photo_failed' },
   { label: 'Removed', value: 'removed' },
+  { label: 'Audit', value: 'audit_missing' },
   { label: 'Skipped', value: 'skipped' },
   { label: 'Photo Updated', value: 'photo_updated' },
   { label: 'Photo Failed', value: 'photo_failed' },
@@ -211,6 +212,7 @@ export default function RunDetailPage() {
       >
         <StatusBadge status={run.status} />
         {run.isDryRun && <StatusBadge status="dry_run" />}
+        {run.auditFolders && <StatusBadge status="audit" />}
       </PageHeader>
 
       {/* KPI Grid */}

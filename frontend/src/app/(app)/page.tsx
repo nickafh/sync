@@ -14,6 +14,9 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
+import { buildManualTriggerRequest } from '@/lib/sync-trigger';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function formatTimeAgo(dateStr: string | null): string {
@@ -112,6 +115,7 @@ function SyncProgressCard({ run }: { run: SyncRunDetailDto }) {
 export default function DashboardPage() {
   const router = useRouter();
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [auditFolders, setAuditFolders] = useState(false);
 
   const isSyncActive = activeRunId !== null;
   const { data: dashboard, isLoading: dashLoading } = useDashboard(isSyncActive);
@@ -143,7 +147,7 @@ export default function DashboardPage() {
 
   function handleRunSync() {
     triggerSync.mutate(
-      { runType: 'manual', isDryRun: false, tunnelIds: null },
+      buildManualTriggerRequest(auditFolders),
       {
         onSuccess: (data) => {
           toast.success('Sync run started successfully.');
@@ -204,6 +208,17 @@ export default function DashboardPage() {
         title="Dashboard"
         description="Monitor tunnels, phone-visible lists, and sync activity."
       >
+        <Label
+          className="text-text-muted font-normal cursor-pointer"
+          title="Re-checks every contact folder against Graph. Slower."
+        >
+          <Checkbox
+            checked={auditFolders}
+            onCheckedChange={(checked) => setAuditFolders(checked)}
+            disabled={isSyncing}
+          />
+          Audit folders
+        </Label>
         <Button
           className="bg-gold text-white hover:bg-gold/90"
           onClick={handleRunSync}

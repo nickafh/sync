@@ -5,6 +5,7 @@ export interface SyncRunDto {
   runType: SyncRunType;
   status: SyncRunStatus;
   isDryRun: boolean;
+  auditFolders: boolean;
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number | null;
@@ -39,6 +40,7 @@ export interface SyncRunDetailDto {
   runType: SyncRunType;
   status: SyncRunStatus;
   isDryRun: boolean;
+  auditFolders: boolean;
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number | null;
@@ -73,4 +75,6 @@ export interface TriggerSyncRequest {
   runType: SyncRunType;
   isDryRun: boolean;
   tunnelIds: number[] | null;
+  /** §5.2: reconcile every folder this run touches; ignored by the engine in a dry run. */
+  auditFolders: boolean;
 }
