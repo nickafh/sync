@@ -1862,11 +1862,14 @@ public class SyncEngineTests
     {
         public List<(int TunnelId, int MailboxId, string FolderId)> Calls { get; } = [];
 
+        /// <summary>§5.2: returned as the missing-row report on every call (the real reconciler has already dropped those rows).</summary>
+        public List<int> MissingSourceUserIds { get; } = [];
+
         public Task<FolderReconcileResult> ReconcileAsync(Tunnel tunnel, TargetMailbox mailbox, string folderId,
             int canonicalPhoneListId, IReadOnlyList<SourceUser> sourceUsers, CancellationToken ct)
         {
             Calls.Add((tunnel.Id, mailbox.Id, folderId));
-            return Task.FromResult(new FolderReconcileResult(0, 0, 0));
+            return Task.FromResult(new FolderReconcileResult(0, 0, 0, MissingSourceUserIds.ToList()));
         }
     }
 

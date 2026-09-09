@@ -19,6 +19,9 @@ public sealed record GraphContactStub(string Id, string? DisplayName, string? Em
 /// (or no tunnel, for legacy rows) owns that row — tunnel names are not unique, so two tunnels
 /// can share one Graph folder and must not steal or delete each other's contacts.
 ///
+/// §5.2 adds the reverse direction: this tunnel's rows whose Graph id is not in the folder are dropped
+/// (and reported) so the classification that follows recreates the contact.
+///
 /// Graph listing is a <c>protected virtual</c> seam so unit tests can subclass this class.
 /// </summary>
 public class FolderReconciler : IFolderReconciler
@@ -75,10 +78,34 @@ public class FolderReconciler : IFolderReconciler
             .Where(s => !string.IsNullOrEmpty(s.GraphContactId))
             .Select(s => s.GraphContactId!)
             .ToHashSet(StringComparer.Ordinal);
+
+        // §5.2: rows of THIS tunnel whose contact is no longer in the folder. Other tunnels' rows
+        // reference other folders and are never "missing" here; rows without a Graph id are ignored.
+        var graphIds = graphContacts.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);
+        var missingRows = mailboxStates
+            .Where(s => s.TunnelId == tunnel.Id
+                        && !string.IsNullOrEmpty(s.GraphContactId)
+                        && !graphIds.Contains(s.GraphContactId!))
+            .ToList();
+        var missingRowIds = missingRows.Select(s => s.Id).ToHashSet();
+        if (missingRows.Count > 0)
+        {
+            // Dropped before any adoption is saved: a stray adopted for the same user below would
+            // otherwise collide with the dead row on the unique (user, list, mailbox, tunnel) index.
+            db.ContactSyncStates.RemoveRange(missingRows);
+            await db.SaveChangesAsync(CancellationToken.None);
+            foreach (var row in missingRows)
+                _logger.LogInformation(
+                    "Reconcile: contact {ContactId} for SourceUserId={SourceUserId} is gone from the folder in mailbox {Email}; dropping the row so it is recreated",
+                    row.GraphContactId, row.SourceUserId, mailbox.Email);
+        }
+
         // Adoption eligibility is still scoped to THIS tunnel: a user with a state row under a
-        // different tunnel may still need one adopted for this tunnel's own folder.
+        // different tunnel may still need one adopted for this tunnel's own folder. A user whose only
+        // row was just dropped as missing is eligible again, so a stray of theirs is adopted, not
+        // deleted and recreated.
         var usersWithState = mailboxStates
-            .Where(s => s.TunnelId == tunnel.Id)
+            .Where(s => s.TunnelId == tunnel.Id && !missingRowIds.Contains(s.Id))
             .Select(s => s.SourceUserId)
             .ToHashSet();
 
@@ -144,10 +171,10 @@ public class FolderReconciler : IFolderReconciler
         }
 
         _logger.LogInformation(
-            "Reconcile: tunnel {TunnelName} / mailbox {Email}: {Examined} Graph contact(s), {Adopted} adopted, {Removed} removed",
-            tunnel.Name, mailbox.Email, graphContacts.Count, adopted, removed);
+            "Reconcile: tunnel {TunnelName} / mailbox {Email}: {Examined} Graph contact(s), {Adopted} adopted, {Removed} removed, {Missing} missing (recreated this run)",
+            tunnel.Name, mailbox.Email, graphContacts.Count, adopted, removed, missingRows.Count);
 
-        return new FolderReconcileResult(graphContacts.Count, adopted, removed);
+        return new FolderReconcileResult(graphContacts.Count, adopted, removed, missingRows.Select(s => s.SourceUserId).ToList());
     }
 
     /// <summary>GET /users/{mailbox}/contactFolders/{id}/contacts (id, displayName, emailAddresses), all pages.</summary>

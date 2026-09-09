@@ -222,4 +222,97 @@ public class FolderReconcilerTests
         await using var verifyCtx = MakeDbContext(dbName);
         Assert.Equal("g-1", (await verifyCtx.ContactSyncStates.SingleAsync()).GraphContactId);
     }
+
+    // ==============================
+    // §5.2: the reverse direction — rows whose contact is gone from the folder
+    // ==============================
+
+    [Fact]
+    public async Task MissingRow_ContactGoneFromFolder_IsDroppedAndReported()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedStateAsync(dbName, sourceUserId: 1, graphContactId: "g-present");
+        await SeedStateAsync(dbName, sourceUserId: 2, graphContactId: "g-gone");         // deleted on the phone
+        var writer = new RecordingContactWriter();
+        var reconciler = new FakeFolderReconciler(dbName, writer);
+        reconciler.FolderContacts.Add(new GraphContactStub("g-present", "Alice", "alice@contoso.com"));
+        var users = new List<SourceUser>
+        {
+            new() { Id = 1, EntraId = "u1", DisplayName = "Alice", Email = "alice@contoso.com" },
+            new() { Id = 2, EntraId = "u2", DisplayName = "Bob", Email = "bob@contoso.com" }
+        };
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, users, CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(1, 0, 0, [2]), result);
+        Assert.Equal(1, result.Missing);
+        Assert.Empty(writer.DeletedContactIds);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var remaining = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal("g-present", remaining.GraphContactId);                  // Bob's row is gone; the classification that follows recreates him
+    }
+
+    [Fact]
+    public async Task MissingRow_OfAnotherTunnel_IsLeftAlone()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedStateAsync(dbName, sourceUserId: 2, graphContactId: "g-elsewhere", tunnelId: 2);   // lives in tunnel 2's folder
+        var reconciler = new FakeFolderReconciler(dbName, new RecordingContactWriter());
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, [], CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(0, 0, 0), result);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.ContactSyncStates.CountAsync());
+    }
+
+    [Fact]
+    public async Task MissingRow_WithNullGraphId_IsIgnored()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        using (var ctx = MakeDbContext(dbName))
+        {
+            ctx.ContactSyncStates.Add(new ContactSyncState
+            {
+                SourceUserId = 3, PhoneListId = 1, TargetMailboxId = Mailbox.Id, TunnelId = Tunnel.Id,
+                GraphContactId = null, DataHash = null, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await ctx.SaveChangesAsync();
+        }
+        var reconciler = new FakeFolderReconciler(dbName, new RecordingContactWriter());
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, [], CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(0, 0, 0), result);
+        await using var verifyCtx = MakeDbContext(dbName);
+        Assert.Equal(1, await verifyCtx.ContactSyncStates.CountAsync());
+    }
+
+    [Fact]
+    public async Task MissingRow_AndStrayForTheSameUser_StrayIsAdoptedInsteadOfRecreated()
+    {
+        var dbName = Guid.NewGuid().ToString();
+        await SeedStateAsync(dbName, sourceUserId: 1, graphContactId: "g-old");           // the id we remember is gone…
+        var writer = new RecordingContactWriter();
+        var reconciler = new FakeFolderReconciler(dbName, writer);
+        reconciler.FolderContacts.Add(new GraphContactStub("g-new", "Alice", "alice@contoso.com"));   // …but Alice exists under another id
+        var users = new List<SourceUser> { new() { Id = 1, EntraId = "u1", DisplayName = "Alice", Email = "alice@contoso.com" } };
+
+        var result = await reconciler.ReconcileAsync(Tunnel, Mailbox, "folder", 1, users, CancellationToken.None);
+
+        Assert.Equal(new FolderReconcileResult(1, 1, 0, [1]), result);
+        Assert.Empty(writer.DeletedContactIds);
+        await using var verifyCtx = MakeDbContext(dbName);
+        var row = await verifyCtx.ContactSyncStates.SingleAsync();
+        Assert.Equal("g-new", row.GraphContactId);
+        Assert.Null(row.DataHash);                                             // PATCHed into shape by the classification that follows
+    }
+
+    [Fact]
+    public void FolderReconcileResult_EqualityIncludesMissingIds()
+    {
+        Assert.Equal(new FolderReconcileResult(1, 0, 0, [2, 3]), new FolderReconcileResult(1, 0, 0, new List<int> { 2, 3 }));
+        Assert.NotEqual(new FolderReconcileResult(1, 0, 0, [2]), new FolderReconcileResult(1, 0, 0, [3]));
+        Assert.Equal(new FolderReconcileResult(1, 0, 0), new FolderReconcileResult(1, 0, 0, []));
+    }
 }
